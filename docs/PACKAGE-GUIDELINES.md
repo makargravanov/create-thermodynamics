@@ -14,3 +14,4 @@ Neutral shared packages in the common module:
 Do not put content or gameplay logic in the NeoForge module. Keep the loader module limited to entrypoints, event bus wiring, registration bootstrap, config registration, client bootstrap, and tiny loader compatibility shims.
 
 The `core` module must not import Minecraft or loader packages.
+The `common` module may import `net.minecraft.*`, but must not import `net.neoforged.*`.
