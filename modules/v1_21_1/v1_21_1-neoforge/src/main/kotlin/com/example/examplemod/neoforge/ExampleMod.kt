@@ -1,5 +1,6 @@
 package com.example.examplemod.neoforge
 
+import com.example.examplemod.common.CommonModule
 import net.neoforged.bus.api.IEventBus
 import net.neoforged.fml.common.Mod
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent
@@ -12,7 +13,12 @@ class ExampleMod(modEventBus: IEventBus) {
     }
 
     private fun commonSetup(event: FMLCommonSetupEvent) {
-        LOGGER.info("Loaded {}", MOD_ID)
+        LOGGER.info(
+            "Loaded {} with Rust JNI ABI {} and demo pressure {} kPa",
+            MOD_ID,
+            CommonModule.nativeAbiVersion(),
+            CommonModule.demoPressureKilopascals(),
+        )
     }
 
     companion object {

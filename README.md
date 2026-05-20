@@ -23,3 +23,19 @@ Additional Resources:
 ==========
 Community Documentation: https://docs.neoforged.net/  
 NeoForged Discord: https://discord.neoforged.net/
+
+Rust JNI
+==========
+The project now contains a Rust crate at `native/thermodynamics-jni` and a JNI bridge in `modules/v1_21_1/v1_21_1-common`.
+
+Default Gradle builds package the host platform native library into the mod jar. For example:
+
+`./gradlew build`
+
+To package several targets into one artifact, pass Rust target triples through `rustTargets`:
+
+`./gradlew :modules:v1_21_1:v1_21_1-neoforge:build -PrustTargets=x86_64-pc-windows-msvc,x86_64-unknown-linux-gnu,aarch64-apple-darwin`
+
+Each requested target must already be installed in the local Rust toolchain, for example with:
+
+`rustup target add x86_64-unknown-linux-gnu aarch64-apple-darwin`

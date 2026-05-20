@@ -2,10 +2,16 @@ import buildlogic.CheckArchitectureBoundaryTask
 
 plugins {
     id("mod.kotlin-convention")
+    id("mod.rust-jni-convention")
 }
 
 dependencies {
     api(project(":modules:core"))
+}
+
+rustJni {
+    crateDirectory.set(rootProject.layout.projectDirectory.dir("native/thermodynamics-jni"))
+    libraryBaseName.set("create_thermodynamics_jni")
 }
 
 tasks.register<CheckArchitectureBoundaryTask>("checkCommonLoaderBoundary") {
