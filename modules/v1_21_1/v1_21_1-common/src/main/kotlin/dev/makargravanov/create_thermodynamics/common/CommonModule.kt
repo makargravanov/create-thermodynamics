@@ -1,6 +1,6 @@
-package com.example.examplemod.common
+package dev.makargravanov.create_thermodynamics.common
 
-import com.example.examplemod.common.rust.ThermodynamicsNative
+import dev.makargravanov.create_thermodynamics.common.rust.ThermodynamicsNative
 
 object CommonModule {
     fun demoPressureKilopascals(): Double =

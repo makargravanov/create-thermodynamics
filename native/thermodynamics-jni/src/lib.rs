@@ -5,7 +5,7 @@ use jni::JNIEnv;
 const IDEAL_GAS_CONSTANT: f64 = 8.314_462_618_153_24;
 
 #[no_mangle]
-pub extern "system" fn Java_com_example_examplemod_common_rust_ThermodynamicsNative_nativeIdealGasPressure(
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeIdealGasPressure(
     _: JNIEnv,
     _: JClass,
     moles: jdouble,
@@ -20,7 +20,7 @@ pub extern "system" fn Java_com_example_examplemod_common_rust_ThermodynamicsNat
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_example_examplemod_common_rust_ThermodynamicsNative_nativeAbiVersion(
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeAbiVersion(
     _: JNIEnv,
     _: JClass,
 ) -> jint {

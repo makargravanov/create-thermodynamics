@@ -1,12 +1,12 @@
-package com.example.examplemod.neoforge
+package dev.makargravanov.create_thermodynamics.neoforge
 
 import net.neoforged.api.distmarker.Dist
 import net.neoforged.bus.api.SubscribeEvent
 import net.neoforged.fml.common.EventBusSubscriber
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent
 
-@EventBusSubscriber(modid = ExampleMod.MOD_ID, value = [Dist.CLIENT])
-object ExampleModClient {
+@EventBusSubscriber(modid = CreateThermodynamicsMod.MOD_ID, value = [Dist.CLIENT])
+object CreateThermodynamicsModClient {
     @SubscribeEvent
     fun onClientSetup(event: FMLClientSetupEvent) {
     }

@@ -1,4 +1,4 @@
-package com.example.examplemod.common.rust
+package dev.makargravanov.create_thermodynamics.common.rust
 
 import kotlin.test.Test
 import kotlin.test.assertEquals

@@ -1,13 +1,13 @@
-package com.example.examplemod.neoforge
+package dev.makargravanov.create_thermodynamics.neoforge
 
-import com.example.examplemod.common.CommonModule
+import dev.makargravanov.create_thermodynamics.common.CommonModule
 import net.neoforged.bus.api.IEventBus
 import net.neoforged.fml.common.Mod
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent
 import org.slf4j.LoggerFactory
 
-@Mod(ExampleMod.MOD_ID)
-class ExampleMod(modEventBus: IEventBus) {
+@Mod(CreateThermodynamicsMod.MOD_ID)
+class CreateThermodynamicsMod(modEventBus: IEventBus) {
     init {
         modEventBus.addListener(::commonSetup)
     }
@@ -22,7 +22,7 @@ class ExampleMod(modEventBus: IEventBus) {
     }
 
     companion object {
-        const val MOD_ID = "examplemod"
-        private val LOGGER = LoggerFactory.getLogger(ExampleMod::class.java)
+        const val MOD_ID = "create_thermodynamics"
+        private val LOGGER = LoggerFactory.getLogger(CreateThermodynamicsMod::class.java)
     }
 }

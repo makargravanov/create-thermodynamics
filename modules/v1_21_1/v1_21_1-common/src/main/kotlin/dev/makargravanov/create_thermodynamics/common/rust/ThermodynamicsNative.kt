@@ -1,4 +1,4 @@
-package com.example.examplemod.common.rust
+package dev.makargravanov.create_thermodynamics.common.rust
 
 object ThermodynamicsNative {
     init {

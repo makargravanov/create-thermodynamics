@@ -1,4 +1,4 @@
-package com.example.examplemod.common.rust
+package dev.makargravanov.create_thermodynamics.common.rust
 
 import java.nio.file.Files
 import java.nio.file.Path
