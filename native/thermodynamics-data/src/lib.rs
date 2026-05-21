@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use thermodynamics_core::{
-    Element, ElementId, EquilibriumProblem, PhaseKind, Species, SpeciesAmount, SpeciesId,
-    SpeciesRegistry, SpeciesRegistryError, StandardThermo,
+    ActivityModel, ConstantPressureHeatCapacity, DataSource, Element, ElementId,
+    EquilibriumProblem, PhaseKind, Species, SpeciesAmount, SpeciesId, SpeciesRegistry,
+    SpeciesRegistryError, StandardEnthalpyOfFormation, StandardGibbsEnergy, StandardThermo,
+    TemperatureRange,
 };
 
 pub const ELEMENT_H: ElementId = ElementId(1);
@@ -24,8 +26,19 @@ pub const CACO3_S: SpeciesId = SpeciesId(10);
 
 const VALID_MIN_TEMPERATURE_KELVIN: f64 = 273.15;
 const VALID_MAX_TEMPERATURE_KELVIN: f64 = 373.15;
-const THERMO_PROVENANCE: &str =
-    "Curated first-iteration constants near 298.15 K; values derived from common tabulated standard molar Gibbs energies of formation.";
+const REFERENCE_TEMPERATURE_KELVIN: f64 = 298.15;
+const STANDARD_GIBBS_SOURCE: DataSource = DataSource {
+    citation: "Curated first-iteration table from common standard molar Gibbs energies of formation at 298.15 K.",
+    note: "Values are intentionally limited to the aqueous carbonate/water slice and are tested through derived equilibrium constants.",
+};
+const STANDARD_ENTHALPY_SOURCE: DataSource = DataSource {
+    citation: "Curated first-iteration table from common standard molar enthalpies of formation at 298.15 K.",
+    note: "Values support fixed-composition enthalpy checks and first-pass reaction heat estimates.",
+};
+const HEAT_CAPACITY_SOURCE: DataSource = DataSource {
+    citation: "Curated first-iteration constant-pressure molar heat capacities near 298.15 K.",
+    note: "Constant heat capacities are valid only inside the first-iteration temperature range.",
+};
 
 pub fn curated_registry() -> Result<SpeciesRegistry, SpeciesRegistryError> {
     SpeciesRegistry::new(curated_elements(), curated_species())
@@ -102,24 +115,54 @@ fn curated_species() -> Vec<Species> {
             &[(ELEMENT_H, 2), (ELEMENT_O, 1)],
             0,
             -237_130.0,
+            -285_830.0,
+            75.3,
         ),
-        aqueous(H_PLUS, "H+", &[(ELEMENT_H, 1)], 1, 0.0),
+        aqueous(H_PLUS, "H+", &[(ELEMENT_H, 1)], 1, 0.0, 0.0, 0.0),
         aqueous(
             OH_MINUS,
             "OH-",
             &[(ELEMENT_O, 1), (ELEMENT_H, 1)],
             -1,
             -157_240.0,
+            -230_000.0,
+            -148.0,
         ),
-        aqueous(NA_PLUS, "Na+", &[(ELEMENT_NA, 1)], 1, -261_900.0),
-        aqueous(CL_MINUS, "Cl-", &[(ELEMENT_CL, 1)], -1, -131_200.0),
-        aqueous(CA_2_PLUS, "Ca2+", &[(ELEMENT_CA, 1)], 2, -553_600.0),
+        aqueous(
+            NA_PLUS,
+            "Na+",
+            &[(ELEMENT_NA, 1)],
+            1,
+            -261_900.0,
+            -240_100.0,
+            46.0,
+        ),
+        aqueous(
+            CL_MINUS,
+            "Cl-",
+            &[(ELEMENT_CL, 1)],
+            -1,
+            -131_200.0,
+            -167_200.0,
+            -136.0,
+        ),
+        aqueous(
+            CA_2_PLUS,
+            "Ca2+",
+            &[(ELEMENT_CA, 1)],
+            2,
+            -553_600.0,
+            -542_800.0,
+            -33.0,
+        ),
         aqueous(
             CO3_2_MINUS,
             "CO3--",
             &[(ELEMENT_C, 1), (ELEMENT_O, 3)],
             -2,
             -527_900.0,
+            -677_100.0,
+            -289.0,
         ),
         aqueous(
             HCO3_MINUS,
@@ -127,6 +170,8 @@ fn curated_species() -> Vec<Species> {
             &[(ELEMENT_H, 1), (ELEMENT_C, 1), (ELEMENT_O, 3)],
             -1,
             -586_900.0,
+            -692_000.0,
+            -35.0,
         ),
         aqueous(
             CO2_AQ,
@@ -134,6 +179,8 @@ fn curated_species() -> Vec<Species> {
             &[(ELEMENT_C, 1), (ELEMENT_O, 2)],
             0,
             -386_000.0,
+            -413_800.0,
+            214.0,
         ),
         solid(
             CACO3_S,
@@ -141,6 +188,8 @@ fn curated_species() -> Vec<Species> {
             &[(ELEMENT_CA, 1), (ELEMENT_C, 1), (ELEMENT_O, 3)],
             0,
             -1_128_800.0,
+            -1_207_100.0,
+            82.0,
         ),
     ]
 }
@@ -151,6 +200,8 @@ fn aqueous(
     composition: &[(ElementId, u16)],
     charge_number: i8,
     standard_gibbs_energy_joule_per_mol_298_15: f64,
+    standard_enthalpy_joule_per_mol_298_15: f64,
+    heat_capacity_joule_per_mol_kelvin: f64,
 ) -> Species {
     species(
         id,
@@ -158,7 +209,14 @@ fn aqueous(
         composition,
         charge_number,
         PhaseKind::Aqueous,
+        if symbol == "H2O(l)" {
+            ActivityModel::UnitActivity
+        } else {
+            ActivityModel::IdealMolalityAqueous
+        },
         standard_gibbs_energy_joule_per_mol_298_15,
+        standard_enthalpy_joule_per_mol_298_15,
+        heat_capacity_joule_per_mol_kelvin,
     )
 }
 
@@ -168,6 +226,8 @@ fn solid(
     composition: &[(ElementId, u16)],
     charge_number: i8,
     standard_gibbs_energy_joule_per_mol_298_15: f64,
+    standard_enthalpy_joule_per_mol_298_15: f64,
+    heat_capacity_joule_per_mol_kelvin: f64,
 ) -> Species {
     species(
         id,
@@ -175,7 +235,10 @@ fn solid(
         composition,
         charge_number,
         PhaseKind::Solid,
+        ActivityModel::UnitActivity,
         standard_gibbs_energy_joule_per_mol_298_15,
+        standard_enthalpy_joule_per_mol_298_15,
+        heat_capacity_joule_per_mol_kelvin,
     )
 }
 
@@ -185,7 +248,10 @@ fn species(
     composition: &[(ElementId, u16)],
     charge_number: i8,
     phase: PhaseKind,
+    activity_model: ActivityModel,
     standard_gibbs_energy_joule_per_mol_298_15: f64,
+    standard_enthalpy_joule_per_mol_298_15: f64,
+    heat_capacity_joule_per_mol_kelvin: f64,
 ) -> Species {
     Species {
         id,
@@ -193,11 +259,30 @@ fn species(
         composition: composition.iter().copied().collect::<BTreeMap<_, _>>(),
         charge_number,
         phase,
+        activity_model: if phase == PhaseKind::Aqueous && charge_number != 0 {
+            ActivityModel::DaviesAqueous
+        } else {
+            activity_model
+        },
         thermo: StandardThermo {
-            standard_gibbs_energy_joule_per_mol_298_15,
-            valid_min_temperature_kelvin: VALID_MIN_TEMPERATURE_KELVIN,
-            valid_max_temperature_kelvin: VALID_MAX_TEMPERATURE_KELVIN,
-            provenance: THERMO_PROVENANCE,
+            standard_gibbs_energy: StandardGibbsEnergy {
+                value_joule_per_mol: standard_gibbs_energy_joule_per_mol_298_15,
+                reference_temperature_kelvin: REFERENCE_TEMPERATURE_KELVIN,
+                source: STANDARD_GIBBS_SOURCE,
+            },
+            standard_enthalpy_of_formation: StandardEnthalpyOfFormation {
+                value_joule_per_mol: standard_enthalpy_joule_per_mol_298_15,
+                reference_temperature_kelvin: REFERENCE_TEMPERATURE_KELVIN,
+                source: STANDARD_ENTHALPY_SOURCE,
+            },
+            constant_pressure_heat_capacity: ConstantPressureHeatCapacity {
+                value_joule_per_mol_kelvin: heat_capacity_joule_per_mol_kelvin,
+                source: HEAT_CAPACITY_SOURCE,
+            },
+            valid_temperature_range: TemperatureRange {
+                min_kelvin: VALID_MIN_TEMPERATURE_KELVIN,
+                max_kelvin: VALID_MAX_TEMPERATURE_KELVIN,
+            },
         },
     }
 }
@@ -206,7 +291,9 @@ fn species(
 mod tests {
     use super::*;
     use thermodynamics_core::{
-        analyze_aqueous_equilibrium, solve_equilibrium, EquilibriumError, SpeciesAmount,
+        analyze_aqueous_equilibrium, mixture_enthalpy_joule,
+        mixture_heat_capacity_joule_per_kelvin, solve_equilibrium, solve_temperature_for_enthalpy,
+        thermal_state_for_composition, EquilibriumError, SpeciesAmount,
         DAVIES_MAX_IONIC_STRENGTH_MOLAL,
     };
 
@@ -264,7 +351,8 @@ mod tests {
                         .species(*species_id)
                         .unwrap()
                         .thermo
-                        .standard_gibbs_energy_joule_per_mol_298_15
+                        .standard_gibbs_energy
+                        .value_joule_per_mol
             })
             .sum();
         let reactant_gibbs: f64 = reactants
@@ -275,7 +363,8 @@ mod tests {
                         .species(*species_id)
                         .unwrap()
                         .thermo
-                        .standard_gibbs_energy_joule_per_mol_298_15
+                        .standard_gibbs_energy
+                        .value_joule_per_mol
             })
             .sum();
 
@@ -302,9 +391,141 @@ mod tests {
             assert!(!species.composition.is_empty());
             assert!(species
                 .thermo
-                .standard_gibbs_energy_joule_per_mol_298_15
+                .standard_gibbs_energy
+                .value_joule_per_mol
                 .is_finite());
-            assert!(!species.thermo.provenance.is_empty());
+            assert!(!species
+                .thermo
+                .standard_gibbs_energy
+                .source
+                .citation
+                .is_empty());
+            assert!(!species.thermo.standard_gibbs_energy.source.note.is_empty());
+            assert!(species
+                .thermo
+                .standard_enthalpy_of_formation
+                .value_joule_per_mol
+                .is_finite());
+            assert!(!species
+                .thermo
+                .standard_enthalpy_of_formation
+                .source
+                .citation
+                .is_empty());
+            assert!(species
+                .thermo
+                .constant_pressure_heat_capacity
+                .value_joule_per_mol_kelvin
+                .is_finite());
+            assert!(!species
+                .thermo
+                .constant_pressure_heat_capacity
+                .source
+                .citation
+                .is_empty());
+            assert!(
+                species.thermo.valid_temperature_range.min_kelvin
+                    <= species
+                        .thermo
+                        .standard_gibbs_energy
+                        .reference_temperature_kelvin
+            );
+            assert!(
+                species
+                    .thermo
+                    .standard_gibbs_energy
+                    .reference_temperature_kelvin
+                    <= species.thermo.valid_temperature_range.max_kelvin
+            );
+        }
+    }
+
+    #[test]
+    fn liquid_water_heat_capacity_matches_reference_scale() {
+        let registry = curated_registry().unwrap();
+        let heat_capacity =
+            mixture_heat_capacity_joule_per_kelvin(&registry, &[amount(H2O_L, 55.5)]).unwrap();
+
+        assert!((4_100.0..4_250.0).contains(&heat_capacity));
+    }
+
+    #[test]
+    fn liquid_water_enthalpy_change_tracks_constant_heat_capacity() {
+        let registry = curated_registry().unwrap();
+        let cold = mixture_enthalpy_joule(&registry, &[amount(H2O_L, 1.0)], 298.15).unwrap();
+        let warm = mixture_enthalpy_joule(&registry, &[amount(H2O_L, 1.0)], 308.15).unwrap();
+
+        assert!(((warm - cold) - 753.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn neutralization_enthalpy_matches_curated_formation_enthalpies() {
+        let registry = curated_registry().unwrap();
+        let reactants = mixture_enthalpy_joule(
+            &registry,
+            &[amount(H_PLUS, 1.0), amount(OH_MINUS, 1.0)],
+            298.15,
+        )
+        .unwrap();
+        let products = mixture_enthalpy_joule(&registry, &[amount(H2O_L, 1.0)], 298.15).unwrap();
+
+        assert!(((products - reactants) + 55_830.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn temperature_can_be_recovered_from_fixed_composition_enthalpy() {
+        let registry = curated_registry().unwrap();
+        let amounts = vec![amount(H2O_L, 55.5)];
+        let target = mixture_enthalpy_joule(&registry, &amounts, 320.0).unwrap();
+        let state =
+            solve_temperature_for_enthalpy(&registry, &amounts, target, 298.15, 350.0).unwrap();
+
+        assert!((state.temperature_kelvin - 320.0).abs() < 1.0e-9);
+        assert!((state.enthalpy_joule - target).abs() < 1.0e-6);
+        assert!(state.heat_capacity_joule_per_kelvin > 4_100.0);
+    }
+
+    #[test]
+    fn thermal_state_reports_enthalpy_and_heat_capacity_together() {
+        let registry = curated_registry().unwrap();
+        let state =
+            thermal_state_for_composition(&registry, &[amount(H2O_L, 1.0)], 298.15).unwrap();
+
+        assert!((state.temperature_kelvin - 298.15).abs() < 1.0e-12);
+        assert!((state.enthalpy_joule + 285_830.0).abs() < 1.0e-9);
+        assert!((state.heat_capacity_joule_per_kelvin - 75.3).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn curated_species_use_explicit_activity_models() {
+        let registry = curated_registry().unwrap();
+
+        assert_eq!(
+            registry.species(H2O_L).unwrap().activity_model,
+            ActivityModel::UnitActivity
+        );
+        assert_eq!(
+            registry.species(CO2_AQ).unwrap().activity_model,
+            ActivityModel::IdealMolalityAqueous
+        );
+        assert_eq!(
+            registry.species(CACO3_S).unwrap().activity_model,
+            ActivityModel::UnitActivity
+        );
+
+        for species_id in [
+            H_PLUS,
+            OH_MINUS,
+            NA_PLUS,
+            CL_MINUS,
+            CA_2_PLUS,
+            CO3_2_MINUS,
+            HCO3_MINUS,
+        ] {
+            assert_eq!(
+                registry.species(species_id).unwrap().activity_model,
+                ActivityModel::DaviesAqueous
+            );
         }
     }
 

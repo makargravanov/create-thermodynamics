@@ -1,5 +1,5 @@
 use crate::activity::{davies_log10_gamma, DAVIES_MAX_IONIC_STRENGTH_MOLAL};
-use crate::chemistry::{ElementId, PhaseKind, Species, SpeciesAmount, SpeciesId};
+use crate::chemistry::{ActivityModel, ElementId, PhaseKind, Species, SpeciesAmount, SpeciesId};
 use crate::registry::SpeciesRegistry;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -226,14 +226,14 @@ fn load_species(
                     });
                 }
             }
-            if temperature_kelvin < species.thermo.valid_min_temperature_kelvin
-                || temperature_kelvin > species.thermo.valid_max_temperature_kelvin
+            if temperature_kelvin < species.thermo.valid_temperature_range.min_kelvin
+                || temperature_kelvin > species.thermo.valid_temperature_range.max_kelvin
             {
                 return Err(EquilibriumError::UnsupportedTemperatureRange {
                     species_id: *species_id,
                     temperature_kelvin,
-                    valid_min_temperature_kelvin: species.thermo.valid_min_temperature_kelvin,
-                    valid_max_temperature_kelvin: species.thermo.valid_max_temperature_kelvin,
+                    valid_min_temperature_kelvin: species.thermo.valid_temperature_range.min_kelvin,
+                    valid_max_temperature_kelvin: species.thermo.valid_temperature_range.max_kelvin,
                 });
             }
             Ok(species.clone())
@@ -322,12 +322,18 @@ fn chemical_potentials_joule_per_mol(
         .map(|(species_record, amount_mol)| {
             let standard_gibbs = species_record
                 .thermo
-                .standard_gibbs_energy_joule_per_mol_298_15;
-            match species_record.phase {
-                PhaseKind::Solid => standard_gibbs,
-                PhaseKind::Gas => standard_gibbs,
-                PhaseKind::Aqueous if is_water_solvent(species_record) => standard_gibbs,
-                PhaseKind::Aqueous => {
+                .standard_gibbs_energy
+                .value_joule_per_mol;
+            match species_record.activity_model {
+                ActivityModel::UnitActivity => standard_gibbs,
+                ActivityModel::IdealMolalityAqueous => {
+                    let molality =
+                        (*amount_mol).max(MIN_AMOUNT_MOL) / solvent_kg.max(MIN_AMOUNT_MOL);
+                    let activity = molality.max(MIN_ACTIVITY);
+                    standard_gibbs
+                        + GAS_CONSTANT_JOULE_PER_MOL_KELVIN * temperature_kelvin * activity.ln()
+                }
+                ActivityModel::DaviesAqueous => {
                     let molality =
                         (*amount_mol).max(MIN_AMOUNT_MOL) / solvent_kg.max(MIN_AMOUNT_MOL);
                     let log10_gamma =
@@ -902,7 +908,10 @@ fn nullspace(matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chemistry::{PhaseKind, StandardThermo};
+    use crate::chemistry::{
+        ActivityModel, ConstantPressureHeatCapacity, DataSource, PhaseKind,
+        StandardEnthalpyOfFormation, StandardGibbsEnergy, StandardThermo, TemperatureRange,
+    };
     use crate::registry::SpeciesRegistry;
 
     const H: ElementId = ElementId(1);
@@ -922,11 +931,35 @@ mod tests {
             composition,
             charge_number: charge,
             phase: PhaseKind::Aqueous,
+            activity_model: ActivityModel::DaviesAqueous,
             thermo: StandardThermo {
-                standard_gibbs_energy_joule_per_mol_298_15: 0.0,
-                valid_min_temperature_kelvin: 273.15,
-                valid_max_temperature_kelvin: 373.15,
-                provenance: "test",
+                standard_gibbs_energy: StandardGibbsEnergy {
+                    value_joule_per_mol: 0.0,
+                    reference_temperature_kelvin: 298.15,
+                    source: DataSource {
+                        citation: "test",
+                        note: "test",
+                    },
+                },
+                standard_enthalpy_of_formation: StandardEnthalpyOfFormation {
+                    value_joule_per_mol: 0.0,
+                    reference_temperature_kelvin: 298.15,
+                    source: DataSource {
+                        citation: "test",
+                        note: "test",
+                    },
+                },
+                constant_pressure_heat_capacity: ConstantPressureHeatCapacity {
+                    value_joule_per_mol_kelvin: 1.0,
+                    source: DataSource {
+                        citation: "test",
+                        note: "test",
+                    },
+                },
+                valid_temperature_range: TemperatureRange {
+                    min_kelvin: 273.15,
+                    max_kelvin: 373.15,
+                },
             },
         }
     }
