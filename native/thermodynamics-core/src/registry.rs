@@ -119,6 +119,7 @@ impl SpeciesRegistry {
                 | (PhaseKind::Aqueous, ActivityModel::IdealMolalityAqueous)
                 | (PhaseKind::Aqueous, ActivityModel::UnitActivity)
                 | (PhaseKind::Solid, ActivityModel::UnitActivity)
+                | (PhaseKind::Gas, ActivityModel::IdealGas)
                 | (PhaseKind::Gas, ActivityModel::UnitActivity) => {}
                 (phase, activity_model) => {
                     return Err(SpeciesRegistryError::IncompatibleActivityModel {

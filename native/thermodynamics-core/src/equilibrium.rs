@@ -7,6 +7,7 @@ const GAS_CONSTANT_JOULE_PER_MOL_KELVIN: f64 = 8.314_462_618_153_24;
 const WATER_MOLAR_MASS_KILOGRAM_PER_MOL: f64 = 0.018_015_28;
 const MIN_ACTIVITY: f64 = 1.0e-300;
 const MIN_AMOUNT_MOL: f64 = 1.0e-30;
+const ACTIVE_BOUND_AMOUNT_MOL: f64 = 1.0e-12;
 const BALANCE_TOLERANCE_MOL: f64 = 1.0e-8;
 const CHARGE_TOLERANCE_MOL: f64 = 1.0e-8;
 const STEP_GRADIENT_TOLERANCE_JOULE_PER_MOL: f64 = 1.0;
@@ -132,6 +133,7 @@ pub fn solve_equilibrium(
             &species,
             &amounts,
             problem.temperature_kelvin,
+            problem.pressure_pascal,
             &mut diagnostics,
         )?;
         let max_projected_gradient =
@@ -146,6 +148,7 @@ pub fn solve_equilibrium(
             &mut amounts,
             &search_directions,
             problem.temperature_kelvin,
+            problem.pressure_pascal,
             &mut diagnostics,
         )? {
             break;
@@ -159,6 +162,7 @@ pub fn solve_equilibrium(
         &amounts,
         &search_directions,
         problem.temperature_kelvin,
+        problem.pressure_pascal,
     )?;
 
     if residuals.max_element_balance_residual_mol > BALANCE_TOLERANCE_MOL
@@ -218,13 +222,7 @@ fn load_species(
                 .species(*species_id)
                 .ok_or(EquilibriumError::MissingSpeciesData(*species_id))?;
             match species.phase {
-                PhaseKind::Aqueous | PhaseKind::Solid => {}
-                PhaseKind::Gas => {
-                    return Err(EquilibriumError::UnsupportedPhase {
-                        species_id: *species_id,
-                        phase: species.phase,
-                    });
-                }
+                PhaseKind::Aqueous | PhaseKind::Solid | PhaseKind::Gas => {}
             }
             if temperature_kelvin < species.thermo.valid_temperature_range.min_kelvin
                 || temperature_kelvin > species.thermo.valid_temperature_range.max_kelvin
@@ -304,6 +302,7 @@ fn chemical_potentials_joule_per_mol(
     species: &[Species],
     amounts: &[f64],
     temperature_kelvin: f64,
+    pressure_pascal: f64,
     diagnostics: &mut Vec<EquilibriumDiagnostic>,
 ) -> Result<Vec<f64>, EquilibriumError> {
     let solvent_kg = solvent_water_kilograms(species, amounts);
@@ -326,6 +325,16 @@ fn chemical_potentials_joule_per_mol(
                 .value_joule_per_mol;
             match species_record.activity_model {
                 ActivityModel::UnitActivity => standard_gibbs,
+                ActivityModel::IdealGas => {
+                    let gas_total_mol = gas_total_moles(species, amounts).max(MIN_AMOUNT_MOL);
+                    let mole_fraction = (*amount_mol).max(MIN_AMOUNT_MOL) / gas_total_mol;
+                    let fugacity_ratio =
+                        (mole_fraction * pressure_pascal / 100_000.0).max(MIN_ACTIVITY);
+                    standard_gibbs
+                        + GAS_CONSTANT_JOULE_PER_MOL_KELVIN
+                            * temperature_kelvin
+                            * fugacity_ratio.ln()
+                }
                 ActivityModel::IdealMolalityAqueous => {
                     let molality =
                         (*amount_mol).max(MIN_AMOUNT_MOL) / solvent_kg.max(MIN_AMOUNT_MOL);
@@ -359,6 +368,15 @@ fn solvent_water_kilograms(species: &[Species], amounts: &[f64]) -> f64 {
         .find(|(species_record, _)| is_water_solvent(species_record))
         .map(|(_, amount_mol)| amount_mol.max(MIN_AMOUNT_MOL) * WATER_MOLAR_MASS_KILOGRAM_PER_MOL)
         .unwrap_or(MIN_AMOUNT_MOL)
+}
+
+fn gas_total_moles(species: &[Species], amounts: &[f64]) -> f64 {
+    species
+        .iter()
+        .zip(amounts)
+        .filter(|(species_record, _)| species_record.phase == PhaseKind::Gas)
+        .map(|(_, amount_mol)| amount_mol.max(0.0))
+        .sum()
 }
 
 fn ionic_strength_molal(species: &[Species], amounts: &[f64], solvent_kg: f64) -> f64 {
@@ -424,7 +442,7 @@ fn direction_is_feasible_at_boundary(amounts: &[f64], direction: &[f64]) -> bool
     amounts
         .iter()
         .zip(direction)
-        .all(|(amount, delta)| *amount > MIN_AMOUNT_MOL || *delta >= 0.0)
+        .all(|(amount, delta)| *amount > ACTIVE_BOUND_AMOUNT_MOL || *delta >= 0.0)
 }
 
 fn take_coordinate_root_step(
@@ -432,14 +450,20 @@ fn take_coordinate_root_step(
     amounts: &mut [f64],
     search_directions: &[Vec<f64>],
     temperature_kelvin: f64,
+    pressure_pascal: f64,
     diagnostics: &mut Vec<EquilibriumDiagnostic>,
 ) -> Result<bool, EquilibriumError> {
     if search_directions.is_empty() {
         return Ok(false);
     }
 
-    let current_potentials =
-        chemical_potentials_joule_per_mol(species, amounts, temperature_kelvin, diagnostics)?;
+    let current_potentials = chemical_potentials_joule_per_mol(
+        species,
+        amounts,
+        temperature_kelvin,
+        pressure_pascal,
+        diagnostics,
+    )?;
     let mut coordinate_order: Vec<usize> = (0..search_directions.len()).collect();
     coordinate_order.sort_by(|left, right| {
         directional_derivative(&current_potentials, &search_directions[*right])
@@ -451,9 +475,13 @@ fn take_coordinate_root_step(
 
     for coordinate in coordinate_order {
         let direction = &search_directions[coordinate];
-        if let Some(candidate_amounts) =
-            solve_directional_root(species, amounts, direction, temperature_kelvin)?
-        {
+        if let Some(candidate_amounts) = solve_directional_root(
+            species,
+            amounts,
+            direction,
+            temperature_kelvin,
+            pressure_pascal,
+        )? {
             let changed = amounts
                 .iter()
                 .zip(candidate_amounts.iter())
@@ -466,6 +494,7 @@ fn take_coordinate_root_step(
                 species,
                 amounts,
                 temperature_kelvin,
+                pressure_pascal,
                 diagnostics,
             )?;
             return Ok(true);
@@ -480,21 +509,40 @@ fn solve_directional_root(
     amounts: &[f64],
     direction: &[f64],
     temperature_kelvin: f64,
+    pressure_pascal: f64,
 ) -> Result<Option<Vec<f64>>, EquilibriumError> {
     let (lower_bound, upper_bound) = feasible_step_bounds(amounts, direction);
     if lower_bound >= upper_bound {
         return Ok(None);
     }
-    let lower_bound =
-        valid_step_towards(species, amounts, direction, lower_bound, temperature_kelvin)?;
-    let upper_bound =
-        valid_step_towards(species, amounts, direction, upper_bound, temperature_kelvin)?;
+    let lower_bound = valid_step_towards(
+        species,
+        amounts,
+        direction,
+        lower_bound,
+        temperature_kelvin,
+        pressure_pascal,
+    )?;
+    let upper_bound = valid_step_towards(
+        species,
+        amounts,
+        direction,
+        upper_bound,
+        temperature_kelvin,
+        pressure_pascal,
+    )?;
     if lower_bound >= upper_bound {
         return Ok(None);
     }
 
-    let current_derivative =
-        directional_derivative_at_step(species, amounts, direction, 0.0, temperature_kelvin)?;
+    let current_derivative = directional_derivative_at_step(
+        species,
+        amounts,
+        direction,
+        0.0,
+        temperature_kelvin,
+        pressure_pascal,
+    )?;
     if current_derivative.abs() <= STEP_GRADIENT_TOLERANCE_JOULE_PER_MOL {
         return Ok(None);
     }
@@ -512,10 +560,22 @@ fn solve_directional_root(
         upper_bound
     };
 
-    let lower_derivative =
-        directional_derivative_at_step(species, amounts, direction, lower, temperature_kelvin)?;
-    let upper_derivative =
-        directional_derivative_at_step(species, amounts, direction, upper, temperature_kelvin)?;
+    let lower_derivative = directional_derivative_at_step(
+        species,
+        amounts,
+        direction,
+        lower,
+        temperature_kelvin,
+        pressure_pascal,
+    )?;
+    let upper_derivative = directional_derivative_at_step(
+        species,
+        amounts,
+        direction,
+        upper,
+        temperature_kelvin,
+        pressure_pascal,
+    )?;
 
     let target_step = if lower_derivative <= 0.0 && upper_derivative >= 0.0 {
         bisect_directional_derivative(
@@ -525,6 +585,7 @@ fn solve_directional_root(
             lower,
             upper,
             temperature_kelvin,
+            pressure_pascal,
         )?
     } else if current_derivative > 0.0 && lower < 0.0 {
         lower
@@ -564,12 +625,20 @@ fn valid_step_towards(
     direction: &[f64],
     target_step: f64,
     temperature_kelvin: f64,
+    pressure_pascal: f64,
 ) -> Result<f64, EquilibriumError> {
     if target_step == 0.0 {
         return Ok(0.0);
     }
-    if directional_derivative_at_step(species, amounts, direction, target_step, temperature_kelvin)
-        .is_ok()
+    if directional_derivative_at_step(
+        species,
+        amounts,
+        direction,
+        target_step,
+        temperature_kelvin,
+        pressure_pascal,
+    )
+    .is_ok()
     {
         return Ok(target_step);
     }
@@ -584,6 +653,7 @@ fn valid_step_towards(
             direction,
             middle,
             temperature_kelvin,
+            pressure_pascal,
         ) {
             Ok(_) => valid = middle,
             Err(EquilibriumError::DaviesModelOutOfRange { .. }) => invalid = middle,
@@ -599,6 +669,7 @@ fn directional_derivative_at_step(
     direction: &[f64],
     step: f64,
     temperature_kelvin: f64,
+    pressure_pascal: f64,
 ) -> Result<f64, EquilibriumError> {
     let trial_amounts = amounts_at_step(amounts, direction, step);
     let mut diagnostics = Vec::new();
@@ -606,6 +677,7 @@ fn directional_derivative_at_step(
         species,
         &trial_amounts,
         temperature_kelvin,
+        pressure_pascal,
         &mut diagnostics,
     )?;
     Ok(directional_derivative(&potentials, direction))
@@ -626,6 +698,7 @@ fn bisect_directional_derivative(
     mut lower: f64,
     mut upper: f64,
     temperature_kelvin: f64,
+    pressure_pascal: f64,
 ) -> Result<f64, EquilibriumError> {
     for _ in 0..96 {
         let middle = (lower + upper) * 0.5;
@@ -635,6 +708,7 @@ fn bisect_directional_derivative(
             direction,
             middle,
             temperature_kelvin,
+            pressure_pascal,
         )?;
         if middle_derivative.abs() <= STEP_GRADIENT_TOLERANCE_JOULE_PER_MOL {
             return Ok(middle);
@@ -670,6 +744,7 @@ fn compute_residuals(
     amounts: &[f64],
     search_directions: &[Vec<f64>],
     temperature_kelvin: f64,
+    pressure_pascal: f64,
 ) -> Result<EquilibriumResiduals, EquilibriumError> {
     let actual_totals = multiply_matrix_vector(constraint_matrix, amounts);
     let mut element_residual = 0.0;
@@ -684,8 +759,13 @@ fn compute_residuals(
     }
 
     let mut diagnostics = Vec::new();
-    let potentials =
-        chemical_potentials_joule_per_mol(species, amounts, temperature_kelvin, &mut diagnostics)?;
+    let potentials = chemical_potentials_joule_per_mol(
+        species,
+        amounts,
+        temperature_kelvin,
+        pressure_pascal,
+        &mut diagnostics,
+    )?;
     Ok(EquilibriumResiduals {
         max_element_balance_residual_mol: element_residual,
         charge_balance_residual_mol: actual_totals.last().copied().unwrap_or_default(),
