@@ -9,8 +9,8 @@ const MIN_ACTIVITY: f64 = 1.0e-300;
 const MIN_AMOUNT_MOL: f64 = 1.0e-30;
 const BALANCE_TOLERANCE_MOL: f64 = 1.0e-8;
 const CHARGE_TOLERANCE_MOL: f64 = 1.0e-8;
-const STEP_GRADIENT_TOLERANCE_JOULE_PER_MOL: f64 = 100.0;
-const FINAL_GRADIENT_TOLERANCE_JOULE_PER_MOL: f64 = 10_000.0;
+const STEP_GRADIENT_TOLERANCE_JOULE_PER_MOL: f64 = 1.0;
+const FINAL_GRADIENT_TOLERANCE_JOULE_PER_MOL: f64 = 100.0;
 const MAX_ITERATIONS: usize = 4_000;
 
 #[derive(Debug, Clone)]
@@ -121,7 +121,7 @@ pub fn solve_equilibrium(
     let element_ids = sorted_element_ids(&species);
     let constraint_matrix = build_constraint_matrix(&species, &element_ids);
     let conserved_totals = multiply_matrix_vector(&constraint_matrix, &initial_amounts);
-    let nullspace_basis = nullspace(&constraint_matrix);
+    let search_directions = build_search_directions(&constraint_matrix);
     let mut amounts = initial_amounts;
     let mut diagnostics = Vec::new();
     let mut iterations = 0;
@@ -134,19 +134,17 @@ pub fn solve_equilibrium(
             problem.temperature_kelvin,
             &mut diagnostics,
         )?;
-        let projected_gradient = projected_gradient(&nullspace_basis, &potentials);
         let max_projected_gradient =
-            feasible_descent_measure(&nullspace_basis, &potentials, &amounts);
+            feasible_descent_measure(&search_directions, &potentials, &amounts);
 
         if max_projected_gradient <= STEP_GRADIENT_TOLERANCE_JOULE_PER_MOL {
             break;
         }
 
-        if !take_coordinate_backtracking_step(
+        if !take_coordinate_root_step(
             &species,
             &mut amounts,
-            &nullspace_basis,
-            &projected_gradient,
+            &search_directions,
             problem.temperature_kelvin,
             &mut diagnostics,
         )? {
@@ -159,7 +157,7 @@ pub fn solve_equilibrium(
         &conserved_totals,
         &species,
         &amounts,
-        &nullspace_basis,
+        &search_directions,
         problem.temperature_kelvin,
     )?;
 
@@ -344,41 +342,6 @@ fn chemical_potentials_joule_per_mol(
         .collect())
 }
 
-fn objective_joule(
-    species: &[Species],
-    amounts: &[f64],
-    temperature_kelvin: f64,
-) -> Result<f64, EquilibriumError> {
-    let solvent_kg = solvent_water_kilograms(species, amounts);
-    let ionic_strength = ionic_strength_molal(species, amounts, solvent_kg);
-    if ionic_strength > DAVIES_MAX_IONIC_STRENGTH_MOLAL {
-        return Err(EquilibriumError::DaviesModelOutOfRange {
-            ionic_strength_molal: ionic_strength,
-            max_valid_ionic_strength_molal: DAVIES_MAX_IONIC_STRENGTH_MOLAL,
-        });
-    }
-
-    let mut total = 0.0;
-    for (species_record, amount_mol) in species.iter().zip(amounts) {
-        let amount = amount_mol.max(0.0);
-        total += amount
-            * species_record
-                .thermo
-                .standard_gibbs_energy_joule_per_mol_298_15;
-        if species_record.phase == PhaseKind::Aqueous && !is_water_solvent(species_record) {
-            let molality = amount.max(MIN_AMOUNT_MOL) / solvent_kg.max(MIN_AMOUNT_MOL);
-            let log10_gamma = davies_log10_gamma(species_record.charge_number, ionic_strength)
-                .expect("ionic strength range checked before gamma calculation");
-            let activity = (molality * 10.0_f64.powf(log10_gamma)).max(MIN_ACTIVITY);
-            total += amount
-                * GAS_CONSTANT_JOULE_PER_MOL_KELVIN
-                * temperature_kelvin
-                * (activity.ln() - 1.0);
-        }
-    }
-    Ok(total)
-}
-
 fn is_water_solvent(species: &Species) -> bool {
     species.symbol == "H2O(l)" && species.phase == PhaseKind::Aqueous
 }
@@ -423,20 +386,13 @@ fn push_unique_davies_diagnostic(
     });
 }
 
-fn projected_gradient(nullspace_basis: &[Vec<f64>], potentials: &[f64]) -> Vec<f64> {
-    nullspace_basis
-        .iter()
-        .map(|basis| basis.iter().zip(potentials).map(|(a, b)| a * b).sum())
-        .collect()
-}
-
 fn feasible_descent_measure(
-    nullspace_basis: &[Vec<f64>],
+    search_directions: &[Vec<f64>],
     potentials: &[f64],
     amounts: &[f64],
 ) -> f64 {
     let mut max_descent = 0.0;
-    for basis in nullspace_basis {
+    for basis in search_directions {
         for sign in [-1.0, 1.0] {
             let direction: Vec<f64> = basis.iter().map(|value| sign * value).collect();
             if !direction_is_feasible_at_boundary(amounts, &direction) {
@@ -465,45 +421,47 @@ fn direction_is_feasible_at_boundary(amounts: &[f64], direction: &[f64]) -> bool
         .all(|(amount, delta)| *amount > MIN_AMOUNT_MOL || *delta >= 0.0)
 }
 
-fn max_abs(values: &[f64]) -> f64 {
-    values.iter().fold(0.0, |acc, value| acc.max(value.abs()))
-}
-
-fn take_coordinate_backtracking_step(
+fn take_coordinate_root_step(
     species: &[Species],
     amounts: &mut [f64],
-    nullspace_basis: &[Vec<f64>],
-    projected_gradient: &[f64],
+    search_directions: &[Vec<f64>],
     temperature_kelvin: f64,
     diagnostics: &mut Vec<EquilibriumDiagnostic>,
 ) -> Result<bool, EquilibriumError> {
-    if nullspace_basis.is_empty() || max_abs(projected_gradient) == 0.0 {
+    if search_directions.is_empty() {
         return Ok(false);
     }
 
-    let mut coordinate_order: Vec<usize> = (0..projected_gradient.len()).collect();
+    let current_potentials =
+        chemical_potentials_joule_per_mol(species, amounts, temperature_kelvin, diagnostics)?;
+    let mut coordinate_order: Vec<usize> = (0..search_directions.len()).collect();
     coordinate_order.sort_by(|left, right| {
-        projected_gradient[*right]
+        directional_derivative(&current_potentials, &search_directions[*right])
             .abs()
-            .total_cmp(&projected_gradient[*left].abs())
+            .total_cmp(
+                &directional_derivative(&current_potentials, &search_directions[*left]).abs(),
+            )
     });
 
     for coordinate in coordinate_order {
-        let sign = -projected_gradient[coordinate].signum();
-        let direction: Vec<f64> = nullspace_basis[coordinate]
-            .iter()
-            .map(|value| sign * value)
-            .collect();
-        if !direction_is_feasible_at_boundary(amounts, &direction) {
-            continue;
-        }
-        if take_backtracking_step_for_direction(
-            species,
-            amounts,
-            &direction,
-            temperature_kelvin,
-            diagnostics,
-        )? {
+        let direction = &search_directions[coordinate];
+        if let Some(candidate_amounts) =
+            solve_directional_root(species, amounts, direction, temperature_kelvin)?
+        {
+            let changed = amounts
+                .iter()
+                .zip(candidate_amounts.iter())
+                .any(|(left, right)| (left - right).abs() > MIN_AMOUNT_MOL);
+            if !changed {
+                continue;
+            }
+            amounts.copy_from_slice(&candidate_amounts);
+            let _ = chemical_potentials_joule_per_mol(
+                species,
+                amounts,
+                temperature_kelvin,
+                diagnostics,
+            )?;
             return Ok(true);
         }
     }
@@ -511,63 +469,192 @@ fn take_coordinate_backtracking_step(
     Ok(false)
 }
 
-fn take_backtracking_step_for_direction(
+fn solve_directional_root(
     species: &[Species],
-    amounts: &mut [f64],
+    amounts: &[f64],
     direction: &[f64],
     temperature_kelvin: f64,
-    diagnostics: &mut Vec<EquilibriumDiagnostic>,
-) -> Result<bool, EquilibriumError> {
-    let current_objective = objective_joule(species, amounts, temperature_kelvin)?;
-    let mut max_step = 1.0;
+) -> Result<Option<Vec<f64>>, EquilibriumError> {
+    let (lower_bound, upper_bound) = feasible_step_bounds(amounts, direction);
+    if lower_bound >= upper_bound {
+        return Ok(None);
+    }
+    let lower_bound =
+        valid_step_towards(species, amounts, direction, lower_bound, temperature_kelvin)?;
+    let upper_bound =
+        valid_step_towards(species, amounts, direction, upper_bound, temperature_kelvin)?;
+    if lower_bound >= upper_bound {
+        return Ok(None);
+    }
+
+    let current_derivative =
+        directional_derivative_at_step(species, amounts, direction, 0.0, temperature_kelvin)?;
+    if current_derivative.abs() <= STEP_GRADIENT_TOLERANCE_JOULE_PER_MOL {
+        return Ok(None);
+    }
+
+    let width = upper_bound - lower_bound;
+    let epsilon = (width.abs() * 1.0e-12).max(1.0e-18);
+    let lower = if lower_bound < 0.0 {
+        (lower_bound + epsilon).min(0.0)
+    } else {
+        lower_bound
+    };
+    let upper = if upper_bound > 0.0 {
+        (upper_bound - epsilon).max(0.0)
+    } else {
+        upper_bound
+    };
+
+    let lower_derivative =
+        directional_derivative_at_step(species, amounts, direction, lower, temperature_kelvin)?;
+    let upper_derivative =
+        directional_derivative_at_step(species, amounts, direction, upper, temperature_kelvin)?;
+
+    let target_step = if lower_derivative <= 0.0 && upper_derivative >= 0.0 {
+        bisect_directional_derivative(
+            species,
+            amounts,
+            direction,
+            lower,
+            upper,
+            temperature_kelvin,
+        )?
+    } else if current_derivative > 0.0 && lower < 0.0 {
+        lower
+    } else if current_derivative < 0.0 && upper > 0.0 {
+        upper
+    } else {
+        return Ok(None);
+    };
+
+    Ok(Some(amounts_at_step(amounts, direction, target_step)))
+}
+
+fn feasible_step_bounds(amounts: &[f64], direction: &[f64]) -> (f64, f64) {
+    let mut lower_bound = f64::NEG_INFINITY;
+    let mut upper_bound = f64::INFINITY;
     for (amount, delta) in amounts.iter().zip(direction) {
         if *delta < 0.0 {
-            let limit = amount.max(0.0) / -delta;
-            if limit.is_finite() {
-                max_step = f64::min(max_step, limit * 0.99);
-            }
+            upper_bound = upper_bound.min(amount.max(0.0) / -delta);
+        } else if *delta > 0.0 {
+            lower_bound = lower_bound.max(-amount.max(0.0) / delta);
         }
     }
 
-    let mut step = max_step.max(1.0e-18);
-    for _ in 0..180 {
-        let trial: Vec<f64> = amounts
-            .iter()
-            .zip(direction)
-            .map(|(amount, delta)| {
-                let value = amount + step * delta;
-                if value.abs() < MIN_AMOUNT_MOL {
-                    0.0
-                } else {
-                    value
-                }
-            })
-            .collect();
-
-        if trial
-            .iter()
-            .all(|amount| amount.is_finite() && *amount >= -MIN_AMOUNT_MOL)
-        {
-            let clipped_trial: Vec<f64> = trial.iter().map(|amount| amount.max(0.0)).collect();
-            if let Ok(trial_objective) =
-                objective_joule(species, &clipped_trial, temperature_kelvin)
-            {
-                if trial_objective.is_finite() && trial_objective < current_objective {
-                    amounts.copy_from_slice(&clipped_trial);
-                    let _ = chemical_potentials_joule_per_mol(
-                        species,
-                        amounts,
-                        temperature_kelvin,
-                        diagnostics,
-                    )?;
-                    return Ok(true);
-                }
-            }
-        }
-        step *= 0.5;
+    if !lower_bound.is_finite() {
+        lower_bound = -1.0;
+    }
+    if !upper_bound.is_finite() {
+        upper_bound = 1.0;
     }
 
-    Ok(false)
+    (lower_bound, upper_bound)
+}
+
+fn valid_step_towards(
+    species: &[Species],
+    amounts: &[f64],
+    direction: &[f64],
+    target_step: f64,
+    temperature_kelvin: f64,
+) -> Result<f64, EquilibriumError> {
+    if target_step == 0.0 {
+        return Ok(0.0);
+    }
+    if directional_derivative_at_step(species, amounts, direction, target_step, temperature_kelvin)
+        .is_ok()
+    {
+        return Ok(target_step);
+    }
+
+    let mut valid = 0.0;
+    let mut invalid = target_step;
+    for _ in 0..96 {
+        let middle = (valid + invalid) * 0.5;
+        match directional_derivative_at_step(
+            species,
+            amounts,
+            direction,
+            middle,
+            temperature_kelvin,
+        ) {
+            Ok(_) => valid = middle,
+            Err(EquilibriumError::DaviesModelOutOfRange { .. }) => invalid = middle,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(valid)
+}
+
+fn directional_derivative_at_step(
+    species: &[Species],
+    amounts: &[f64],
+    direction: &[f64],
+    step: f64,
+    temperature_kelvin: f64,
+) -> Result<f64, EquilibriumError> {
+    let trial_amounts = amounts_at_step(amounts, direction, step);
+    let mut diagnostics = Vec::new();
+    let potentials = chemical_potentials_joule_per_mol(
+        species,
+        &trial_amounts,
+        temperature_kelvin,
+        &mut diagnostics,
+    )?;
+    Ok(directional_derivative(&potentials, direction))
+}
+
+fn directional_derivative(potentials: &[f64], direction: &[f64]) -> f64 {
+    potentials
+        .iter()
+        .zip(direction.iter())
+        .map(|(potential, delta)| potential * delta)
+        .sum()
+}
+
+fn bisect_directional_derivative(
+    species: &[Species],
+    amounts: &[f64],
+    direction: &[f64],
+    mut lower: f64,
+    mut upper: f64,
+    temperature_kelvin: f64,
+) -> Result<f64, EquilibriumError> {
+    for _ in 0..96 {
+        let middle = (lower + upper) * 0.5;
+        let middle_derivative = directional_derivative_at_step(
+            species,
+            amounts,
+            direction,
+            middle,
+            temperature_kelvin,
+        )?;
+        if middle_derivative.abs() <= STEP_GRADIENT_TOLERANCE_JOULE_PER_MOL {
+            return Ok(middle);
+        }
+        if middle_derivative < 0.0 {
+            lower = middle;
+        } else {
+            upper = middle;
+        }
+    }
+    Ok((lower + upper) * 0.5)
+}
+
+fn amounts_at_step(amounts: &[f64], direction: &[f64], step: f64) -> Vec<f64> {
+    amounts
+        .iter()
+        .zip(direction)
+        .map(|(amount, delta)| {
+            let value = amount + step * delta;
+            if value.abs() < MIN_AMOUNT_MOL {
+                0.0
+            } else {
+                value.max(0.0)
+            }
+        })
+        .collect()
 }
 
 fn compute_residuals(
@@ -575,7 +662,7 @@ fn compute_residuals(
     conserved_totals: &[f64],
     species: &[Species],
     amounts: &[f64],
-    nullspace_basis: &[Vec<f64>],
+    search_directions: &[Vec<f64>],
     temperature_kelvin: f64,
 ) -> Result<EquilibriumResiduals, EquilibriumError> {
     let actual_totals = multiply_matrix_vector(constraint_matrix, amounts);
@@ -597,12 +684,148 @@ fn compute_residuals(
         max_element_balance_residual_mol: element_residual,
         charge_balance_residual_mol: actual_totals.last().copied().unwrap_or_default(),
         max_projected_gradient_joule_per_mol: feasible_descent_measure(
-            nullspace_basis,
+            search_directions,
             &potentials,
             amounts,
         ),
         iterations: 0,
     })
+}
+
+fn build_search_directions(constraint_matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let mut directions = Vec::new();
+    for basis_direction in nullspace(constraint_matrix) {
+        push_unique_direction(&mut directions, basis_direction);
+    }
+
+    let species_count = constraint_matrix
+        .first()
+        .map(|row| row.len())
+        .unwrap_or_default();
+    for support_size in 2..=4 {
+        let mut support = Vec::with_capacity(support_size);
+        enumerate_supports(
+            constraint_matrix,
+            species_count,
+            support_size,
+            0,
+            &mut support,
+            &mut directions,
+        );
+    }
+
+    directions
+}
+
+fn enumerate_supports(
+    constraint_matrix: &[Vec<f64>],
+    species_count: usize,
+    support_size: usize,
+    start_index: usize,
+    support: &mut Vec<usize>,
+    directions: &mut Vec<Vec<f64>>,
+) {
+    if support.len() == support_size {
+        let mut coefficients = vec![0_i8; support_size];
+        enumerate_coefficients(
+            constraint_matrix,
+            species_count,
+            support,
+            &mut coefficients,
+            0,
+            directions,
+        );
+        return;
+    }
+
+    for species_index in start_index..species_count {
+        support.push(species_index);
+        enumerate_supports(
+            constraint_matrix,
+            species_count,
+            support_size,
+            species_index + 1,
+            support,
+            directions,
+        );
+        support.pop();
+    }
+}
+
+fn enumerate_coefficients(
+    constraint_matrix: &[Vec<f64>],
+    species_count: usize,
+    support: &[usize],
+    coefficients: &mut [i8],
+    coefficient_index: usize,
+    directions: &mut Vec<Vec<f64>>,
+) {
+    const COEFFICIENTS: [i8; 4] = [-2, -1, 1, 2];
+
+    if coefficient_index == coefficients.len() {
+        let mut direction = vec![0.0; species_count];
+        for (species_index, coefficient) in support.iter().zip(coefficients.iter()) {
+            direction[*species_index] = f64::from(*coefficient);
+        }
+        if constraint_matrix.iter().all(|row| {
+            row.iter()
+                .zip(direction.iter())
+                .map(|(left, right)| left * right)
+                .sum::<f64>()
+                .abs()
+                < 1.0e-12
+        }) {
+            push_unique_direction(directions, direction);
+        }
+        return;
+    }
+
+    for coefficient in COEFFICIENTS {
+        coefficients[coefficient_index] = coefficient;
+        enumerate_coefficients(
+            constraint_matrix,
+            species_count,
+            support,
+            coefficients,
+            coefficient_index + 1,
+            directions,
+        );
+    }
+}
+
+fn push_unique_direction(directions: &mut Vec<Vec<f64>>, mut direction: Vec<f64>) {
+    if direction.iter().all(|value| value.abs() < 1.0e-12) {
+        return;
+    }
+
+    let max_abs = direction
+        .iter()
+        .fold(0.0_f64, |acc, value| acc.max(value.abs()));
+    if max_abs == 0.0 {
+        return;
+    }
+    for value in &mut direction {
+        *value /= max_abs;
+    }
+
+    if let Some(first_non_zero) = direction.iter().find(|value| value.abs() >= 1.0e-12) {
+        if *first_non_zero < 0.0 {
+            for value in &mut direction {
+                *value = -*value;
+            }
+        }
+    }
+
+    if directions.iter().any(|existing| {
+        existing
+            .iter()
+            .zip(direction.iter())
+            .all(|(left, right)| (left - right).abs() < 1.0e-12)
+    }) {
+        return;
+    }
+
+    directions.push(direction);
 }
 
 fn nullspace(matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {

@@ -236,6 +236,63 @@ mod tests {
         analyze_aqueous_equilibrium(registry, result, H2O_L, H_PLUS).unwrap()
     }
 
+    fn activity(
+        summary: &thermodynamics_core::AqueousEquilibriumSummary,
+        species_id: SpeciesId,
+    ) -> f64 {
+        summary
+            .aqueous_species
+            .iter()
+            .find(|species| species.species_id == species_id)
+            .map(|species| species.activity)
+            .unwrap_or_default()
+    }
+
+    fn expected_equilibrium_constant(
+        registry: &SpeciesRegistry,
+        products: &[(SpeciesId, f64)],
+        reactants: &[(SpeciesId, f64)],
+    ) -> f64 {
+        const GAS_CONSTANT_JOULE_PER_MOL_KELVIN: f64 = 8.314_462_618_153_24;
+        const REFERENCE_TEMPERATURE_KELVIN: f64 = 298.15;
+
+        let product_gibbs: f64 = products
+            .iter()
+            .map(|(species_id, coefficient)| {
+                coefficient
+                    * registry
+                        .species(*species_id)
+                        .unwrap()
+                        .thermo
+                        .standard_gibbs_energy_joule_per_mol_298_15
+            })
+            .sum();
+        let reactant_gibbs: f64 = reactants
+            .iter()
+            .map(|(species_id, coefficient)| {
+                coefficient
+                    * registry
+                        .species(*species_id)
+                        .unwrap()
+                        .thermo
+                        .standard_gibbs_energy_joule_per_mol_298_15
+            })
+            .sum();
+
+        let reaction_gibbs_joule_per_mol = product_gibbs - reactant_gibbs;
+        (-reaction_gibbs_joule_per_mol
+            / (GAS_CONSTANT_JOULE_PER_MOL_KELVIN * REFERENCE_TEMPERATURE_KELVIN))
+            .exp()
+    }
+
+    fn assert_relative_error(actual: f64, expected: f64, tolerance: f64) {
+        let relative_error = ((actual / expected) - 1.0).abs();
+        assert!(
+            relative_error <= tolerance,
+            "actual={actual:e}, expected={expected:e}, relative_error={relative_error:e}, tolerance={tolerance:e}"
+        );
+    }
+
     #[test]
     fn curated_registry_has_complete_species_data() {
         let registry = curated_registry().unwrap();
@@ -275,6 +332,23 @@ mod tests {
         );
         assert!((6.0..8.0).contains(&summary.ph));
         assert!((1.0e-8..1.0e-6).contains(&h_plus.molality_mol_per_kg_water));
+    }
+
+    #[test]
+    fn pure_water_matches_reference_ion_product_from_standard_gibbs_data() {
+        let registry = curated_registry().unwrap();
+        let problem = equilibrium_problem(298.15, 101_325.0, vec![amount(H2O_L, 55.5)]);
+
+        let result = solve_equilibrium(&registry, &problem).unwrap();
+        let summary = aqueous_summary(&registry, &result);
+        let actual_ion_product = activity(&summary, H_PLUS) * activity(&summary, OH_MINUS);
+        let expected_ion_product = expected_equilibrium_constant(
+            &registry,
+            &[(H_PLUS, 1.0), (OH_MINUS, 1.0)],
+            &[(H2O_L, 1.0)],
+        );
+
+        assert_relative_error(actual_ion_product, expected_ion_product, 0.05);
     }
 
     #[test]
@@ -329,6 +403,32 @@ mod tests {
     }
 
     #[test]
+    fn calcite_solubility_product_matches_standard_gibbs_data_when_solid_is_present() {
+        let registry = curated_registry().unwrap();
+        let problem = equilibrium_problem(
+            298.15,
+            101_325.0,
+            vec![
+                amount(H2O_L, 55.5),
+                amount(CA_2_PLUS, 1.0e-3),
+                amount(CO3_2_MINUS, 1.0e-3),
+            ],
+        );
+
+        let result = solve_equilibrium(&registry, &problem).unwrap();
+        let summary = aqueous_summary(&registry, &result);
+        let actual_solubility_product =
+            activity(&summary, CA_2_PLUS) * activity(&summary, CO3_2_MINUS);
+        let expected_solubility_product = expected_equilibrium_constant(
+            &registry,
+            &[(CA_2_PLUS, 1.0), (CO3_2_MINUS, 1.0)],
+            &[(CACO3_S, 1.0)],
+        );
+
+        assert_relative_error(actual_solubility_product, expected_solubility_product, 0.20);
+    }
+
+    #[test]
     fn calcium_carbonate_does_not_precipitate_when_undersaturated() {
         let registry = curated_registry().unwrap();
         let problem = equilibrium_problem(
@@ -374,6 +474,41 @@ mod tests {
         assert!((6.0..8.0).contains(&summary.ph));
         assert!(sodium.activity > 0.0);
         assert!(sodium.activity_coefficient < 1.0);
+    }
+
+    #[test]
+    fn carbonate_acid_equilibria_match_standard_gibbs_data() {
+        let registry = curated_registry().unwrap();
+        let problem = equilibrium_problem(
+            298.15,
+            101_325.0,
+            vec![
+                amount(H2O_L, 55.5),
+                amount(CO2_AQ, 1.0e-3),
+                amount(NA_PLUS, 1.0e-3),
+                amount(HCO3_MINUS, 1.0e-3),
+            ],
+        );
+
+        let result = solve_equilibrium(&registry, &problem).unwrap();
+        let summary = aqueous_summary(&registry, &result);
+        let first_dissociation = activity(&summary, H_PLUS) * activity(&summary, HCO3_MINUS)
+            / activity(&summary, CO2_AQ);
+        let expected_first_dissociation = expected_equilibrium_constant(
+            &registry,
+            &[(H_PLUS, 1.0), (HCO3_MINUS, 1.0)],
+            &[(CO2_AQ, 1.0), (H2O_L, 1.0)],
+        );
+        let second_dissociation = activity(&summary, H_PLUS) * activity(&summary, CO3_2_MINUS)
+            / activity(&summary, HCO3_MINUS);
+        let expected_second_dissociation = expected_equilibrium_constant(
+            &registry,
+            &[(H_PLUS, 1.0), (CO3_2_MINUS, 1.0)],
+            &[(HCO3_MINUS, 1.0)],
+        );
+
+        assert_relative_error(first_dissociation, expected_first_dissociation, 0.25);
+        assert_relative_error(second_dissociation, expected_second_dissociation, 0.25);
     }
 
     #[test]
