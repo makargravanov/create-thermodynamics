@@ -1,0 +1,7 @@
+[package]
+name = "thermodynamics-data"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thermodynamics-core = { path = "../thermodynamics-core" }
