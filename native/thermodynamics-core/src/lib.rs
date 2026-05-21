@@ -1,4 +1,5 @@
 pub mod activity;
+pub mod adiabatic;
 pub mod analysis;
 pub mod chemistry;
 pub mod equilibrium;
@@ -6,6 +7,10 @@ pub mod registry;
 pub mod thermal;
 
 pub use activity::{davies_log10_gamma, DAVIES_MAX_IONIC_STRENGTH_MOLAL};
+pub use adiabatic::{
+    solve_adiabatic_equilibrium, AdiabaticEquilibriumError, AdiabaticEquilibriumProblem,
+    AdiabaticEquilibriumResult,
+};
 pub use analysis::{
     analyze_aqueous_equilibrium, AqueousEquilibriumSummary, AqueousSpeciesSummary,
     EquilibriumAnalysisError,
