@@ -111,7 +111,67 @@ impl MolecularStructure {
         Ok(())
     }
 
-    fn bond_orders_by_atom(&self) -> Vec<f64> {
+    pub fn neighbors(&self, atom_index: usize) -> Vec<(usize, f64)> {
+        self.bonds
+            .iter()
+            .filter_map(|bond| {
+                if bond.from == atom_index {
+                    Some((bond.to, bond.order))
+                } else if bond.to == atom_index {
+                    Some((bond.from, bond.order))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn bonded_atoms_by_element(&self, atom_index: usize, element: &str) -> Vec<usize> {
+        self.neighbors(atom_index)
+            .into_iter()
+            .filter_map(|(neighbor, _)| {
+                (self.atoms[neighbor].element == element).then_some(neighbor)
+            })
+            .collect()
+    }
+
+    pub fn bonded_atoms_by_element_and_order(
+        &self,
+        atom_index: usize,
+        element: &str,
+        order: f64,
+    ) -> Vec<usize> {
+        self.neighbors(atom_index)
+            .into_iter()
+            .filter_map(|(neighbor, bond_order)| {
+                (self.atoms[neighbor].element == element && bond_order_matches(bond_order, order))
+                    .then_some(neighbor)
+            })
+            .collect()
+    }
+
+    pub fn explicit_hydrogen_count(&self, atom_index: usize) -> usize {
+        self.bonded_atoms_by_element(atom_index, "H").len()
+    }
+
+    pub fn implicit_hydrogen_count(&self, atom_index: usize) -> usize {
+        let atom = &self.atoms[atom_index];
+        if atom.element == "H" || atom.element == "R" {
+            return 0;
+        }
+        let bonds = self.bond_orders_by_atom()[atom_index];
+        hydrogens_to_add(&atom.element, bonds, atom.charge) as usize
+    }
+
+    pub fn hydrogen_count(&self, atom_index: usize) -> usize {
+        self.explicit_hydrogen_count(atom_index) + self.implicit_hydrogen_count(atom_index)
+    }
+
+    pub fn carbon_degree(&self, atom_index: usize) -> usize {
+        self.bonded_atoms_by_element(atom_index, "C").len()
+    }
+
+    pub fn bond_orders_by_atom(&self) -> Vec<f64> {
         let mut orders = vec![0.0; self.atoms.len()];
         for bond in &self.bonds {
             orders[bond.from] += bond.order;
@@ -146,6 +206,10 @@ impl MolecularStructure {
         }
         seen.into_iter().all(|value| value)
     }
+}
+
+pub fn bond_order_matches(actual: f64, expected: f64) -> bool {
+    (actual - expected).abs() <= 1.0e-6
 }
 
 #[derive(Debug, Default)]
@@ -590,7 +654,7 @@ fn next_lowest_valency(element: &str, bonds: f64) -> f64 {
         "H" => &[1.0],
         "S" => &[2.0, 0.0, 4.0, 6.0],
         "N" => &[3.0, 4.0],
-        "O" => &[0.0, 1.5, 2.0],
+        "O" => &[0.0, 2.0],
         "B" => &[3.0],
         "F" | "Na" | "Cl" | "K" | "Ni" | "Zn" | "Zr" | "I" | "Pt" => &[1.0],
         "Ca" | "Hg" => &[2.0],
@@ -713,7 +777,7 @@ mod tests {
         assert_eq!(structure.bond_count(), 3);
         let summary = structure.summary().unwrap();
         assert_eq!(summary.charge, 0);
-        assert!((summary.molar_mass_grams - 59.05).abs() < 0.001);
+        assert!((summary.molar_mass_grams - 60.06).abs() < 0.001);
     }
 
     #[test]

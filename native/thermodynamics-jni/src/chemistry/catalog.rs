@@ -2214,4 +2214,27 @@ mod tests {
         assert!(summarize_legacy_structure("destroy:linear:Xx").is_err());
         assert!(summarize_legacy_structure("destroy:linear:O^-nope").is_err());
     }
+
+    #[test]
+    fn destroy_catalog_populates_functional_groups() {
+        let registry = destroy_substances_registry_builder()
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let acetic_acid = registry.substance(&"destroy:acetic_acid".into()).unwrap();
+        assert!(acetic_acid.functional_groups.iter().any(|group| {
+            group.group_type == super::super::functional_group::FunctionalGroupType::CarboxylicAcid
+        }));
+
+        let ethanol = registry.substance(&"destroy:ethanol".into()).unwrap();
+        assert!(ethanol.functional_groups.iter().any(|group| {
+            group.group_type == super::super::functional_group::FunctionalGroupType::Alcohol
+        }));
+
+        let chloroethane = registry.substance(&"destroy:chloroethane".into()).unwrap();
+        assert!(chloroethane.functional_groups.iter().any(|group| {
+            group.group_type == super::super::functional_group::FunctionalGroupType::Halide
+        }));
+    }
 }

@@ -1,6 +1,7 @@
 use std::fmt::{Display, Formatter};
 
 use super::error::{ChemistryError, ChemistryResult};
+use super::functional_group::{find_functional_groups, FunctionalGroup};
 use super::molecule::MolecularStructure;
 
 const MOLECULAR_MASS_TOLERANCE_GRAMS_PER_MOL: f64 = 1.0e-6;
@@ -80,6 +81,7 @@ pub struct Substance {
     pub latent_heat_j_per_mol: f64,
     pub structure_code: Option<String>,
     pub molecular_structure: Option<MolecularStructure>,
+    pub functional_groups: Vec<FunctionalGroup>,
     pub translation_key: Option<String>,
     pub color_argb: u32,
     pub tags: Vec<SubstanceTagId>,
@@ -105,6 +107,7 @@ impl Substance {
             latent_heat_j_per_mol,
             structure_code: None,
             molecular_structure: None,
+            functional_groups: Vec::new(),
             translation_key: None,
             color_argb: 0x20FF_FFFF,
             tags: Vec::new(),
@@ -126,6 +129,7 @@ impl Substance {
     }
 
     pub fn with_molecular_structure(mut self, molecular_structure: MolecularStructure) -> Self {
+        self.functional_groups = find_functional_groups(&molecular_structure);
         self.molecular_structure = Some(molecular_structure);
         self
     }

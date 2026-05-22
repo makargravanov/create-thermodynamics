@@ -1,5 +1,6 @@
 pub mod catalog;
 pub mod error;
+pub mod functional_group;
 pub mod mixture;
 pub mod molecule;
 pub mod reaction;
