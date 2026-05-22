@@ -35,6 +35,10 @@ impl ChemistryRegistry {
         self.substances.values()
     }
 
+    pub fn substance_tags(&self) -> impl Iterator<Item = &SubstanceTagId> {
+        self.substance_tags.iter()
+    }
+
     pub fn substance_count(&self) -> usize {
         self.substances.len()
     }
@@ -54,6 +58,14 @@ pub struct ChemistryRegistryBuilder {
 impl ChemistryRegistryBuilder {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn from_registry(registry: &ChemistryRegistry) -> Self {
+        Self {
+            substances: registry.substances.values().cloned().collect(),
+            reactions: registry.reactions.values().cloned().collect(),
+            substance_tags: registry.substance_tags.clone(),
+        }
     }
 
     pub fn substance(mut self, substance: Substance) -> Self {

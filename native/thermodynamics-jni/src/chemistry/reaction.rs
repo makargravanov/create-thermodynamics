@@ -38,6 +38,12 @@ impl From<&str> for ReactionId {
     }
 }
 
+impl From<String> for ReactionId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StoichiometricTerm {
     pub substance_id: SubstanceId,

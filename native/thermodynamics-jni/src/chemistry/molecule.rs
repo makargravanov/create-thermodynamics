@@ -51,6 +51,60 @@ impl MolecularStructure {
         })
     }
 
+    pub fn canonical_code(&self) -> String {
+        let mut labels = self
+            .atoms
+            .iter()
+            .enumerate()
+            .map(|(index, atom)| {
+                format!(
+                    "{}:{:.3}:{}",
+                    atom.element,
+                    atom.charge,
+                    self.neighbors(index).len()
+                )
+            })
+            .collect::<Vec<_>>();
+        for _ in 0..8 {
+            labels = self
+                .atoms
+                .iter()
+                .enumerate()
+                .map(|(index, atom)| {
+                    let mut neighbor_labels = self
+                        .neighbors(index)
+                        .into_iter()
+                        .map(|(neighbor, order)| format!("{order:.3}:{}", labels[neighbor]))
+                        .collect::<Vec<_>>();
+                    neighbor_labels.sort();
+                    format!(
+                        "{}:{:.3}:[{}]",
+                        atom.element,
+                        atom.charge,
+                        neighbor_labels.join(",")
+                    )
+                })
+                .collect();
+        }
+        let mut atom_labels = labels.clone();
+        atom_labels.sort();
+        let mut bond_labels = self
+            .bonds
+            .iter()
+            .map(|bond| {
+                let mut ends = [labels[bond.from].clone(), labels[bond.to].clone()];
+                ends.sort();
+                format!("{}-{:.3}-{}", ends[0], bond.order, ends[1])
+            })
+            .collect::<Vec<_>>();
+        bond_labels.sort();
+        format!(
+            "atoms={};bonds={}",
+            atom_labels.join("|"),
+            bond_labels.join("|")
+        )
+    }
+
     pub fn validate(&self) -> ChemistryResult<()> {
         if self.atoms.is_empty() {
             return Err(invalid_structure(
@@ -194,6 +248,254 @@ impl MolecularStructure {
 
 pub fn bond_order_matches(actual: f64, expected: f64) -> bool {
     (actual - expected).abs() <= 1.0e-6
+}
+
+#[derive(Debug, Clone)]
+pub struct MolecularEditor {
+    source_code: String,
+    atoms: Vec<MolecularAtom>,
+    bonds: Vec<MolecularBond>,
+}
+
+impl MolecularEditor {
+    pub fn new(structure: &MolecularStructure) -> Self {
+        Self {
+            source_code: structure.source_code.clone(),
+            atoms: structure.atoms.clone(),
+            bonds: structure.bonds.clone(),
+        }
+    }
+
+    pub fn add_atom(
+        &mut self,
+        parent: usize,
+        element: &str,
+        charge: f64,
+        bond_order: f64,
+    ) -> ChemistryResult<usize> {
+        if parent >= self.atoms.len() {
+            return Err(invalid_structure(
+                &self.source_code,
+                "parent atom does not exist",
+            ));
+        }
+        element_mass(element)?;
+        if !charge.is_finite() || !bond_order.is_finite() || bond_order <= 0.0 {
+            return Err(invalid_structure(
+                &self.source_code,
+                "atom charge and bond order must be finite",
+            ));
+        }
+        let index = self.atoms.len();
+        self.atoms.push(MolecularAtom {
+            element: element.to_string(),
+            charge,
+        });
+        self.bonds.push(MolecularBond {
+            from: parent,
+            to: index,
+            order: bond_order,
+        });
+        Ok(index)
+    }
+
+    pub fn add_group(
+        &mut self,
+        parent: usize,
+        group: &MolecularStructure,
+        group_root: usize,
+        bond_order: f64,
+    ) -> ChemistryResult<usize> {
+        if parent >= self.atoms.len() || group_root >= group.atoms.len() {
+            return Err(invalid_structure(
+                &self.source_code,
+                "group attachment atom does not exist",
+            ));
+        }
+        if !bond_order.is_finite() || bond_order <= 0.0 {
+            return Err(invalid_structure(
+                &self.source_code,
+                "group bond order must be positive and finite",
+            ));
+        }
+        let offset = self.atoms.len();
+        self.atoms.extend(group.atoms.iter().cloned());
+        self.bonds
+            .extend(group.bonds.iter().cloned().map(|bond| MolecularBond {
+                from: bond.from + offset,
+                to: bond.to + offset,
+                order: bond.order,
+            }));
+        self.bonds.push(MolecularBond {
+            from: parent,
+            to: group_root + offset,
+            order: bond_order,
+        });
+        Ok(group_root + offset)
+    }
+
+    pub fn remove_atom(&mut self, atom_index: usize) -> ChemistryResult<()> {
+        if atom_index >= self.atoms.len() {
+            return Err(invalid_structure(
+                &self.source_code,
+                "removed atom does not exist",
+            ));
+        }
+        self.atoms.remove(atom_index);
+        self.bonds
+            .retain(|bond| bond.from != atom_index && bond.to != atom_index);
+        for bond in &mut self.bonds {
+            if bond.from > atom_index {
+                bond.from -= 1;
+            }
+            if bond.to > atom_index {
+                bond.to -= 1;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn remove_atoms(&mut self, atom_indexes: &[usize]) -> ChemistryResult<Vec<Option<usize>>> {
+        let original_len = self.atoms.len();
+        let mut unique = atom_indexes.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        for index in &unique {
+            if *index >= original_len {
+                return Err(invalid_structure(
+                    &self.source_code,
+                    "removed atom does not exist",
+                ));
+            }
+        }
+        for index in unique.iter().rev() {
+            self.remove_atom(*index)?;
+        }
+        let mut mapping = vec![None; original_len];
+        let mut removed_before = 0usize;
+        let mut next_removed = unique.iter().copied().peekable();
+        for (old_index, slot) in mapping.iter_mut().enumerate() {
+            while next_removed
+                .peek()
+                .is_some_and(|removed| *removed < old_index)
+            {
+                removed_before += 1;
+                next_removed.next();
+            }
+            if unique.binary_search(&old_index).is_err() {
+                *slot = Some(old_index - removed_before);
+            }
+        }
+        Ok(mapping)
+    }
+
+    pub fn replace_atom(
+        &mut self,
+        atom_index: usize,
+        element: &str,
+        charge: f64,
+    ) -> ChemistryResult<()> {
+        if atom_index >= self.atoms.len() {
+            return Err(invalid_structure(
+                &self.source_code,
+                "replaced atom does not exist",
+            ));
+        }
+        element_mass(element)?;
+        if !charge.is_finite() {
+            return Err(invalid_structure(
+                &self.source_code,
+                "atom charge must be finite",
+            ));
+        }
+        self.atoms[atom_index] = MolecularAtom {
+            element: element.to_string(),
+            charge,
+        };
+        Ok(())
+    }
+
+    pub fn set_bond_order(
+        &mut self,
+        first: usize,
+        second: usize,
+        order: f64,
+    ) -> ChemistryResult<()> {
+        if !order.is_finite() || order <= 0.0 {
+            return Err(invalid_structure(
+                &self.source_code,
+                "bond order must be positive and finite",
+            ));
+        }
+        let bond = self
+            .bonds
+            .iter_mut()
+            .find(|bond| {
+                (bond.from == first && bond.to == second)
+                    || (bond.from == second && bond.to == first)
+            })
+            .ok_or_else(|| invalid_structure(&self.source_code, "bond does not exist"))?;
+        bond.order = order;
+        Ok(())
+    }
+
+    pub fn insert_bridging_atom(
+        &mut self,
+        first: usize,
+        second: usize,
+        element: &str,
+        charge: f64,
+    ) -> ChemistryResult<usize> {
+        let position = self
+            .bonds
+            .iter()
+            .position(|bond| {
+                (bond.from == first && bond.to == second)
+                    || (bond.from == second && bond.to == first)
+            })
+            .ok_or_else(|| invalid_structure(&self.source_code, "bridged bond does not exist"))?;
+        let order = self.bonds[position].order;
+        self.bonds.remove(position);
+        element_mass(element)?;
+        let bridge = self.atoms.len();
+        self.atoms.push(MolecularAtom {
+            element: element.to_string(),
+            charge,
+        });
+        self.bonds.push(MolecularBond {
+            from: first,
+            to: bridge,
+            order,
+        });
+        self.bonds.push(MolecularBond {
+            from: bridge,
+            to: second,
+            order: 1.0,
+        });
+        Ok(bridge)
+    }
+
+    pub fn finish(self) -> ChemistryResult<MolecularStructure> {
+        let structure = MolecularStructure {
+            source_code: self.source_code,
+            atoms: self.atoms,
+            bonds: self.bonds,
+        };
+        structure.validate()?;
+        Ok(structure)
+    }
+
+    pub fn join_structures(
+        first: &MolecularStructure,
+        first_atom: usize,
+        second: &MolecularStructure,
+        second_atom: usize,
+        bond_order: f64,
+    ) -> ChemistryResult<MolecularStructure> {
+        let mut editor = MolecularEditor::new(first);
+        editor.add_group(first_atom, second, second_atom, bond_order)?;
+        editor.finish()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -879,5 +1181,45 @@ mod tests {
         let summary = structure.summary().unwrap();
         assert_eq!(summary.charge, 0);
         assert!((summary.molar_mass_grams - 27.68).abs() < 0.001);
+    }
+
+    #[test]
+    fn editor_removing_explicit_hydrogen_changes_mass() {
+        let structure = parse_legacy_structure("destroy:linear:CCO").unwrap();
+        let before = structure.summary().unwrap().molar_mass_grams;
+        let hydrogen = structure
+            .atoms
+            .iter()
+            .position(|atom| atom.element == "H")
+            .unwrap();
+        let mut editor = MolecularEditor::new(&structure);
+        editor.remove_atom(hydrogen).unwrap();
+        let after = editor.finish().unwrap().summary().unwrap().molar_mass_grams;
+        assert!((before - after - 1.01).abs() < 0.001);
+    }
+
+    #[test]
+    fn editor_rejects_disconnected_molecule_after_removal() {
+        let structure = parse_legacy_structure("destroy:linear:CCC").unwrap();
+        let mut editor = MolecularEditor::new(&structure);
+        editor.remove_atom(1).unwrap();
+        assert!(editor.finish().is_err());
+    }
+
+    #[test]
+    fn editor_adds_group_and_rejects_invalid_valency() {
+        let methane = parse_legacy_structure("destroy:linear:C").unwrap();
+        let hydroxyl = parse_legacy_structure("destroy:linear:O").unwrap();
+        let mut editor = MolecularEditor::new(&methane);
+        editor.remove_atom(1).unwrap();
+        let oxygen = editor.add_group(0, &hydroxyl, 0, 1.0).unwrap();
+        editor.add_atom(oxygen, "H", 0.0, 1.0).unwrap();
+        let methanol = editor.finish().unwrap();
+        assert_eq!(methanol.atom_count(), 6);
+
+        let mut invalid =
+            MolecularEditor::new(&parse_legacy_structure("destroy:linear:C").unwrap());
+        invalid.add_atom(0, "H", 0.0, 1.0).unwrap();
+        assert!(invalid.finish().is_err());
     }
 }

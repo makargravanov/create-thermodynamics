@@ -3,6 +3,7 @@ pub mod error;
 pub mod functional_group;
 pub mod mixture;
 pub mod molecule;
+pub mod organic;
 pub mod reaction;
 pub mod reactions;
 pub mod registry;
@@ -16,6 +17,11 @@ pub use registry::{ChemistryRegistry, ChemistryRegistryBuilder};
 pub fn destroy_registry_builder() -> ChemistryResult<ChemistryRegistryBuilder> {
     let builder = catalog::destroy_substances_registry_builder()?;
     reactions::destroy_reactions_registry_builder(builder)
+}
+
+pub fn destroy_registry_with_generated_reactions_builder(
+) -> ChemistryResult<ChemistryRegistryBuilder> {
+    organic::destroy_registry_with_generated_reactions_builder()
 }
 
 #[cfg(test)]
