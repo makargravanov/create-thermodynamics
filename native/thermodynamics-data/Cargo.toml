@@ -5,3 +5,4 @@ edition.workspace = true
 
 [dependencies]
 thermodynamics-core = { path = "../thermodynamics-core" }
+thermodynamics-datafile = { path = "../thermodynamics-datafile" }

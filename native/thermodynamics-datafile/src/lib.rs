@@ -728,4 +728,23 @@ mod tests {
             ))
         ));
     }
+
+    #[test]
+    fn generated_database_nitrogen_gas_range_is_decodable() {
+        let bytes = include_bytes!("../../generated-data/create_thermodynamics_db_v1.ctdb");
+        let database = decode_database_file(bytes).unwrap();
+        let species = database
+            .species
+            .iter()
+            .find(|species| species.symbol == "N2(g)")
+            .unwrap();
+
+        assert!(
+            species.valid_temperature_range.min_kelvin <= 298.15
+                && species.valid_temperature_range.max_kelvin >= 298.15,
+            "min={}, max={}",
+            species.valid_temperature_range.min_kelvin,
+            species.valid_temperature_range.max_kelvin
+        );
+    }
 }
