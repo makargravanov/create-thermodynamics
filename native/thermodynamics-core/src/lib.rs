@@ -1,8 +1,10 @@
 pub mod activity;
 pub mod adiabatic;
 pub mod analysis;
+pub mod candidates;
 pub mod chemistry;
 pub mod equilibrium;
+pub mod gas;
 pub mod registry;
 pub mod thermal;
 
@@ -12,8 +14,12 @@ pub use adiabatic::{
     AdiabaticEquilibriumResult,
 };
 pub use analysis::{
-    analyze_aqueous_equilibrium, AqueousEquilibriumSummary, AqueousSpeciesSummary,
-    EquilibriumAnalysisError,
+    analyze_aqueous_equilibrium, analyze_phase_equilibrium, AqueousEquilibriumSummary,
+    AqueousSpeciesSummary, EquilibriumAnalysisError, PhaseAmountSummary, PhaseEquilibriumSummary,
+};
+pub use candidates::{
+    select_candidate_species, CandidateExclusion, CandidateExclusionReason, CandidatePhaseFilter,
+    CandidateSelection, CandidateSelectionError, CandidateSelectionRequest,
 };
 pub use chemistry::{
     ActivityModel, ConstantPressureHeatCapacity, DataSource, Element, ElementId, PhaseId,
@@ -23,6 +29,10 @@ pub use chemistry::{
 pub use equilibrium::{
     solve_equilibrium, EquilibriumDiagnostic, EquilibriumError, EquilibriumProblem,
     EquilibriumResiduals, EquilibriumResult,
+};
+pub use gas::{
+    solve_closed_gas_equilibrium, ClosedGasEquilibriumError, ClosedGasEquilibriumProblem,
+    ClosedGasEquilibriumResult,
 };
 pub use registry::{SpeciesRegistry, SpeciesRegistryError};
 pub use thermal::{

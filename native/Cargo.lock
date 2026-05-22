@@ -136,6 +136,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "thermodynamics-datafile"
+version = "0.1.0"
+dependencies = [
+ "thermodynamics-core",
+]
+
+[[package]]
+name = "thermodynamics-importer"
+version = "0.1.0"
+dependencies = [
+ "thermodynamics-datafile",
+]
+
+[[package]]
 name = "thermodynamics-jni"
 version = "0.1.0"
 dependencies = [

@@ -62,18 +62,18 @@ impl SpeciesRegistry {
             if !species_record
                 .thermo
                 .standard_enthalpy_of_formation
-                .value_joule_per_mol
-                .is_finite()
-                || !species_record
-                    .thermo
-                    .standard_enthalpy_of_formation
-                    .reference_temperature_kelvin
-                    .is_finite()
+                .as_ref()
+                .map(|enthalpy| {
+                    enthalpy.value_joule_per_mol.is_finite()
+                        && enthalpy.reference_temperature_kelvin.is_finite()
+                })
+                .unwrap_or(true)
                 || !species_record
                     .thermo
                     .constant_pressure_heat_capacity
-                    .value_joule_per_mol_kelvin
-                    .is_finite()
+                    .as_ref()
+                    .map(|heat_capacity| heat_capacity.value_joule_per_mol_kelvin.is_finite())
+                    .unwrap_or(true)
             {
                 return Err(SpeciesRegistryError::MissingThermoData(species_id));
             }
@@ -95,21 +95,23 @@ impl SpeciesRegistry {
                 || species_record
                     .thermo
                     .standard_enthalpy_of_formation
-                    .reference_temperature_kelvin
-                    < valid_range.min_kelvin
-                || species_record
-                    .thermo
-                    .standard_enthalpy_of_formation
-                    .reference_temperature_kelvin
-                    > valid_range.max_kelvin
+                    .as_ref()
+                    .map(|enthalpy| {
+                        enthalpy.reference_temperature_kelvin < valid_range.min_kelvin
+                            || enthalpy.reference_temperature_kelvin > valid_range.max_kelvin
+                    })
+                    .unwrap_or(false)
             {
                 return Err(SpeciesRegistryError::InvalidTemperatureRange(species_id));
             }
-            for source in [
-                species_record.thermo.standard_gibbs_energy.source,
-                species_record.thermo.standard_enthalpy_of_formation.source,
-                species_record.thermo.constant_pressure_heat_capacity.source,
-            ] {
+            let mut sources = vec![&species_record.thermo.standard_gibbs_energy.source];
+            if let Some(enthalpy) = &species_record.thermo.standard_enthalpy_of_formation {
+                sources.push(&enthalpy.source);
+            }
+            if let Some(heat_capacity) = &species_record.thermo.constant_pressure_heat_capacity {
+                sources.push(&heat_capacity.source);
+            }
+            for source in sources {
                 if source.citation.trim().is_empty() || source.note.trim().is_empty() {
                     return Err(SpeciesRegistryError::MissingDataSource(species_id));
                 }

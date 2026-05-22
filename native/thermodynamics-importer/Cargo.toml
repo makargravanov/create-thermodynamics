@@ -1,0 +1,7 @@
+[package]
+name = "thermodynamics-importer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thermodynamics-datafile = { path = "../thermodynamics-datafile" }

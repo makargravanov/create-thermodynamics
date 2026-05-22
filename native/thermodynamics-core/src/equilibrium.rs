@@ -1007,7 +1007,7 @@ mod tests {
         }
         Species {
             id: SpeciesId(id),
-            symbol,
+            symbol: symbol.to_owned(),
             composition,
             charge_number: charge,
             phase: PhaseKind::Aqueous,
@@ -1017,25 +1017,25 @@ mod tests {
                     value_joule_per_mol: 0.0,
                     reference_temperature_kelvin: 298.15,
                     source: DataSource {
-                        citation: "test",
-                        note: "test",
+                        citation: "test".to_owned(),
+                        note: "test".to_owned(),
                     },
                 },
-                standard_enthalpy_of_formation: StandardEnthalpyOfFormation {
+                standard_enthalpy_of_formation: Some(StandardEnthalpyOfFormation {
                     value_joule_per_mol: 0.0,
                     reference_temperature_kelvin: 298.15,
                     source: DataSource {
-                        citation: "test",
-                        note: "test",
+                        citation: "test".to_owned(),
+                        note: "test".to_owned(),
                     },
-                },
-                constant_pressure_heat_capacity: ConstantPressureHeatCapacity {
+                }),
+                constant_pressure_heat_capacity: Some(ConstantPressureHeatCapacity {
                     value_joule_per_mol_kelvin: 1.0,
                     source: DataSource {
-                        citation: "test",
-                        note: "test",
+                        citation: "test".to_owned(),
+                        note: "test".to_owned(),
                     },
-                },
+                }),
                 valid_temperature_range: TemperatureRange {
                     min_kelvin: 273.15,
                     max_kelvin: 373.15,
@@ -1051,12 +1051,12 @@ mod tests {
                 crate::chemistry::Element {
                     id: H,
                     atomic_number: 1,
-                    symbol: "H",
+                    symbol: "H".to_owned(),
                 },
                 crate::chemistry::Element {
                     id: O,
                     atomic_number: 8,
-                    symbol: "O",
+                    symbol: "O".to_owned(),
                 },
             ],
             vec![
