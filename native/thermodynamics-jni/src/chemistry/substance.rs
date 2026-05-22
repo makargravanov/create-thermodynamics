@@ -34,6 +34,38 @@ impl From<&str> for SubstanceId {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SubstanceTagId(String);
+
+impl SubstanceTagId {
+    pub fn new(value: impl Into<String>) -> ChemistryResult<Self> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: "<tag>".to_string(),
+                reason: "tag id must not be empty".to_string(),
+            });
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Display for SubstanceTagId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for SubstanceTagId {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Substance {
     pub id: SubstanceId,
@@ -43,6 +75,10 @@ pub struct Substance {
     pub boiling_point_kelvin: f64,
     pub molar_heat_capacity_j_per_mol_kelvin: f64,
     pub latent_heat_j_per_mol: f64,
+    pub structure_code: Option<String>,
+    pub translation_key: Option<String>,
+    pub color_argb: u32,
+    pub tags: Vec<SubstanceTagId>,
 }
 
 impl Substance {
@@ -63,7 +99,25 @@ impl Substance {
             boiling_point_kelvin,
             molar_heat_capacity_j_per_mol_kelvin,
             latent_heat_j_per_mol,
+            structure_code: None,
+            translation_key: None,
+            color_argb: 0x20FF_FFFF,
+            tags: Vec::new(),
         }
+    }
+
+    pub fn with_catalog_metadata(
+        mut self,
+        structure_code: Option<String>,
+        translation_key: Option<String>,
+        color_argb: u32,
+        tags: Vec<SubstanceTagId>,
+    ) -> Self {
+        self.structure_code = structure_code;
+        self.translation_key = translation_key;
+        self.color_argb = color_argb;
+        self.tags = tags;
+        self
     }
 
     pub fn validate(&self) -> ChemistryResult<()> {

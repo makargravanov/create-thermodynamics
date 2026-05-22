@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::error::{ChemistryError, ChemistryResult};
 use super::reaction::{Reaction, ReactionId};
-use super::substance::{Substance, SubstanceId};
+use super::substance::{Substance, SubstanceId, SubstanceTagId};
 
 const MASS_TOLERANCE_GRAMS_PER_MOL: f64 = 1.0e-6;
 const THERMO_TOLERANCE: f64 = 1.0e-6;
@@ -11,6 +11,7 @@ const THERMO_TOLERANCE: f64 = 1.0e-6;
 pub struct ChemistryRegistry {
     substances: BTreeMap<SubstanceId, Substance>,
     reactions: BTreeMap<ReactionId, Reaction>,
+    substance_tags: BTreeSet<SubstanceTagId>,
 }
 
 impl ChemistryRegistry {
@@ -29,12 +30,25 @@ impl ChemistryRegistry {
     pub fn reactions(&self) -> impl Iterator<Item = &Reaction> {
         self.reactions.values()
     }
+
+    pub fn substances(&self) -> impl Iterator<Item = &Substance> {
+        self.substances.values()
+    }
+
+    pub fn substance_count(&self) -> usize {
+        self.substances.len()
+    }
+
+    pub fn has_substance_tag(&self, id: &SubstanceTagId) -> bool {
+        self.substance_tags.contains(id)
+    }
 }
 
 #[derive(Default)]
 pub struct ChemistryRegistryBuilder {
     substances: Vec<Substance>,
     reactions: Vec<Reaction>,
+    substance_tags: BTreeSet<SubstanceTagId>,
 }
 
 impl ChemistryRegistryBuilder {
@@ -49,6 +63,11 @@ impl ChemistryRegistryBuilder {
 
     pub fn reaction(mut self, reaction: Reaction) -> Self {
         self.reactions.push(reaction);
+        self
+    }
+
+    pub fn substance_tag(mut self, tag_id: impl Into<SubstanceTagId>) -> Self {
+        self.substance_tags.insert(tag_id.into());
         self
     }
 
@@ -74,13 +93,29 @@ impl ChemistryRegistryBuilder {
         let registry = ChemistryRegistry {
             substances,
             reactions,
+            substance_tags: self.substance_tags,
         };
+        registry.validate_substance_tags()?;
         registry.validate_reactions()?;
         Ok(registry)
     }
 }
 
 impl ChemistryRegistry {
+    fn validate_substance_tags(&self) -> ChemistryResult<()> {
+        for substance in self.substances.values() {
+            for tag in &substance.tags {
+                if !self.substance_tags.contains(tag) {
+                    return Err(ChemistryError::InvalidSubstance {
+                        substance_id: substance.id.to_string(),
+                        reason: format!("unknown substance tag '{tag}'"),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn validate_reactions(&self) -> ChemistryResult<()> {
         for reaction in self.reactions.values() {
             for term in reaction.reactants.iter().chain(reaction.products.iter()) {

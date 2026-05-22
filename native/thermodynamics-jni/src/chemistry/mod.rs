@@ -1,3 +1,4 @@
+pub mod catalog;
 pub mod error;
 pub mod mixture;
 pub mod reaction;
