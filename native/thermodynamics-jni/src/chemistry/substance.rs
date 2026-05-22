@@ -1,6 +1,9 @@
 use std::fmt::{Display, Formatter};
 
 use super::error::{ChemistryError, ChemistryResult};
+use super::molecule::MolecularStructure;
+
+const MOLECULAR_MASS_TOLERANCE_GRAMS_PER_MOL: f64 = 1.0e-6;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SubstanceId(String);
@@ -76,6 +79,7 @@ pub struct Substance {
     pub molar_heat_capacity_j_per_mol_kelvin: f64,
     pub latent_heat_j_per_mol: f64,
     pub structure_code: Option<String>,
+    pub molecular_structure: Option<MolecularStructure>,
     pub translation_key: Option<String>,
     pub color_argb: u32,
     pub tags: Vec<SubstanceTagId>,
@@ -100,6 +104,7 @@ impl Substance {
             molar_heat_capacity_j_per_mol_kelvin,
             latent_heat_j_per_mol,
             structure_code: None,
+            molecular_structure: None,
             translation_key: None,
             color_argb: 0x20FF_FFFF,
             tags: Vec::new(),
@@ -117,6 +122,11 @@ impl Substance {
         self.translation_key = translation_key;
         self.color_argb = color_argb;
         self.tags = tags;
+        self
+    }
+
+    pub fn with_molecular_structure(mut self, molecular_structure: MolecularStructure) -> Self {
+        self.molecular_structure = Some(molecular_structure);
         self
     }
 
@@ -155,6 +165,35 @@ impl Substance {
                 substance_id: id,
                 reason: "latent heat must be non-negative and finite".to_string(),
             });
+        }
+        if let Some(structure) = &self.molecular_structure {
+            let summary =
+                structure
+                    .summary()
+                    .map_err(|error| ChemistryError::InvalidSubstance {
+                        substance_id: self.id.to_string(),
+                        reason: format!("invalid molecular structure: {error}"),
+                    })?;
+            if summary.charge != self.charge {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: self.id.to_string(),
+                    reason: format!(
+                        "molecular structure charge {} does not match substance charge {}",
+                        summary.charge, self.charge
+                    ),
+                });
+            }
+            if (summary.molar_mass_grams - self.molar_mass_grams).abs()
+                > MOLECULAR_MASS_TOLERANCE_GRAMS_PER_MOL
+            {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: self.id.to_string(),
+                    reason: format!(
+                        "molecular structure mass {} does not match substance mass {}",
+                        summary.molar_mass_grams, self.molar_mass_grams
+                    ),
+                });
+            }
         }
         Ok(())
     }

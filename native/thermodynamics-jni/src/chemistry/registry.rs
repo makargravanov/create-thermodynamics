@@ -156,26 +156,27 @@ impl ChemistryRegistry {
                 }
             }
 
-            let has_catalyst_context = reaction
-                .orders
-                .keys()
-                .any(|ordered_substance| {
-                    !reaction
-                        .reactants
-                        .iter()
-                        .any(|term| &term.substance_id == ordered_substance)
-                });
+            let has_catalyst_context = reaction.orders.keys().any(|ordered_substance| {
+                !reaction
+                    .reactants
+                    .iter()
+                    .any(|term| &term.substance_id == ordered_substance)
+            });
 
             if !reaction.has_external_context() && !has_catalyst_context {
                 let reactant_charge = reaction
                     .reactants
                     .iter()
-                    .map(|term| self.substances[&term.substance_id].charge * term.coefficient as i32)
+                    .map(|term| {
+                        self.substances[&term.substance_id].charge * term.coefficient as i32
+                    })
                     .sum::<i32>();
                 let product_charge = reaction
                     .products
                     .iter()
-                    .map(|term| self.substances[&term.substance_id].charge * term.coefficient as i32)
+                    .map(|term| {
+                        self.substances[&term.substance_id].charge * term.coefficient as i32
+                    })
                     .sum::<i32>();
                 if reactant_charge != product_charge && !reaction.allow_charge_imbalance {
                     return Err(ChemistryError::ChargeNotConserved {

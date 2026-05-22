@@ -1,4 +1,7 @@
 use super::error::{ChemistryError, ChemistryResult};
+use super::molecule::{
+    parse_java_structure, parse_legacy_structure, MolecularStructure, MolecularSummary,
+};
 use super::registry::ChemistryRegistryBuilder;
 use super::substance::{Substance, SubstanceId, SubstanceTagId};
 
@@ -24,12 +27,6 @@ struct RawSubstance {
     tags: &'static [&'static str],
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct MolecularSummary {
-    pub molar_mass_grams: f64,
-    pub charge: i32,
-}
-
 pub fn destroy_substances_registry_builder() -> ChemistryResult<ChemistryRegistryBuilder> {
     let mut builder = ChemistryRegistryBuilder::new();
     for tag in DESTROY_TAGS {
@@ -43,8 +40,9 @@ pub fn destroy_substances_registry_builder() -> ChemistryResult<ChemistryRegistr
 
 impl RawSubstance {
     fn to_substance(self) -> ChemistryResult<Substance> {
-        let summary =
-            summarize_raw_structure(self.id, self.structure_code, self.java_structure_code)?;
+        let structure =
+            parse_raw_structure(self.id, self.structure_code, self.java_structure_code)?;
+        let summary = summarize_structure(self.id, &structure)?;
         let boiling_point_kelvin = if summary.charge != 0 {
             f64::MAX
         } else if let Some(value) = self.boiling_point_kelvin {
@@ -87,7 +85,8 @@ impl RawSubstance {
             self.translation_key.map(str::to_string),
             color,
             tags,
-        ))
+        )
+        .with_molecular_structure(structure))
     }
 }
 
@@ -96,33 +95,29 @@ fn estimate_boiling_point(molar_mass_grams: f64) -> f64 {
 }
 
 pub fn summarize_legacy_structure(structure_code: &str) -> ChemistryResult<MolecularSummary> {
-    let parts = structure_code.splitn(3, ':').collect::<Vec<_>>();
-    if parts.len() != 3 {
-        return Err(ChemistryError::InvalidSubstance {
-            substance_id: "<structure>".to_string(),
-            reason: format!("bad legacy structure '{structure_code}'"),
-        });
-    }
-    if parts[1] == "linear" {
-        parse_linear_group(parts[2], 0.0)
-    } else {
-        parse_topology(parts[1], parts[2])
-    }
+    parse_legacy_structure(structure_code)?.summary()
 }
 
-fn summarize_raw_structure(
+fn parse_raw_structure(
     id: &str,
     structure_code: Option<&str>,
     java_structure_code: Option<&str>,
-) -> ChemistryResult<MolecularSummary> {
-    let summary = match (structure_code, java_structure_code) {
-        (Some(code), _) => summarize_legacy_structure(code),
-        (None, Some(code)) => summarize_java_structure(code),
+) -> ChemistryResult<MolecularStructure> {
+    match (structure_code, java_structure_code) {
+        (Some(code), _) => parse_legacy_structure(code),
+        (None, Some(code)) => parse_java_structure(code),
         (None, None) => Err(ChemistryError::InvalidSubstance {
             substance_id: format!("destroy:{id}"),
             reason: "substance has no structure".to_string(),
         }),
-    }?;
+    }
+}
+
+fn summarize_structure(
+    id: &str,
+    structure: &MolecularStructure,
+) -> ChemistryResult<MolecularSummary> {
+    let summary = structure.summary()?;
     if !summary.molar_mass_grams.is_finite() || summary.molar_mass_grams <= 0.0 {
         return Err(ChemistryError::InvalidSubstance {
             substance_id: format!("destroy:{id}"),
@@ -130,356 +125,6 @@ fn summarize_raw_structure(
         });
     }
     Ok(summary)
-}
-
-#[derive(Debug, Clone)]
-struct AtomNode {
-    element: &'static str,
-    charge: f64,
-    bonds: f64,
-}
-
-fn parse_linear_group(group: &str, external_bond_order: f64) -> ChemistryResult<MolecularSummary> {
-    let mut atoms: Vec<AtomNode> = Vec::new();
-    let mut current: Option<usize> = None;
-    let mut stack: Vec<usize> = Vec::new();
-    let mut pending_bond = external_bond_order.max(1.0);
-    let chars = group.chars().collect::<Vec<_>>();
-    let mut i = 0usize;
-    while i < chars.len() {
-        match chars[i] {
-            '(' => {
-                if let Some(index) = current {
-                    stack.push(index);
-                }
-                i += 1;
-            }
-            ')' => {
-                current = stack.pop();
-                i += 1;
-            }
-            '=' => {
-                pending_bond = 2.0;
-                i += 1;
-            }
-            '#' => {
-                pending_bond = 3.0;
-                i += 1;
-            }
-            '~' => {
-                pending_bond = 1.5;
-                i += 1;
-            }
-            '-' => {
-                pending_bond = 1.0;
-                i += 1;
-            }
-            c if c.is_ascii_uppercase() => {
-                let start = i;
-                i += 1;
-                while i < chars.len() && chars[i].is_ascii_lowercase() {
-                    i += 1;
-                }
-                let symbol = &group[start..i];
-                element_mass(symbol)?;
-                let mut charge = 0.0;
-                if i < chars.len() && chars[i] == '^' {
-                    i += 1;
-                    let charge_start = i;
-                    if i < chars.len() && (chars[i] == '-' || chars[i] == '+') {
-                        i += 1;
-                    }
-                    while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
-                        i += 1;
-                    }
-                    charge = group[charge_start..i].parse::<f64>().map_err(|_| {
-                        ChemistryError::InvalidSubstance {
-                            substance_id: "<structure>".to_string(),
-                            reason: format!("bad charge in '{group}'"),
-                        }
-                    })?;
-                }
-                let new_index = atoms.len();
-                atoms.push(AtomNode {
-                    element: Box::leak(symbol.to_string().into_boxed_str()),
-                    charge,
-                    bonds: 0.0,
-                });
-                if let Some(parent) = current {
-                    atoms[parent].bonds += pending_bond;
-                    atoms[new_index].bonds += pending_bond;
-                }
-                current = Some(new_index);
-                pending_bond = 1.0;
-            }
-            ',' | ' ' => {
-                i += 1;
-            }
-            other => {
-                return Err(ChemistryError::InvalidSubstance {
-                    substance_id: "<structure>".to_string(),
-                    reason: format!("unexpected character '{other}' in '{group}'"),
-                });
-            }
-        }
-    }
-    summarize_atoms(&atoms, true)
-}
-
-fn parse_topology(topology: &str, groups: &str) -> ChemistryResult<MolecularSummary> {
-    let mut atoms = topology_atoms(topology)?;
-    let connection_count = topology_connection_count(topology)?;
-    for (index, group) in groups.split(',').enumerate() {
-        if index >= connection_count {
-            break;
-        }
-        if group.is_empty() {
-            atoms.push(AtomNode {
-                element: "H",
-                charge: 0.0,
-                bonds: 1.0,
-            });
-        } else {
-            let summary = parse_linear_group(group, 1.0)?;
-            atoms.push(AtomNode {
-                element: "R",
-                charge: summary.charge as f64,
-                bonds: 0.0,
-            });
-            atoms.last_mut().unwrap().element = "R";
-            atoms.last_mut().unwrap().bonds = summary.molar_mass_grams;
-        }
-    }
-    let mut summary = summarize_atoms(&atoms, false)?;
-    for atom in atoms.iter().filter(|atom| atom.element == "R") {
-        summary.molar_mass_grams += atom.bonds - element_mass("R")?;
-    }
-    Ok(summary)
-}
-
-fn topology_atoms(topology: &str) -> ChemistryResult<Vec<AtomNode>> {
-    let atoms = match topology {
-        "benzene" => vec![atom("C", 0.0, 3.0); 6],
-        "cubane" => vec![atom("C", 0.0, 3.0); 8],
-        "cyclohexene" => vec![atom("C", 0.0, 2.0); 6],
-        "cyclopentadienide" => vec![atom("C", 0.0, 3.0); 5],
-        "diborane" => vec![
-            atom("B", 0.0, 2.0),
-            atom("H", 0.0, 1.0),
-            atom("B", 0.0, 2.0),
-            atom("H", 0.0, 1.0),
-        ],
-        "octasulfur" => vec![atom("S", 0.0, 2.0); 8],
-        "tetraborate" => vec![
-            atom("B", -1.0, 3.0),
-            atom("B", -1.0, 3.0),
-            atom("O", 0.0, 2.0),
-            atom("O", 0.0, 1.0),
-            atom("O", 0.0, 1.0),
-            atom("B", 0.0, 3.0),
-            atom("O", 0.0, 1.0),
-            atom("O", 0.0, 1.0),
-            atom("B", 0.0, 3.0),
-        ],
-        "anthracene" | "anthraquinone" => vec![atom("C", 0.0, 3.0); 14],
-        "isohydrobenzofuran" => vec![atom("C", 0.0, 3.0); 8]
-            .into_iter()
-            .chain([atom("O", 0.0, 2.0)])
-            .collect(),
-        other => {
-            return Err(ChemistryError::InvalidSubstance {
-                substance_id: "<structure>".to_string(),
-                reason: format!("unknown topology '{other}'"),
-            })
-        }
-    };
-    Ok(atoms)
-}
-
-fn topology_connection_count(topology: &str) -> ChemistryResult<usize> {
-    Ok(match topology {
-        "benzene" => 6,
-        "cubane" => 8,
-        "cyclohexene" => 10,
-        "cyclopentadienide" => 5,
-        "diborane" => 4,
-        "octasulfur" => 0,
-        "tetraborate" => 4,
-        "anthracene" | "anthraquinone" => 10,
-        "isohydrobenzofuran" => 6,
-        other => {
-            return Err(ChemistryError::InvalidSubstance {
-                substance_id: "<structure>".to_string(),
-                reason: format!("unknown topology '{other}'"),
-            })
-        }
-    })
-}
-
-fn summarize_java_structure(code: &str) -> ChemistryResult<MolecularSummary> {
-    let mut atoms = Vec::new();
-    let mut offset = 0usize;
-    while let Some(relative) = code[offset..].find("LegacyElement.") {
-        let start = offset + relative + "LegacyElement.".len();
-        let mut end = start;
-        while end < code.len() && code.as_bytes()[end].is_ascii_uppercase()
-            || end < code.len() && code.as_bytes()[end] == b'_'
-        {
-            end += 1;
-        }
-        let legacy_name = &code[start..end];
-        let symbol = legacy_element_symbol(legacy_name)?;
-        let mut charge = 0.0;
-        let tail = &code[end..code.len().min(end + 16)];
-        if let Some(stripped) = tail.strip_prefix(",") {
-            let number = stripped
-                .trim_start()
-                .chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '-' || *c == '+' || *c == '.')
-                .collect::<String>();
-            if !number.is_empty() {
-                charge = number
-                    .parse::<f64>()
-                    .map_err(|_| ChemistryError::InvalidSubstance {
-                        substance_id: "<java-structure>".to_string(),
-                        reason: format!("bad charge near '{legacy_name}'"),
-                    })?;
-            }
-        }
-        atoms.push(atom(symbol, charge, 0.0));
-        offset = end;
-    }
-    summarize_atoms(&atoms, false)
-}
-
-fn summarize_atoms(atoms: &[AtomNode], add_hydrogens: bool) -> ChemistryResult<MolecularSummary> {
-    let mut mass = 0.0;
-    let mut charge = 0.0;
-    for atom in atoms {
-        mass += element_mass(atom.element)?;
-        charge += atom.charge;
-        if add_hydrogens && atom.element != "H" && atom.element != "R" {
-            let hydrogens = hydrogens_to_add(atom.element, atom.bonds, atom.charge);
-            if hydrogens > 0.0 {
-                mass += element_mass("H")? * hydrogens;
-            }
-        }
-    }
-    Ok(MolecularSummary {
-        molar_mass_grams: mass,
-        charge: charge.round() as i32,
-    })
-}
-
-fn atom(element: &'static str, charge: f64, bonds: f64) -> AtomNode {
-    AtomNode {
-        element,
-        charge,
-        bonds,
-    }
-}
-
-fn hydrogens_to_add(element: &str, bonds: f64, charge: f64) -> f64 {
-    let target = next_lowest_valency(element, bonds);
-    (target - charge.abs() - bonds).max(0.0).floor()
-}
-
-fn next_lowest_valency(element: &str, bonds: f64) -> f64 {
-    let valencies: &[f64] = match element {
-        "R" => &[1.0, 2.0, 3.0],
-        "C" => &[4.0],
-        "H" => &[1.0],
-        "S" => &[2.0, 0.0, 4.0, 6.0],
-        "N" => &[3.0, 4.0],
-        "O" => &[0.0, 1.5, 2.0],
-        "B" => &[3.0],
-        "F" | "Na" | "Cl" | "K" | "Ni" | "Zn" | "Zr" | "I" | "Pt" => &[1.0],
-        "Ca" | "Hg" => &[2.0],
-        "Cr" => &[2.0, 3.0, 6.0],
-        "Fe" => &[0.0, 2.0, 3.0],
-        "Cu" => &[1.0, 2.0],
-        "Au" => &[0.0, 4.0],
-        "Pb" => &[2.0, 4.0],
-        "Ar" => &[0.0],
-        _ => &[0.0],
-    };
-    valencies
-        .iter()
-        .copied()
-        .find(|v| *v >= bonds)
-        .unwrap_or(0.0)
-}
-
-fn element_mass(symbol: &str) -> ChemistryResult<f64> {
-    let mass = match symbol {
-        "R" => 0.0001,
-        "C" => 12.01,
-        "H" => 1.01,
-        "S" => 32.07,
-        "N" => 14.01,
-        "O" => 16.00,
-        "B" => 10.81,
-        "F" => 19.00,
-        "Na" => 23.00,
-        "Cl" => 35.45,
-        "K" => 39.10,
-        "Ca" => 40.08,
-        "Cr" => 52.00,
-        "Fe" => 55.85,
-        "Ni" => 58.69,
-        "Cu" => 63.55,
-        "Zn" => 65.38,
-        "Zr" => 91.22,
-        "I" => 126.90,
-        "Pt" => 195.08,
-        "Au" => 196.97,
-        "Hg" => 200.59,
-        "Pb" => 207.20,
-        "Ar" => 39.95,
-        _ => {
-            return Err(ChemistryError::InvalidSubstance {
-                substance_id: "<structure>".to_string(),
-                reason: format!("unknown element '{symbol}'"),
-            })
-        }
-    };
-    Ok(mass)
-}
-
-fn legacy_element_symbol(name: &str) -> ChemistryResult<&'static str> {
-    let symbol = match name {
-        "R_GROUP" => "R",
-        "CARBON" => "C",
-        "HYDROGEN" => "H",
-        "SULFUR" => "S",
-        "NITROGEN" => "N",
-        "OXYGEN" => "O",
-        "BORON" => "B",
-        "FLUORINE" => "F",
-        "SODIUM" => "Na",
-        "CHLORINE" => "Cl",
-        "POTASSIUM" => "K",
-        "CALCIUM" => "Ca",
-        "CHROMIUM" => "Cr",
-        "IRON" => "Fe",
-        "NICKEL" => "Ni",
-        "COPPER" => "Cu",
-        "ZINC" => "Zn",
-        "ZIRCONIUM" => "Zr",
-        "IODINE" => "I",
-        "PLATINUM" => "Pt",
-        "GOLD" => "Au",
-        "MERCURY" => "Hg",
-        "LEAD" => "Pb",
-        "ARGON" => "Ar",
-        _ => {
-            return Err(ChemistryError::InvalidSubstance {
-                substance_id: "<java-structure>".to_string(),
-                reason: format!("unknown legacy element '{name}'"),
-            })
-        }
-    };
-    Ok(symbol)
 }
 
 pub const DESTROY_TAGS: &[&str] = &[
