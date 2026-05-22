@@ -41,16 +41,9 @@ impl MolecularStructure {
         self.validate()?;
         let mut mass = 0.0;
         let mut charge = 0.0;
-        let bond_orders = self.bond_orders_by_atom();
-        for (index, atom) in self.atoms.iter().enumerate() {
+        for atom in &self.atoms {
             mass += element_mass(&atom.element)?;
             charge += atom.charge;
-            if atom.element != "H" && atom.element != "R" {
-                let hydrogens = hydrogens_to_add(&atom.element, bond_orders[index], atom.charge);
-                if hydrogens > 0.0 {
-                    mass += element_mass("H")? * hydrogens;
-                }
-            }
         }
         Ok(MolecularSummary {
             molar_mass_grams: mass,
@@ -154,17 +147,8 @@ impl MolecularStructure {
         self.bonded_atoms_by_element(atom_index, "H").len()
     }
 
-    pub fn implicit_hydrogen_count(&self, atom_index: usize) -> usize {
-        let atom = &self.atoms[atom_index];
-        if atom.element == "H" || atom.element == "R" {
-            return 0;
-        }
-        let bonds = self.bond_orders_by_atom()[atom_index];
-        hydrogens_to_add(&atom.element, bonds, atom.charge) as usize
-    }
-
     pub fn hydrogen_count(&self, atom_index: usize) -> usize {
-        self.explicit_hydrogen_count(atom_index) + self.implicit_hydrogen_count(atom_index)
+        self.explicit_hydrogen_count(atom_index)
     }
 
     pub fn carbon_degree(&self, atom_index: usize) -> usize {
@@ -243,6 +227,20 @@ impl StructureBuilder {
     }
 
     fn finish(self) -> ChemistryResult<MolecularStructure> {
+        self.finish_with_normalization(true)
+    }
+
+    fn finish_without_normalization(self) -> ChemistryResult<MolecularStructure> {
+        self.finish_with_normalization(false)
+    }
+
+    fn finish_with_normalization(
+        mut self,
+        normalize_hydrogens: bool,
+    ) -> ChemistryResult<MolecularStructure> {
+        if normalize_hydrogens {
+            self.add_missing_hydrogens();
+        }
         let structure = MolecularStructure {
             source_code: self.source_code,
             atoms: self.atoms,
@@ -250,6 +248,40 @@ impl StructureBuilder {
         };
         structure.validate()?;
         Ok(structure)
+    }
+
+    fn add_missing_hydrogens(&mut self) {
+        let bond_orders = {
+            let structure = MolecularStructure {
+                source_code: self.source_code.clone(),
+                atoms: self.atoms.clone(),
+                bonds: self.bonds.clone(),
+            };
+            structure.bond_orders_by_atom()
+        };
+        let original_atom_count = self.atoms.len();
+        let mut additions = Vec::new();
+        for (index, atom) in self.atoms[..original_atom_count].iter().enumerate() {
+            if atom.element == "H" || atom.element == "R" {
+                continue;
+            }
+            let hydrogens = hydrogens_to_add(&atom.element, bond_orders[index], atom.charge);
+            for _ in 0..hydrogens as usize {
+                additions.push(index);
+            }
+        }
+        for parent in additions {
+            let hydrogen = self.atoms.len();
+            self.atoms.push(MolecularAtom {
+                element: "H".to_string(),
+                charge: 0.0,
+            });
+            self.bonds.push(MolecularBond {
+                from: parent,
+                to: hydrogen,
+                order: 1.0,
+            });
+        }
     }
 }
 
@@ -269,10 +301,16 @@ pub fn parse_legacy_structure(structure_code: &str) -> ChemistryResult<Molecular
 }
 
 pub fn parse_java_structure(code: &str) -> ChemistryResult<MolecularStructure> {
+    parse_java_structure_with_normalization(code, true)
+}
+
+fn parse_java_structure_with_normalization(
+    code: &str,
+    normalize_hydrogens: bool,
+) -> ChemistryResult<MolecularStructure> {
     let mut builder = StructureBuilder::new(code);
     let mut offset = 0usize;
     let mut root = None;
-    let mut pending_bond = 1.0;
     let groups = extract_add_group_calls(code)?;
     while let Some(relative) = code[offset..].find("LegacyElement.") {
         let absolute = offset + relative;
@@ -283,14 +321,6 @@ pub fn parse_java_structure(code: &str) -> ChemistryResult<MolecularStructure> {
             offset = *end;
             continue;
         }
-        let prefix = &code[offset..offset + relative];
-        if prefix.contains("BondType.DOUBLE") {
-            pending_bond = 2.0;
-        } else if prefix.contains("BondType.TRIPLE") {
-            pending_bond = 3.0;
-        } else if prefix.contains("BondType.AROMATIC") {
-            pending_bond = 1.5;
-        }
         let start = offset + relative + "LegacyElement.".len();
         let mut end = start;
         while end < code.len()
@@ -300,21 +330,22 @@ pub fn parse_java_structure(code: &str) -> ChemistryResult<MolecularStructure> {
         }
         let legacy_name = &code[start..end];
         let symbol = legacy_element_symbol(legacy_name)?;
-        let charge = parse_java_charge(&code[end..code.len().min(end + 16)], legacy_name)?;
+        let tail = &code[end..code.len().min(end + 96)];
+        let charge = parse_java_charge(tail, legacy_name)?;
+        let bond_order = parse_java_bond_order(tail);
         let index = builder.add_atom(symbol, charge)?;
         if let Some(parent) = root {
-            builder.add_bond(parent, index, pending_bond);
+            builder.add_bond(parent, index, bond_order);
         } else {
             root = Some(index);
         }
-        pending_bond = 1.0;
         offset = end;
     }
     let root = root.ok_or_else(|| {
         invalid_structure(code, "java structure must contain at least one root atom")
     })?;
     for (_, _, group_code) in groups {
-        let group = parse_java_structure(&group_code)?;
+        let group = parse_java_structure_with_normalization(&group_code, false)?;
         let offset = builder.atoms.len();
         builder.atoms.extend(group.atoms);
         builder
@@ -326,7 +357,11 @@ pub fn parse_java_structure(code: &str) -> ChemistryResult<MolecularStructure> {
             }));
         builder.add_bond(root, offset, 1.0);
     }
-    builder.finish()
+    if normalize_hydrogens {
+        builder.finish()
+    } else {
+        builder.finish_without_normalization()
+    }
 }
 
 fn extract_add_group_calls(code: &str) -> ChemistryResult<Vec<(usize, usize, String)>> {
@@ -635,6 +670,18 @@ fn parse_java_charge(tail: &str, legacy_name: &str) -> ChemistryResult<f64> {
     Ok(0.0)
 }
 
+fn parse_java_bond_order(tail: &str) -> f64 {
+    if tail.contains("BondType.DOUBLE") {
+        2.0
+    } else if tail.contains("BondType.TRIPLE") {
+        3.0
+    } else if tail.contains("BondType.AROMATIC") {
+        1.5
+    } else {
+        1.0
+    }
+}
+
 fn invalid_structure(source: &str, reason: &str) -> ChemistryError {
     ChemistryError::InvalidSubstance {
         substance_id: source.to_string(),
@@ -679,7 +726,7 @@ fn max_valency(element: &str) -> f64 {
         "H" => 1.0,
         "S" => 6.0,
         "N" => 4.0,
-        "O" => 2.0,
+        "O" => 3.0,
         "B" => 3.0,
         "F" | "Na" | "Cl" | "K" | "Ni" | "Zn" | "Zr" | "I" => 1.0,
         "Pt" => 4.0,
@@ -773,18 +820,35 @@ mod tests {
     #[test]
     fn linear_structure_builds_connected_graph() {
         let structure = parse_legacy_structure("destroy:linear:CC(=O)O").unwrap();
-        assert_eq!(structure.atom_count(), 4);
-        assert_eq!(structure.bond_count(), 3);
+        assert_eq!(structure.atom_count(), 8);
+        assert_eq!(structure.bond_count(), 7);
         let summary = structure.summary().unwrap();
         assert_eq!(summary.charge, 0);
         assert!((summary.molar_mass_grams - 60.06).abs() < 0.001);
     }
 
     #[test]
+    fn ethanol_has_explicit_hydrogens() {
+        let structure = parse_legacy_structure("destroy:linear:CCO").unwrap();
+        assert_eq!(structure.atom_count(), 9);
+        assert_eq!(structure.bond_count(), 8);
+        assert_eq!(
+            structure
+                .atoms
+                .iter()
+                .filter(|atom| atom.element == "H")
+                .count(),
+            6
+        );
+        let summary = structure.summary().unwrap();
+        assert!((summary.molar_mass_grams - 46.08).abs() < 0.001);
+    }
+
+    #[test]
     fn benzene_topology_tracks_ring_and_substituent() {
         let structure = parse_legacy_structure("destroy:benzene:C,,,,,").unwrap();
-        assert_eq!(structure.atom_count(), 7);
-        assert_eq!(structure.bond_count(), 7);
+        assert_eq!(structure.atom_count(), 15);
+        assert_eq!(structure.bond_count(), 15);
         let summary = structure.summary().unwrap();
         assert!((summary.molar_mass_grams - 92.15).abs() < 0.001);
     }
@@ -799,5 +863,21 @@ mod tests {
         assert_eq!(structure.bond_count(), 2);
         let summary = structure.summary().unwrap();
         assert_eq!(summary.charge, 0);
+    }
+
+    #[test]
+    fn diborane_topology_keeps_bridge_hydrogens_and_adds_terminal_hydrogens() {
+        let structure = parse_legacy_structure("destroy:diborane:,,,").unwrap();
+        assert_eq!(
+            structure
+                .atoms
+                .iter()
+                .filter(|atom| atom.element == "H")
+                .count(),
+            6
+        );
+        let summary = structure.summary().unwrap();
+        assert_eq!(summary.charge, 0);
+        assert!((summary.molar_mass_grams - 27.68).abs() < 0.001);
     }
 }
