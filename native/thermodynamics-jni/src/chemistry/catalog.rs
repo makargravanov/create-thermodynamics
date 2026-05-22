@@ -250,7 +250,7 @@ fn parse_topology(topology: &str, groups: &str) -> ChemistryResult<MolecularSumm
             atoms.last_mut().unwrap().bonds = summary.molar_mass_grams;
         }
     }
-    let mut summary = summarize_atoms(&atoms, true)?;
+    let mut summary = summarize_atoms(&atoms, false)?;
     for atom in atoms.iter().filter(|atom| atom.element == "R") {
         summary.molar_mass_grams += atom.bonds - element_mass("R")?;
     }

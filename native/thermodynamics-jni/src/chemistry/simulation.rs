@@ -28,6 +28,9 @@ pub fn react_for_tick(
         let before = snapshot(mixture);
         let mut reactions_with_rates = Vec::new();
         for reaction in registry.reactions() {
+            if reaction.has_external_context() {
+                continue;
+            }
             let rate =
                 reaction_rate_mol_per_bucket_per_tick(registry, mixture, reaction)? / cycles as f64;
             if rate > 0.0 {

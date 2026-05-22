@@ -2,21 +2,30 @@ pub mod catalog;
 pub mod error;
 pub mod mixture;
 pub mod reaction;
+pub mod reactions;
 pub mod registry;
 pub mod simulation;
 pub mod substance;
 
 pub use error::{ChemistryError, ChemistryResult};
+pub use reactions::{DESTROY_EXPLICIT_REACTION_COUNT, DESTROY_REGISTERED_REACTION_COUNT};
 pub use registry::{ChemistryRegistry, ChemistryRegistryBuilder};
+
+pub fn destroy_registry_builder() -> ChemistryResult<ChemistryRegistryBuilder> {
+    let builder = catalog::destroy_substances_registry_builder()?;
+    reactions::destroy_reactions_registry_builder(builder)
+}
 
 #[cfg(test)]
 mod tests {
     use super::error::ChemistryError;
+    use super::destroy_registry_builder;
     use super::mixture::Mixture;
     use super::reaction::Reaction;
     use super::registry::ChemistryRegistryBuilder;
     use super::simulation::{react_for_tick, react_until_equilibrium};
     use super::substance::{Substance, SubstanceId};
+    use super::{DESTROY_EXPLICIT_REACTION_COUNT, DESTROY_REGISTERED_REACTION_COUNT};
 
     fn water_id() -> SubstanceId {
         "destroy:water".into()
@@ -307,6 +316,15 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, ChemistryError::ChargeNotConserved { .. }));
+    }
+
+    #[test]
+    fn destroy_reaction_catalog_builds() {
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+
+        assert_eq!(DESTROY_EXPLICIT_REACTION_COUNT, 119);
+        assert_eq!(DESTROY_REGISTERED_REACTION_COUNT, registry.reactions().count());
+        assert_eq!(DESTROY_REGISTERED_REACTION_COUNT, 149);
     }
 
     #[test]

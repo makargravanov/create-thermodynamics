@@ -59,12 +59,31 @@ pub struct Reaction {
     pub reactants: Vec<StoichiometricTerm>,
     pub products: Vec<StoichiometricTerm>,
     pub orders: BTreeMap<SubstanceId, u32>,
+    pub external_reactants: Vec<ExternalRequirement>,
+    pub external_catalysts: Vec<ExternalRequirement>,
+    pub reaction_results: Vec<ReactionResult>,
     pub pre_exponential_factor: f64,
     pub activation_energy_kj_per_mol: f64,
     pub enthalpy_change_kj_per_mol: f64,
     pub reverse_reaction_id: Option<ReactionId>,
+    pub requires_uv: bool,
+    pub display_as_reversible: bool,
+    pub show_in_jei: bool,
+    pub show_in_jei_condition: Option<String>,
     pub allow_mass_imbalance: bool,
     pub allow_charge_imbalance: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternalRequirement {
+    pub description: String,
+    pub moles_per_reaction: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReactionResult {
+    pub description: String,
+    pub moles_per_reaction: f64,
 }
 
 impl Reaction {
@@ -75,10 +94,17 @@ impl Reaction {
                 reactants: Vec::new(),
                 products: Vec::new(),
                 orders: BTreeMap::new(),
+                external_reactants: Vec::new(),
+                external_catalysts: Vec::new(),
+                reaction_results: Vec::new(),
                 pre_exponential_factor: 10_000.0,
                 activation_energy_kj_per_mol: 25.0,
                 enthalpy_change_kj_per_mol: 0.0,
                 reverse_reaction_id: None,
+                requires_uv: false,
+                display_as_reversible: false,
+                show_in_jei: true,
+                show_in_jei_condition: None,
                 allow_mass_imbalance: false,
                 allow_charge_imbalance: false,
             },
@@ -98,44 +124,87 @@ impl Reaction {
                 .exp())
     }
 
+    pub fn has_external_context(&self) -> bool {
+        self.requires_uv
+            || self.display_as_reversible
+            || !self.external_reactants.is_empty()
+            || !self.external_catalysts.is_empty()
+            || !self.reaction_results.is_empty()
+    }
+
     pub fn validate_shape(&self) -> ChemistryResult<()> {
-        let id = self.id.to_string();
-        if self.reactants.is_empty() {
-            return Err(ChemistryError::InvalidReaction {
-                reaction_id: id,
-                reason: "reaction must have at least one reactant".to_string(),
-            });
-        }
-        if self.products.is_empty() {
-            return Err(ChemistryError::InvalidReaction {
-                reaction_id: id,
-                reason: "reaction must have at least one product".to_string(),
-            });
+        let reaction_id = self.id.to_string();
+        if !self.has_external_context() {
+            if self.reactants.is_empty() {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "reaction must have at least one reactant".to_string(),
+                });
+            }
+            if self.products.is_empty() {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "reaction must have at least one product".to_string(),
+                });
+            }
         }
         for term in self.reactants.iter().chain(self.products.iter()) {
             if term.coefficient == 0 {
                 return Err(ChemistryError::InvalidReaction {
-                    reaction_id: id,
+                    reaction_id: reaction_id.clone(),
                     reason: "stoichiometric coefficients must be greater than zero".to_string(),
+                });
+            }
+        }
+        for requirement in self
+            .external_reactants
+            .iter()
+            .chain(self.external_catalysts.iter())
+        {
+            if !requirement.moles_per_reaction.is_finite() || requirement.moles_per_reaction <= 0.0
+            {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "external requirements must be positive and finite".to_string(),
+                });
+            }
+            if requirement.description.trim().is_empty() {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "external requirements must have a description".to_string(),
+                });
+            }
+        }
+        for result in &self.reaction_results {
+            if !result.moles_per_reaction.is_finite() || result.moles_per_reaction < 0.0 {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "reaction results must be non-negative and finite".to_string(),
+                });
+            }
+            if result.description.trim().is_empty() {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "reaction results must have a description".to_string(),
                 });
             }
         }
         if !self.pre_exponential_factor.is_finite() || self.pre_exponential_factor <= 0.0 {
             return Err(ChemistryError::InvalidReaction {
-                reaction_id: id,
+                reaction_id: reaction_id.clone(),
                 reason: "pre-exponential factor must be positive and finite".to_string(),
             });
         }
         if !self.activation_energy_kj_per_mol.is_finite() || self.activation_energy_kj_per_mol < 0.0
         {
             return Err(ChemistryError::InvalidReaction {
-                reaction_id: id,
+                reaction_id: reaction_id.clone(),
                 reason: "activation energy must be non-negative and finite".to_string(),
             });
         }
         if !self.enthalpy_change_kj_per_mol.is_finite() {
             return Err(ChemistryError::InvalidReaction {
-                reaction_id: id,
+                reaction_id: reaction_id.clone(),
                 reason: "enthalpy change must be finite".to_string(),
             });
         }
@@ -174,6 +243,30 @@ impl ReactionBuilder {
         self
     }
 
+    pub fn external_reactant(mut self, description: impl Into<String>, moles: f64) -> Self {
+        self.reaction.external_reactants.push(ExternalRequirement {
+            description: description.into(),
+            moles_per_reaction: moles,
+        });
+        self
+    }
+
+    pub fn external_catalyst(mut self, description: impl Into<String>, moles: f64) -> Self {
+        self.reaction.external_catalysts.push(ExternalRequirement {
+            description: description.into(),
+            moles_per_reaction: moles,
+        });
+        self
+    }
+
+    pub fn reaction_result(mut self, description: impl Into<String>, moles: f64) -> Self {
+        self.reaction.reaction_results.push(ReactionResult {
+            description: description.into(),
+            moles_per_reaction: moles,
+        });
+        self
+    }
+
     pub fn pre_exponential_factor(mut self, value: f64) -> Self {
         self.reaction.pre_exponential_factor = value;
         self
@@ -191,6 +284,26 @@ impl ReactionBuilder {
 
     pub fn reverse_reaction_id(mut self, id: impl Into<ReactionId>) -> Self {
         self.reaction.reverse_reaction_id = Some(id.into());
+        self
+    }
+
+    pub fn requires_uv(mut self) -> Self {
+        self.reaction.requires_uv = true;
+        self
+    }
+
+    pub fn display_as_reversible(mut self) -> Self {
+        self.reaction.display_as_reversible = true;
+        self
+    }
+
+    pub fn show_in_jei(mut self, value: bool) -> Self {
+        self.reaction.show_in_jei = value;
+        self
+    }
+
+    pub fn show_in_jei_condition(mut self, value: impl Into<String>) -> Self {
+        self.reaction.show_in_jei_condition = Some(value.into());
         self
     }
 
