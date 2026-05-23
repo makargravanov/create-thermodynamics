@@ -12,6 +12,7 @@ pub struct MolecularSummary {
 pub struct MolecularAtom {
     pub element: String,
     pub charge: f64,
+    pub r_group_number: u8,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,57 +53,8 @@ impl MolecularStructure {
     }
 
     pub fn canonical_code(&self) -> String {
-        let mut labels = self
-            .atoms
-            .iter()
-            .enumerate()
-            .map(|(index, atom)| {
-                format!(
-                    "{}:{:.3}:{}",
-                    atom.element,
-                    atom.charge,
-                    self.neighbors(index).len()
-                )
-            })
-            .collect::<Vec<_>>();
-        for _ in 0..8 {
-            labels = self
-                .atoms
-                .iter()
-                .enumerate()
-                .map(|(index, atom)| {
-                    let mut neighbor_labels = self
-                        .neighbors(index)
-                        .into_iter()
-                        .map(|(neighbor, order)| format!("{order:.3}:{}", labels[neighbor]))
-                        .collect::<Vec<_>>();
-                    neighbor_labels.sort();
-                    format!(
-                        "{}:{:.3}:[{}]",
-                        atom.element,
-                        atom.charge,
-                        neighbor_labels.join(",")
-                    )
-                })
-                .collect();
-        }
-        let mut atom_labels = labels.clone();
-        atom_labels.sort();
-        let mut bond_labels = self
-            .bonds
-            .iter()
-            .map(|bond| {
-                let mut ends = [labels[bond.from].clone(), labels[bond.to].clone()];
-                ends.sort();
-                format!("{}-{:.3}-{}", ends[0], bond.order, ends[1])
-            })
-            .collect::<Vec<_>>();
-        bond_labels.sort();
-        format!(
-            "atoms={};bonds={}",
-            atom_labels.join("|"),
-            bond_labels.join("|")
-        )
+        super::frowns::canonical_structure_code(self)
+            .expect("valid molecular structure must have a canonical FROWNS code")
     }
 
     pub fn validate(&self) -> ChemistryResult<()> {
@@ -118,6 +70,12 @@ impl MolecularStructure {
                 return Err(invalid_structure(
                     &self.source_code,
                     &format!("atom {index} has non-finite charge"),
+                ));
+            }
+            if atom.r_group_number != 0 && atom.element != "R" {
+                return Err(invalid_structure(
+                    &self.source_code,
+                    &format!("atom {index} has an R-group number but is not R"),
                 ));
             }
         }
@@ -255,6 +213,7 @@ pub struct MolecularEditor {
     source_code: String,
     atoms: Vec<MolecularAtom>,
     bonds: Vec<MolecularBond>,
+    modified: bool,
 }
 
 impl MolecularEditor {
@@ -263,6 +222,7 @@ impl MolecularEditor {
             source_code: structure.source_code.clone(),
             atoms: structure.atoms.clone(),
             bonds: structure.bonds.clone(),
+            modified: false,
         }
     }
 
@@ -290,12 +250,14 @@ impl MolecularEditor {
         self.atoms.push(MolecularAtom {
             element: element.to_string(),
             charge,
+            r_group_number: 0,
         });
         self.bonds.push(MolecularBond {
             from: parent,
             to: index,
             order: bond_order,
         });
+        self.modified = true;
         Ok(index)
     }
 
@@ -331,6 +293,7 @@ impl MolecularEditor {
             to: group_root + offset,
             order: bond_order,
         });
+        self.modified = true;
         Ok(group_root + offset)
     }
 
@@ -352,6 +315,7 @@ impl MolecularEditor {
                 bond.to -= 1;
             }
         }
+        self.modified = true;
         Ok(())
     }
 
@@ -411,7 +375,9 @@ impl MolecularEditor {
         self.atoms[atom_index] = MolecularAtom {
             element: element.to_string(),
             charge,
+            r_group_number: 0,
         };
+        self.modified = true;
         Ok(())
     }
 
@@ -436,6 +402,7 @@ impl MolecularEditor {
             })
             .ok_or_else(|| invalid_structure(&self.source_code, "bond does not exist"))?;
         bond.order = order;
+        self.modified = true;
         Ok(())
     }
 
@@ -461,6 +428,7 @@ impl MolecularEditor {
         self.atoms.push(MolecularAtom {
             element: element.to_string(),
             charge,
+            r_group_number: 0,
         });
         self.bonds.push(MolecularBond {
             from: first,
@@ -472,6 +440,7 @@ impl MolecularEditor {
             to: second,
             order: 1.0,
         });
+        self.modified = true;
         Ok(bridge)
     }
 
@@ -551,7 +520,11 @@ impl MolecularEditor {
 
     pub fn finish(self) -> ChemistryResult<MolecularStructure> {
         let structure = MolecularStructure {
-            source_code: self.source_code,
+            source_code: if self.modified {
+                "generated".to_string()
+            } else {
+                self.source_code
+            },
             atoms: self.atoms,
             bonds: self.bonds,
         };
@@ -628,11 +601,27 @@ impl StructureBuilder {
     }
 
     fn add_atom(&mut self, element: &str, charge: f64) -> ChemistryResult<usize> {
+        self.add_atom_with_r_group(element, charge, 0)
+    }
+
+    fn add_atom_with_r_group(
+        &mut self,
+        element: &str,
+        charge: f64,
+        r_group_number: u8,
+    ) -> ChemistryResult<usize> {
         element_mass(element)?;
+        if r_group_number != 0 && element != "R" {
+            return Err(invalid_structure(
+                &self.source_code,
+                "only R atoms can have an R-group number",
+            ));
+        }
         let index = self.atoms.len();
         self.atoms.push(MolecularAtom {
             element: element.to_string(),
             charge,
+            r_group_number,
         });
         Ok(index)
     }
@@ -690,6 +679,7 @@ impl StructureBuilder {
             self.atoms.push(MolecularAtom {
                 element: "H".to_string(),
                 charge: 0.0,
+                r_group_number: 0,
             });
             self.bonds.push(MolecularBond {
                 from: parent,
@@ -884,6 +874,11 @@ fn parse_linear_group_into(
                     i += 1;
                 }
                 let symbol = &group[start..i];
+                let mut r_group_number = 0;
+                if symbol == "R" && i < chars.len() && chars[i].is_ascii_digit() {
+                    r_group_number = chars[i].to_digit(10).unwrap_or_default() as u8;
+                    i += 1;
+                }
                 let mut charge = 0.0;
                 if i < chars.len() && chars[i] == '^' {
                     i += 1;
@@ -898,7 +893,7 @@ fn parse_linear_group_into(
                         invalid_structure(group, &format!("bad charge in '{group}'"))
                     })?;
                 }
-                let new_index = builder.add_atom(symbol, charge)?;
+                let new_index = builder.add_atom_with_r_group(symbol, charge, r_group_number)?;
                 if let Some(parent) = current {
                     builder.add_bond(parent, new_index, pending_bond);
                 }
@@ -1334,6 +1329,23 @@ mod tests {
             MolecularEditor::new(&parse_legacy_structure("destroy:linear:C").unwrap());
         invalid.add_atom(0, "H", 0.0, 1.0).unwrap();
         assert!(invalid.finish().is_err());
+    }
+
+    #[test]
+    fn edited_topology_does_not_reuse_source_code() {
+        let benzene = parse_legacy_structure("destroy:benzene:,,,,,").unwrap();
+        let mut editor = MolecularEditor::new(&benzene);
+        let hydrogen = benzene
+            .atoms
+            .iter()
+            .position(|atom| atom.element == "H")
+            .unwrap();
+        editor.remove_atom(hydrogen).unwrap();
+        editor.add_atom(0, "Cl", 0.0, 1.0).unwrap();
+        let chlorobenzene = editor.finish().unwrap();
+
+        assert_eq!(chlorobenzene.source_code, "generated");
+        assert_ne!(chlorobenzene.canonical_code(), benzene.canonical_code());
     }
 
     #[test]

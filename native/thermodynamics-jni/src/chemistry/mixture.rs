@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::error::{ChemistryError, ChemistryResult};
 use super::registry::ChemistryRegistry;
-use super::substance::SubstanceId;
+use super::substance::{SubstanceId, SubstanceTagId};
 
 pub const DEFAULT_TEMPERATURE_KELVIN: f64 = 298.0;
 pub const TRACE_CONCENTRATION_MOL_PER_BUCKET: f64 = 1.0 / 512.0 / 512.0;
@@ -61,7 +61,16 @@ impl Mixture {
         concentration_mol_per_bucket: f64,
     ) -> ChemistryResult<()> {
         let substance_id = substance_id.into();
-        registry.substance(&substance_id)?;
+        let substance = registry.substance(&substance_id)?;
+        if substance
+            .tags
+            .iter()
+            .any(|tag| tag == &SubstanceTagId::from("destroy:hypothetical"))
+        {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "hypothetical substance '{substance_id}' cannot be added to a mixture"
+            )));
+        }
         validate_concentration(concentration_mol_per_bucket)?;
         if concentration_mol_per_bucket == 0.0 {
             return Ok(());

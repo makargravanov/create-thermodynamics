@@ -640,6 +640,7 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .product("destroy:iron_ii", 1)
             .display_as_reversible()
             .allow_mass_imbalance()
+            .allow_charge_imbalance()
             .build(),
     );
     builder = builder.reaction(

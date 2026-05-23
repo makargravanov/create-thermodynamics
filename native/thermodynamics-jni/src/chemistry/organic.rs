@@ -26,9 +26,9 @@ pub fn destroy_registry_with_generated_reactions_builder(
 }
 
 #[derive(Debug, Default)]
-struct GeneratedOrganicCatalog {
-    substances: Vec<Substance>,
-    reactions: Vec<Reaction>,
+pub(crate) struct GeneratedOrganicCatalog {
+    pub(crate) substances: Vec<Substance>,
+    pub(crate) reactions: Vec<Reaction>,
 }
 
 struct DerivedSubstanceResolver {
@@ -59,7 +59,7 @@ impl DerivedSubstanceResolver {
         if let Some(id) = self.canonical_to_id.get(&canonical) {
             return Ok(id.clone());
         }
-        let id = SubstanceId::new(format!("destroy:derived_{:016x}", stable_hash(&canonical)))?;
+        let id = SubstanceId::new(canonical.clone())?;
         if let Some(existing) = self.generated_id_to_canonical.get(&id) {
             if existing != &canonical {
                 return Err(ChemistryError::InvalidSubstance {
@@ -82,12 +82,7 @@ impl DerivedSubstanceResolver {
             DEFAULT_DERIVED_HEAT_CAPACITY,
             DEFAULT_DERIVED_LATENT_HEAT,
         )
-        .with_catalog_metadata(
-            Some(format!("generated:{}", structure.canonical_code())),
-            None,
-            0x20FF_FFFF,
-            Vec::new(),
-        )
+        .with_catalog_metadata(Some(canonical.clone()), None, 0x20FF_FFFF, Vec::new())
         .with_molecular_structure(structure);
         self.canonical_to_id.insert(canonical.clone(), id.clone());
         self.generated_id_to_canonical.insert(id.clone(), canonical);
@@ -96,8 +91,22 @@ impl DerivedSubstanceResolver {
     }
 }
 
-fn generate_organic_reactions(
+pub(crate) fn generate_organic_reactions(
     registry: &ChemistryRegistry,
+) -> ChemistryResult<GeneratedOrganicCatalog> {
+    generate_organic_reactions_with_seeds(registry, None)
+}
+
+pub(crate) fn generate_organic_reactions_for(
+    registry: &ChemistryRegistry,
+    seeds: &BTreeSet<SubstanceId>,
+) -> ChemistryResult<GeneratedOrganicCatalog> {
+    generate_organic_reactions_with_seeds(registry, Some(seeds))
+}
+
+fn generate_organic_reactions_with_seeds(
+    registry: &ChemistryRegistry,
+    seeds: Option<&BTreeSet<SubstanceId>>,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
     let mut resolver = DerivedSubstanceResolver::new(registry);
     let mut reactions = Vec::new();
@@ -105,6 +114,9 @@ fn generate_organic_reactions(
     let reactants = registry.substances().cloned().collect::<Vec<_>>();
 
     for substance in &reactants {
+        if seeds.is_some_and(|seeds| !seeds.contains(&substance.id)) {
+            continue;
+        }
         let Some(structure) = &substance.molecular_structure else {
             continue;
         };
@@ -274,6 +286,7 @@ fn generate_organic_reactions(
     }
 
     for acid in &reactants {
+        let acid_is_seed = seeds.is_some_and(|seeds| seeds.contains(&acid.id));
         let Some(acid_structure) = &acid.molecular_structure else {
             continue;
         };
@@ -283,6 +296,9 @@ fn generate_organic_reactions(
             .filter(|group| group.group_type == FunctionalGroupType::CarboxylicAcid)
         {
             for alcohol in &reactants {
+                if seeds.is_some_and(|seeds| !acid_is_seed && !seeds.contains(&alcohol.id)) {
+                    continue;
+                }
                 let Some(alcohol_structure) = &alcohol.molecular_structure else {
                     continue;
                 };
@@ -307,6 +323,7 @@ fn generate_organic_reactions(
     }
 
     for acyl_chloride in &reactants {
+        let acyl_chloride_is_seed = seeds.is_some_and(|seeds| seeds.contains(&acyl_chloride.id));
         let Some(acyl_chloride_structure) = &acyl_chloride.molecular_structure else {
             continue;
         };
@@ -316,6 +333,10 @@ fn generate_organic_reactions(
             .filter(|group| group.group_type == FunctionalGroupType::AcylChloride)
         {
             for alcohol in &reactants {
+                if seeds.is_some_and(|seeds| !acyl_chloride_is_seed && !seeds.contains(&alcohol.id))
+                {
+                    continue;
+                }
                 let Some(alcohol_structure) = &alcohol.molecular_structure else {
                     continue;
                 };
@@ -340,6 +361,7 @@ fn generate_organic_reactions(
     }
 
     for halide in &reactants {
+        let halide_is_seed = seeds.is_some_and(|seeds| seeds.contains(&halide.id));
         let Some(halide_structure) = &halide.molecular_structure else {
             continue;
         };
@@ -349,6 +371,9 @@ fn generate_organic_reactions(
             .filter(|group| group.group_type == FunctionalGroupType::Halide)
         {
             for amine in &reactants {
+                if seeds.is_some_and(|seeds| !halide_is_seed && !seeds.contains(&amine.id)) {
+                    continue;
+                }
                 let Some(amine_structure) = &amine.molecular_structure else {
                     continue;
                 };
@@ -1603,15 +1628,6 @@ fn sanitize_id(value: &str) -> String {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect()
-}
-
-fn stable_hash(value: &str) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in value.bytes() {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 #[cfg(test)]

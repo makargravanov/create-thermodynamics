@@ -168,61 +168,67 @@ impl ChemistryRegistry {
                 }
             }
 
-            let has_catalyst_context = reaction.orders.keys().any(|ordered_substance| {
-                !reaction
-                    .reactants
-                    .iter()
-                    .any(|term| &term.substance_id == ordered_substance)
-            });
+            let external_reactant_charge = reaction
+                .external_reactants
+                .iter()
+                .filter_map(|requirement| {
+                    requirement
+                        .charge
+                        .map(|charge| charge * requirement.moles_per_reaction.round() as i32)
+                })
+                .sum::<i32>();
 
-            if !reaction.has_external_context() && !has_catalyst_context {
-                let reactant_charge = reaction
-                    .reactants
-                    .iter()
-                    .map(|term| {
-                        self.substances[&term.substance_id].charge * term.coefficient as i32
-                    })
-                    .sum::<i32>();
-                let product_charge = reaction
-                    .products
-                    .iter()
-                    .map(|term| {
-                        self.substances[&term.substance_id].charge * term.coefficient as i32
-                    })
-                    .sum::<i32>();
-                if reactant_charge != product_charge && !reaction.allow_charge_imbalance {
-                    return Err(ChemistryError::ChargeNotConserved {
-                        reaction_id: reaction.id.to_string(),
-                        reactants: reactant_charge,
-                        products: product_charge,
-                    });
-                }
+            let reactant_charge = reaction
+                .reactants
+                .iter()
+                .map(|term| self.substances[&term.substance_id].charge * term.coefficient as i32)
+                .sum::<i32>()
+                + external_reactant_charge;
+            let product_charge = reaction
+                .products
+                .iter()
+                .map(|term| self.substances[&term.substance_id].charge * term.coefficient as i32)
+                .sum::<i32>();
+            if reactant_charge != product_charge && !reaction.allow_charge_imbalance {
+                return Err(ChemistryError::ChargeNotConserved {
+                    reaction_id: reaction.id.to_string(),
+                    reactants: reactant_charge,
+                    products: product_charge,
+                });
+            }
 
-                let reactant_mass = reaction
-                    .reactants
-                    .iter()
-                    .map(|term| {
-                        self.substances[&term.substance_id].molar_mass_grams
-                            * term.coefficient as f64
-                    })
-                    .sum::<f64>();
-                let product_mass = reaction
-                    .products
-                    .iter()
-                    .map(|term| {
-                        self.substances[&term.substance_id].molar_mass_grams
-                            * term.coefficient as f64
-                    })
-                    .sum::<f64>();
-                if (reactant_mass - product_mass).abs() > MASS_TOLERANCE_GRAMS_PER_MOL
-                    && !reaction.allow_mass_imbalance
-                {
-                    return Err(ChemistryError::MassNotConserved {
-                        reaction_id: reaction.id.to_string(),
-                        reactants: reactant_mass,
-                        products: product_mass,
-                    });
-                }
+            let external_reactant_mass = reaction
+                .external_reactants
+                .iter()
+                .filter_map(|requirement| {
+                    requirement
+                        .molar_mass_grams
+                        .map(|mass| mass * requirement.moles_per_reaction)
+                })
+                .sum::<f64>();
+            let reactant_mass = reaction
+                .reactants
+                .iter()
+                .map(|term| {
+                    self.substances[&term.substance_id].molar_mass_grams * term.coefficient as f64
+                })
+                .sum::<f64>()
+                + external_reactant_mass;
+            let product_mass = reaction
+                .products
+                .iter()
+                .map(|term| {
+                    self.substances[&term.substance_id].molar_mass_grams * term.coefficient as f64
+                })
+                .sum::<f64>();
+            if (reactant_mass - product_mass).abs() > MASS_TOLERANCE_GRAMS_PER_MOL
+                && !reaction.allow_mass_imbalance
+            {
+                return Err(ChemistryError::MassNotConserved {
+                    reaction_id: reaction.id.to_string(),
+                    reactants: reactant_mass,
+                    products: product_mass,
+                });
             }
 
             if let Some(reverse_id) = &reaction.reverse_reaction_id {

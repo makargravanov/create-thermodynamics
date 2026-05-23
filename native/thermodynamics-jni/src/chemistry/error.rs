@@ -35,6 +35,11 @@ pub enum ChemistryError {
         reverse_id: String,
         reason: String,
     },
+    GenerationInvariantViolation {
+        generator: String,
+        substance_id: String,
+        reason: String,
+    },
     InvalidMixtureState(String),
 }
 
@@ -89,6 +94,16 @@ impl Display for ChemistryError {
                 reason,
             } => {
                 write!(f, "reversible reactions '{reaction_id}' and '{reverse_id}' are inconsistent: {reason}")
+            }
+            ChemistryError::GenerationInvariantViolation {
+                generator,
+                substance_id,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "generation invariant failed in '{generator}' for '{substance_id}': {reason}"
+                )
             }
             ChemistryError::InvalidMixtureState(reason) => {
                 write!(f, "invalid mixture state: {reason}")

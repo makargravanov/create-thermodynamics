@@ -84,6 +84,9 @@ pub struct Reaction {
 pub struct ExternalRequirement {
     pub description: String,
     pub moles_per_reaction: f64,
+    pub molar_mass_grams: Option<f64>,
+    pub charge: Option<i32>,
+    pub unchecked_mass_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -132,10 +135,15 @@ impl Reaction {
 
     pub fn has_external_context(&self) -> bool {
         self.requires_uv
-            || self.display_as_reversible
             || !self.external_reactants.is_empty()
             || !self.external_catalysts.is_empty()
             || !self.reaction_results.is_empty()
+    }
+
+    pub fn requires_context_to_proceed(&self) -> bool {
+        self.requires_uv
+            || !self.external_reactants.is_empty()
+            || !self.external_catalysts.is_empty()
     }
 
     pub fn validate_shape(&self) -> ChemistryResult<()> {
@@ -179,6 +187,23 @@ impl Reaction {
                     reaction_id: reaction_id.clone(),
                     reason: "external requirements must have a description".to_string(),
                 });
+            }
+            match (requirement.molar_mass_grams, requirement.charge) {
+                (Some(mass), Some(_)) if mass.is_finite() && mass >= 0.0 => {}
+                (None, None) if requirement.unchecked_mass_reason.is_some() => {}
+                (Some(_), Some(_)) => {
+                    return Err(ChemistryError::InvalidReaction {
+                        reaction_id: reaction_id.clone(),
+                        reason: "external requirement mass must be non-negative and finite"
+                            .to_string(),
+                    });
+                }
+                _ => {
+                    return Err(ChemistryError::InvalidReaction {
+                        reaction_id: reaction_id.clone(),
+                        reason: "external requirement must either provide both mass and charge or an unchecked mass reason".to_string(),
+                    });
+                }
             }
         }
         for result in &self.reaction_results {
@@ -250,17 +275,63 @@ impl ReactionBuilder {
     }
 
     pub fn external_reactant(mut self, description: impl Into<String>, moles: f64) -> Self {
+        let description = description.into();
         self.reaction.external_reactants.push(ExternalRequirement {
-            description: description.into(),
+            unchecked_mass_reason: Some(format!(
+                "legacy external reactant '{description}' has no chemical formula in the model"
+            )),
+            description,
             moles_per_reaction: moles,
+            molar_mass_grams: None,
+            charge: None,
         });
         self
     }
 
     pub fn external_catalyst(mut self, description: impl Into<String>, moles: f64) -> Self {
+        let description = description.into();
+        self.reaction.external_catalysts.push(ExternalRequirement {
+            unchecked_mass_reason: Some(format!(
+                "legacy external catalyst '{description}' has no chemical formula in the model"
+            )),
+            description,
+            moles_per_reaction: moles,
+            molar_mass_grams: None,
+            charge: None,
+        });
+        self
+    }
+
+    pub fn chemical_external_reactant(
+        mut self,
+        description: impl Into<String>,
+        moles: f64,
+        molar_mass_grams: f64,
+        charge: i32,
+    ) -> Self {
+        self.reaction.external_reactants.push(ExternalRequirement {
+            description: description.into(),
+            moles_per_reaction: moles,
+            molar_mass_grams: Some(molar_mass_grams),
+            charge: Some(charge),
+            unchecked_mass_reason: None,
+        });
+        self
+    }
+
+    pub fn chemical_external_catalyst(
+        mut self,
+        description: impl Into<String>,
+        moles: f64,
+        molar_mass_grams: f64,
+        charge: i32,
+    ) -> Self {
         self.reaction.external_catalysts.push(ExternalRequirement {
             description: description.into(),
             moles_per_reaction: moles,
+            molar_mass_grams: Some(molar_mass_grams),
+            charge: Some(charge),
+            unchecked_mass_reason: None,
         });
         self
     }
