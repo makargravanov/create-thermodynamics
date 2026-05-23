@@ -63,9 +63,11 @@ struct DerivedSubstanceResolver {
 }
 
 impl DerivedSubstanceResolver {
-    fn new(registry: &ChemistryRegistry) -> ChemistryResult<Self> {
+    fn new_from_substances<'a>(
+        substances: impl IntoIterator<Item = &'a Substance>,
+    ) -> ChemistryResult<Self> {
         let mut canonical_to_id = BTreeMap::new();
-        for substance in registry.substances() {
+        for substance in substances {
             if let Some(structure) = &substance.molecular_structure {
                 canonical_to_id
                     .entry(super::frowns::write_frowns(structure)?)
@@ -123,13 +125,13 @@ pub(crate) fn generate_organic_reactions(
     generate_organic_reactions_with_seeds(registry, None, &scope)
 }
 
-pub(crate) fn generate_organic_reactions_for_scope(
-    registry: &ChemistryRegistry,
+pub(crate) fn generate_organic_reactions_for_substances(
+    substances: &[Substance],
     seeds: &BTreeSet<SubstanceId>,
     scope: &BTreeSet<SubstanceId>,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
     let scope = GenerationScope::from_substances(scope);
-    generate_organic_reactions_with_seeds(registry, Some(seeds), &scope)
+    generate_organic_reactions_with_seed_substances(substances, Some(seeds), &scope)
 }
 
 fn generate_organic_reactions_with_seeds(
@@ -137,11 +139,20 @@ fn generate_organic_reactions_with_seeds(
     seeds: Option<&BTreeSet<SubstanceId>>,
     scope: &GenerationScope,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
-    let mut resolver = DerivedSubstanceResolver::new(registry)?;
+    let substances = registry.substances().cloned().collect::<Vec<_>>();
+    generate_organic_reactions_with_seed_substances(&substances, seeds, scope)
+}
+
+fn generate_organic_reactions_with_seed_substances(
+    substances: &[Substance],
+    seeds: Option<&BTreeSet<SubstanceId>>,
+    scope: &GenerationScope,
+) -> ChemistryResult<GeneratedOrganicCatalog> {
+    let mut resolver = DerivedSubstanceResolver::new_from_substances(substances)?;
     let mut reactions = Vec::new();
     let mut reaction_ids = BTreeSet::new();
-    let reactants = registry
-        .substances()
+    let reactants = substances
+        .iter()
         .filter(|substance| scope.contains(&substance.id))
         .cloned()
         .collect::<Vec<_>>();

@@ -87,7 +87,7 @@ pub fn react_for_tick_with_context(
     for _ in 0..cycles {
         let before = snapshot(mixture);
         let mut reactions_with_rates = Vec::new();
-        for reaction in registry.reactions() {
+        for reaction in registry.reaction_candidates_for_substances(mixture.substances()) {
             if !context_allows_reaction(reaction, context) {
                 continue;
             }

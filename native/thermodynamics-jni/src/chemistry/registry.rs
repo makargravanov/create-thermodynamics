@@ -11,6 +11,8 @@ const THERMO_TOLERANCE: f64 = 1.0e-6;
 pub struct ChemistryRegistry {
     substances: BTreeMap<SubstanceId, Substance>,
     reactions: BTreeMap<ReactionId, Reaction>,
+    reaction_index_by_substance: BTreeMap<SubstanceId, BTreeSet<ReactionId>>,
+    unindexed_reaction_ids: BTreeSet<ReactionId>,
     substance_tags: BTreeSet<SubstanceTagId>,
 }
 
@@ -29,6 +31,25 @@ impl ChemistryRegistry {
 
     pub fn reactions(&self) -> impl Iterator<Item = &Reaction> {
         self.reactions.values()
+    }
+
+    pub fn reaction_candidates_for_substances<'registry, 'substances, I>(
+        &'registry self,
+        substances: I,
+    ) -> Vec<&'registry Reaction>
+    where
+        I: IntoIterator<Item = &'substances SubstanceId>,
+    {
+        let mut reaction_ids = self.unindexed_reaction_ids.clone();
+        for substance_id in substances {
+            if let Some(indexed_reactions) = self.reaction_index_by_substance.get(substance_id) {
+                reaction_ids.extend(indexed_reactions.iter().cloned());
+            }
+        }
+        reaction_ids
+            .into_iter()
+            .filter_map(|reaction_id| self.reactions.get(&reaction_id))
+            .collect()
     }
 
     pub fn substances(&self) -> impl Iterator<Item = &Substance> {
@@ -102,9 +123,12 @@ impl ChemistryRegistryBuilder {
             }
         }
 
+        let (reaction_index_by_substance, unindexed_reaction_ids) = build_reaction_index(&reactions);
         let registry = ChemistryRegistry {
             substances,
             reactions,
+            reaction_index_by_substance,
+            unindexed_reaction_ids,
             substance_tags: self.substance_tags,
         };
         registry.validate_substance_tags()?;
@@ -294,4 +318,33 @@ fn stoichiometric_map(terms: &[StoichiometricTerm]) -> BTreeMap<SubstanceId, u32
         *result.entry(term.substance_id.clone()).or_insert(0) += term.coefficient;
     }
     result
+}
+
+fn build_reaction_index(
+    reactions: &BTreeMap<ReactionId, Reaction>,
+) -> (BTreeMap<SubstanceId, BTreeSet<ReactionId>>, BTreeSet<ReactionId>) {
+    let mut by_substance: BTreeMap<SubstanceId, BTreeSet<ReactionId>> = BTreeMap::new();
+    let mut unindexed = BTreeSet::new();
+    for reaction in reactions.values() {
+        let mut substances = BTreeSet::new();
+        for reactant in &reaction.reactants {
+            substances.insert(reactant.substance_id.clone());
+        }
+        for ordered_substance in reaction.orders.keys() {
+            substances.insert(ordered_substance.clone());
+        }
+
+        if substances.is_empty() {
+            unindexed.insert(reaction.id.clone());
+            continue;
+        }
+
+        for substance_id in substances {
+            by_substance
+                .entry(substance_id)
+                .or_default()
+                .insert(reaction.id.clone());
+        }
+    }
+    (by_substance, unindexed)
 }

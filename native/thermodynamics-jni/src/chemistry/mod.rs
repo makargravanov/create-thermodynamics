@@ -295,6 +295,28 @@ mod tests {
     }
 
     #[test]
+    fn registry_returns_only_reaction_candidates_for_present_substances() {
+        let registry = test_registry();
+        let hydrogen: SubstanceId = "destroy:hydrogen".into();
+        let proton: SubstanceId = "destroy:proton".into();
+
+        let hydrogen_candidates = registry
+            .reaction_candidates_for_substances([&hydrogen])
+            .into_iter()
+            .map(|reaction| reaction.id.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(hydrogen_candidates, vec!["destroy:combustion"]);
+
+        let proton_candidates = registry
+            .reaction_candidates_for_substances([&proton])
+            .into_iter()
+            .map(|reaction| reaction.id.to_string())
+            .collect::<Vec<_>>();
+        assert!(proton_candidates.contains(&"destroy:neutralization".to_string()));
+        assert!(!proton_candidates.contains(&"destroy:combustion".to_string()));
+    }
+
+    #[test]
     fn uv_context_controls_reaction_rate() {
         let registry = ChemistryRegistryBuilder::new()
             .substance(Substance::new(
