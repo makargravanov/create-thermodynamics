@@ -7,12 +7,20 @@ use super::substance::{Substance, SubstanceId, SubstanceTagId};
 const MASS_TOLERANCE_GRAMS_PER_MOL: f64 = 1.0e-6;
 const THERMO_TOLERANCE: f64 = 1.0e-6;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct SubstanceIndex(usize);
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct ReactionIndex(usize);
+
 #[derive(Debug, Clone)]
 pub struct ChemistryRegistry {
     substances: BTreeMap<SubstanceId, Substance>,
+    substance_indices: BTreeMap<SubstanceId, SubstanceIndex>,
     reactions: BTreeMap<ReactionId, Reaction>,
-    reaction_index_by_substance: BTreeMap<SubstanceId, BTreeSet<ReactionId>>,
-    unindexed_reaction_ids: BTreeSet<ReactionId>,
+    reaction_ids_by_index: Vec<ReactionId>,
+    reaction_index_by_substance: BTreeMap<SubstanceIndex, BTreeSet<ReactionIndex>>,
+    unindexed_reaction_indices: BTreeSet<ReactionIndex>,
     substance_tags: BTreeSet<SubstanceTagId>,
 }
 
@@ -40,15 +48,19 @@ impl ChemistryRegistry {
     where
         I: IntoIterator<Item = &'substances SubstanceId>,
     {
-        let mut reaction_ids = self.unindexed_reaction_ids.clone();
+        let mut reaction_indices = self.unindexed_reaction_indices.clone();
         for substance_id in substances {
-            if let Some(indexed_reactions) = self.reaction_index_by_substance.get(substance_id) {
-                reaction_ids.extend(indexed_reactions.iter().cloned());
+            let Some(substance_index) = self.substance_index(substance_id) else {
+                continue;
+            };
+            if let Some(indexed_reactions) = self.reaction_index_by_substance.get(&substance_index)
+            {
+                reaction_indices.extend(indexed_reactions.iter().copied());
             }
         }
-        reaction_ids
+        reaction_indices
             .into_iter()
-            .filter_map(|reaction_id| self.reactions.get(&reaction_id))
+            .filter_map(|reaction_index| self.reaction_by_index(reaction_index))
             .collect()
     }
 
@@ -66,6 +78,16 @@ impl ChemistryRegistry {
 
     pub fn has_substance_tag(&self, id: &SubstanceTagId) -> bool {
         self.substance_tags.contains(id)
+    }
+
+    pub(crate) fn substance_index(&self, id: &SubstanceId) -> Option<SubstanceIndex> {
+        self.substance_indices.get(id).copied()
+    }
+
+    fn reaction_by_index(&self, index: ReactionIndex) -> Option<&Reaction> {
+        self.reaction_ids_by_index
+            .get(index.0)
+            .and_then(|reaction_id| self.reactions.get(reaction_id))
     }
 }
 
@@ -106,12 +128,15 @@ impl ChemistryRegistryBuilder {
 
     pub fn build(self) -> ChemistryResult<ChemistryRegistry> {
         let mut substances = BTreeMap::new();
+        let mut substance_indices = BTreeMap::new();
         for substance in self.substances {
             substance.validate()?;
             let id = substance.id.clone();
             if substances.insert(id.clone(), substance).is_some() {
                 return Err(ChemistryError::DuplicateSubstance(id.to_string()));
             }
+            let substance_index = SubstanceIndex(substance_indices.len());
+            substance_indices.insert(id, substance_index);
         }
 
         let mut reactions = BTreeMap::new();
@@ -123,12 +148,15 @@ impl ChemistryRegistryBuilder {
             }
         }
 
-        let (reaction_index_by_substance, unindexed_reaction_ids) = build_reaction_index(&reactions);
+        let (reaction_ids_by_index, reaction_index_by_substance, unindexed_reaction_indices) =
+            build_reaction_index(&reactions, &substance_indices);
         let registry = ChemistryRegistry {
             substances,
+            substance_indices,
             reactions,
+            reaction_ids_by_index,
             reaction_index_by_substance,
-            unindexed_reaction_ids,
+            unindexed_reaction_indices,
             substance_tags: self.substance_tags,
         };
         registry.validate_substance_tags()?;
@@ -322,29 +350,42 @@ fn stoichiometric_map(terms: &[StoichiometricTerm]) -> BTreeMap<SubstanceId, u32
 
 fn build_reaction_index(
     reactions: &BTreeMap<ReactionId, Reaction>,
-) -> (BTreeMap<SubstanceId, BTreeSet<ReactionId>>, BTreeSet<ReactionId>) {
-    let mut by_substance: BTreeMap<SubstanceId, BTreeSet<ReactionId>> = BTreeMap::new();
+    substance_indices: &BTreeMap<SubstanceId, SubstanceIndex>,
+) -> (
+    Vec<ReactionId>,
+    BTreeMap<SubstanceIndex, BTreeSet<ReactionIndex>>,
+    BTreeSet<ReactionIndex>,
+) {
+    let mut reaction_ids_by_index = Vec::new();
+    let mut by_substance: BTreeMap<SubstanceIndex, BTreeSet<ReactionIndex>> = BTreeMap::new();
     let mut unindexed = BTreeSet::new();
     for reaction in reactions.values() {
-        let mut substances = BTreeSet::new();
+        let reaction_index = ReactionIndex(reaction_ids_by_index.len());
+        reaction_ids_by_index.push(reaction.id.clone());
+
+        let mut indexed_substances = BTreeSet::new();
         for reactant in &reaction.reactants {
-            substances.insert(reactant.substance_id.clone());
+            if let Some(substance_index) = substance_indices.get(&reactant.substance_id) {
+                indexed_substances.insert(*substance_index);
+            }
         }
         for ordered_substance in reaction.orders.keys() {
-            substances.insert(ordered_substance.clone());
+            if let Some(substance_index) = substance_indices.get(ordered_substance) {
+                indexed_substances.insert(*substance_index);
+            }
         }
 
-        if substances.is_empty() {
-            unindexed.insert(reaction.id.clone());
+        if indexed_substances.is_empty() {
+            unindexed.insert(reaction_index);
             continue;
         }
 
-        for substance_id in substances {
+        for substance_index in indexed_substances {
             by_substance
-                .entry(substance_id)
+                .entry(substance_index)
                 .or_default()
-                .insert(reaction.id.clone());
+                .insert(reaction_index);
         }
     }
-    (by_substance, unindexed)
+    (reaction_ids_by_index, by_substance, unindexed)
 }
