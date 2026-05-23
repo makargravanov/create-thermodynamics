@@ -119,18 +119,26 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
                         continue;
                     }
                 } else if structure.hydrogen_count(alcohol_oxygen) == 1 {
+                    let hydrogen = bonded(structure, alcohol_oxygen, "H", Some(1.0))[0];
                     groups.push(FunctionalGroup::new(
                         FunctionalGroupType::CarboxylicAcid,
-                        vec![carbon, carbonyl_oxygen, alcohol_oxygen],
+                        vec![carbon, carbonyl_oxygen, alcohol_oxygen, hydrogen],
                     ));
                     continue;
                 }
             } else if nitrogens.len() == 1 {
                 let nitrogen = nitrogens[0];
-                if structure.hydrogen_count(nitrogen) == 2 {
+                let hydrogens = bonded(structure, nitrogen, "H", Some(1.0));
+                if hydrogens.len() == 2 {
                     groups.push(FunctionalGroup::new(
                         FunctionalGroupType::UnsubstitutedAmide,
-                        vec![carbon, carbonyl_oxygen, nitrogen],
+                        vec![
+                            carbon,
+                            carbonyl_oxygen,
+                            nitrogen,
+                            hydrogens[0],
+                            hydrogens[1],
+                        ],
                     ));
                     continue;
                 }
@@ -168,10 +176,14 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
             }
 
             for oxygen in single_oxygens {
-                if structure.hydrogen_count(oxygen) == 1 {
+                let oxygen_hydrogens = bonded(structure, oxygen, "H", Some(1.0));
+                if oxygen_hydrogens.len() == 1 {
                     groups.push(
-                        FunctionalGroup::new(FunctionalGroupType::Alcohol, vec![carbon, oxygen])
-                            .with_degree(carbons.len()),
+                        FunctionalGroup::new(
+                            FunctionalGroupType::Alcohol,
+                            vec![carbon, oxygen, oxygen_hydrogens[0]],
+                        )
+                        .with_degree(carbons.len()),
                     );
                 } else if structure.atoms[oxygen].charge == -1.0 {
                     groups.push(FunctionalGroup::new(
@@ -206,17 +218,17 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
                         vec![carbon, nitrogen, aromatic_oxygens[0], aromatic_oxygens[1]],
                     ));
                 } else if nitrile_nitrogens.is_empty() && double_nitrogens.is_empty() {
-                    let hydrogen_count = structure.hydrogen_count(nitrogen);
-                    for _ in 0..hydrogen_count {
+                    let hydrogens = bonded(structure, nitrogen, "H", Some(1.0));
+                    for hydrogen in &hydrogens {
                         groups.push(FunctionalGroup::new(
                             FunctionalGroupType::NonTertiaryAmine,
-                            vec![carbon, nitrogen],
+                            vec![carbon, nitrogen, *hydrogen],
                         ));
                     }
-                    if hydrogen_count == 2 {
+                    if hydrogens.len() == 2 {
                         groups.push(FunctionalGroup::new(
                             FunctionalGroupType::PrimaryAmine,
-                            vec![carbon, nitrogen],
+                            vec![carbon, nitrogen, hydrogens[0], hydrogens[1]],
                         ));
                     }
                 }
@@ -242,10 +254,10 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
             }
 
             for boron in borons {
-                for _ in 0..structure.hydrogen_count(boron) {
+                for hydrogen in bonded(structure, boron, "H", Some(1.0)) {
                     groups.push(FunctionalGroup::new(
                         FunctionalGroupType::NonTertiaryBorane,
-                        vec![carbon, boron],
+                        vec![carbon, boron, hydrogen],
                     ));
                 }
                 groups.push(FunctionalGroup::new(
@@ -304,10 +316,11 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
             continue;
         }
         for oxygen in bonded(structure, boron, "O", None) {
-            if structure.hydrogen_count(oxygen) == 1 {
+            let hydrogens = bonded(structure, oxygen, "H", Some(1.0));
+            if hydrogens.len() == 1 {
                 groups.push(FunctionalGroup::new(
                     FunctionalGroupType::BoricAcid,
-                    vec![boron, oxygen],
+                    vec![boron, oxygen, hydrogens[0]],
                 ));
             }
         }

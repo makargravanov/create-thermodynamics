@@ -475,6 +475,80 @@ impl MolecularEditor {
         Ok(bridge)
     }
 
+    pub fn split_at_bond(
+        structure: &MolecularStructure,
+        first: usize,
+        second: usize,
+    ) -> ChemistryResult<(
+        MolecularStructure,
+        Vec<Option<usize>>,
+        MolecularStructure,
+        Vec<Option<usize>>,
+    )> {
+        if first >= structure.atoms.len() || second >= structure.atoms.len() {
+            return Err(invalid_structure(
+                &structure.source_code,
+                "split bond atom does not exist",
+            ));
+        }
+        let removed_bond = structure
+            .bonds
+            .iter()
+            .position(|bond| {
+                (bond.from == first && bond.to == second)
+                    || (bond.from == second && bond.to == first)
+            })
+            .ok_or_else(|| {
+                invalid_structure(&structure.source_code, "split bond does not exist")
+            })?;
+
+        let mut seen = vec![false; structure.atoms.len()];
+        let mut queue = VecDeque::from([first]);
+        seen[first] = true;
+        while let Some(index) = queue.pop_front() {
+            for (bond_index, bond) in structure.bonds.iter().enumerate() {
+                if bond_index == removed_bond {
+                    continue;
+                }
+                let other = if bond.from == index {
+                    bond.to
+                } else if bond.to == index {
+                    bond.from
+                } else {
+                    continue;
+                };
+                if !seen[other] {
+                    seen[other] = true;
+                    queue.push_back(other);
+                }
+            }
+        }
+
+        if seen[second] {
+            return Err(invalid_structure(
+                &structure.source_code,
+                "split bond does not separate the structure",
+            ));
+        }
+
+        let first_atoms = seen
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| value.then_some(index))
+            .collect::<Vec<_>>();
+        let second_atoms = seen
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| (!value).then_some(index))
+            .collect::<Vec<_>>();
+        Ok((
+            substructure(structure, &first_atoms)?,
+            substructure_mapping(structure.atoms.len(), &first_atoms),
+            substructure(structure, &second_atoms)?,
+            substructure_mapping(structure.atoms.len(), &second_atoms),
+        ))
+    }
+
     pub fn finish(self) -> ChemistryResult<MolecularStructure> {
         let structure = MolecularStructure {
             source_code: self.source_code,
@@ -496,6 +570,45 @@ impl MolecularEditor {
         editor.add_group(first_atom, second, second_atom, bond_order)?;
         editor.finish()
     }
+}
+
+fn substructure(
+    structure: &MolecularStructure,
+    atom_indexes: &[usize],
+) -> ChemistryResult<MolecularStructure> {
+    let mapping = substructure_mapping(structure.atoms.len(), atom_indexes);
+    let atoms = atom_indexes
+        .iter()
+        .map(|index| structure.atoms[*index].clone())
+        .collect::<Vec<_>>();
+    let bonds = structure
+        .bonds
+        .iter()
+        .filter_map(|bond| {
+            let from = mapping[bond.from]?;
+            let to = mapping[bond.to]?;
+            Some(MolecularBond {
+                from,
+                to,
+                order: bond.order,
+            })
+        })
+        .collect::<Vec<_>>();
+    let result = MolecularStructure {
+        source_code: structure.source_code.clone(),
+        atoms,
+        bonds,
+    };
+    result.validate()?;
+    Ok(result)
+}
+
+fn substructure_mapping(atom_count: usize, atom_indexes: &[usize]) -> Vec<Option<usize>> {
+    let mut mapping = vec![None; atom_count];
+    for (new_index, old_index) in atom_indexes.iter().enumerate() {
+        mapping[*old_index] = Some(new_index);
+    }
+    mapping
 }
 
 #[derive(Debug, Default)]
@@ -1221,5 +1334,16 @@ mod tests {
             MolecularEditor::new(&parse_legacy_structure("destroy:linear:C").unwrap());
         invalid.add_atom(0, "H", 0.0, 1.0).unwrap();
         assert!(invalid.finish().is_err());
+    }
+
+    #[test]
+    fn editor_splits_only_separating_bonds() {
+        let ethanol = parse_legacy_structure("destroy:linear:CCO").unwrap();
+        let (first, _, second, _) = MolecularEditor::split_at_bond(&ethanol, 1, 2).unwrap();
+        assert!(first.atom_count() > 0);
+        assert!(second.atom_count() > 0);
+
+        let benzene = parse_legacy_structure("destroy:benzene:,,,,,").unwrap();
+        assert!(MolecularEditor::split_at_bond(&benzene, 0, 1).is_err());
     }
 }
