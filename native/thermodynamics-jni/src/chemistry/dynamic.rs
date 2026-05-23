@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 use super::error::{ChemistryError, ChemistryResult};
 use super::frowns::{parse_frowns, write_frowns};
-use super::functional_group::{FunctionalGroup, FunctionalGroupType};
+use super::functional_group::FunctionalGroupType;
 use super::molecule::MolecularStructure;
 use super::organic;
 use super::reaction::{Reaction, ReactionId};
@@ -28,24 +28,11 @@ enum KnownSubstanceIndex {
     Dynamic(usize),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct GenerationKey {
-    canonical_structure: String,
+    substance: KnownSubstanceIndex,
     generator: OrganicGeneratorKind,
-    group: FunctionalGroupKey,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct FunctionalGroupKey {
-    group_type: FunctionalGroupType,
-    atoms: Vec<FunctionalGroupAtomKey>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct FunctionalGroupAtomKey {
-    atom_index: usize,
-    element: String,
-    charge_milli: i32,
+    group_index: usize,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -662,18 +649,22 @@ impl DynamicChemistryRegistry {
         &self,
         substance_id: &SubstanceId,
     ) -> ChemistryResult<BTreeSet<GenerationKey>> {
+        let substance_index = self
+            .known_substance_index(substance_id)
+            .ok_or_else(|| ChemistryError::InvalidMixtureState(format!(
+                "unknown substance '{substance_id}'"
+            )))?;
         let substance = self.substance(substance_id)?;
-        let Some(structure) = &substance.molecular_structure else {
+        if substance.molecular_structure.is_none() {
             return Ok(BTreeSet::new());
-        };
-        let canonical = write_frowns(structure)?;
+        }
         let mut keys = BTreeSet::new();
-        for group in &substance.functional_groups {
+        for (group_index, group) in substance.functional_groups.iter().enumerate() {
             for generator in generators_for_group(&group.group_type) {
                 keys.insert(GenerationKey {
-                    canonical_structure: canonical.clone(),
+                    substance: substance_index,
                     generator: *generator,
-                    group: functional_group_key(structure, group),
+                    group_index,
                 });
             }
         }
@@ -748,29 +739,6 @@ fn generators_for_group(group_type: &FunctionalGroupType) -> &'static [OrganicGe
     }
 }
 
-fn functional_group_key(
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
-) -> FunctionalGroupKey {
-    let mut atoms = group
-        .atoms
-        .iter()
-        .map(|index| {
-            let atom = &structure.atoms[*index];
-            FunctionalGroupAtomKey {
-                atom_index: *index,
-                element: atom.element.clone(),
-                charge_milli: (atom.charge * 1000.0).round() as i32,
-            }
-        })
-        .collect::<Vec<_>>();
-    atoms.sort();
-    FunctionalGroupKey {
-        group_type: group.group_type.clone(),
-        atoms,
-    }
-}
-
 fn index_dynamic_reaction(
     by_substance: &mut BTreeMap<KnownSubstanceIndex, BTreeSet<DynamicReactionIndex>>,
     unindexed: &mut BTreeSet<DynamicReactionIndex>,
@@ -830,6 +798,12 @@ fn estimate_dynamic_boiling_point(molar_mass_grams: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generation_key_is_compact_and_structural() {
+        assert!(std::mem::size_of::<GenerationKey>() <= 32);
+    }
+
     #[test]
     fn resolves_known_substance_by_frowns() {
         let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
