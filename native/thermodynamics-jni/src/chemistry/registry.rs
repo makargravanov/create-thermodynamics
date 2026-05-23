@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::error::{ChemistryError, ChemistryResult};
-use super::reaction::{Reaction, ReactionId};
+use super::reaction::{Reaction, ReactionId, StoichiometricTerm};
 use super::substance::{Substance, SubstanceId, SubstanceTagId};
 
 const MASS_TOLERANCE_GRAMS_PER_MOL: f64 = 1.0e-6;
@@ -244,6 +244,24 @@ impl ChemistryRegistry {
                             .to_string(),
                     });
                 }
+                if stoichiometric_map(&reaction.reactants) != stoichiometric_map(&reverse.products)
+                    || stoichiometric_map(&reaction.products)
+                        != stoichiometric_map(&reverse.reactants)
+                {
+                    return Err(ChemistryError::ReversibleThermodynamicsMismatch {
+                        reaction_id: reaction.id.to_string(),
+                        reverse_id: reverse_id.to_string(),
+                        reason: "reverse reaction must mirror closed reactants and products"
+                            .to_string(),
+                    });
+                }
+                if reaction.requires_uv != reverse.requires_uv {
+                    return Err(ChemistryError::ReversibleThermodynamicsMismatch {
+                        reaction_id: reaction.id.to_string(),
+                        reverse_id: reverse_id.to_string(),
+                        reason: "reverse reaction must carry the same UV requirement".to_string(),
+                    });
+                }
                 if (reaction.enthalpy_change_kj_per_mol + reverse.enthalpy_change_kj_per_mol).abs()
                     > THERMO_TOLERANCE
                 {
@@ -268,4 +286,12 @@ impl ChemistryRegistry {
         }
         Ok(())
     }
+}
+
+fn stoichiometric_map(terms: &[StoichiometricTerm]) -> BTreeMap<SubstanceId, u32> {
+    let mut result = BTreeMap::new();
+    for term in terms {
+        *result.entry(term.substance_id.clone()).or_insert(0) += term.coefficient;
+    }
+    result
 }

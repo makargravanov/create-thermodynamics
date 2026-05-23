@@ -52,9 +52,8 @@ impl MolecularStructure {
         })
     }
 
-    pub fn canonical_code(&self) -> String {
+    pub fn canonical_code(&self) -> ChemistryResult<String> {
         super::frowns::canonical_structure_code(self)
-            .expect("valid molecular structure must have a canonical FROWNS code")
     }
 
     pub fn validate(&self) -> ChemistryResult<()> {
@@ -1345,7 +1344,10 @@ mod tests {
         let chlorobenzene = editor.finish().unwrap();
 
         assert_eq!(chlorobenzene.source_code, "generated");
-        assert_ne!(chlorobenzene.canonical_code(), benzene.canonical_code());
+        assert_ne!(
+            chlorobenzene.canonical_code().unwrap(),
+            benzene.canonical_code().unwrap()
+        );
     }
 
     #[test]

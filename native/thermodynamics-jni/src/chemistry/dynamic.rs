@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 
 use super::error::{ChemistryError, ChemistryResult};
 use super::frowns::{parse_frowns, write_frowns};
+use super::functional_group::{FunctionalGroup, FunctionalGroupType};
 use super::molecule::MolecularStructure;
 use super::organic;
 use super::registry::{ChemistryRegistry, ChemistryRegistryBuilder};
@@ -14,11 +15,13 @@ const DEFAULT_DYNAMIC_LATENT_HEAT: f64 = 20_000.0;
 const DEFAULT_DYNAMIC_COLOR: u32 = 0x20FF_FFFF;
 const MAX_DYNAMIC_ATOMS: usize = 100;
 const MAX_DYNAMIC_WORK_ITEMS: usize = 1_000_000;
+const MAX_DYNAMIC_QUEUE_ITEMS: usize = 100_000;
 
 #[derive(Debug, Clone)]
 pub struct DynamicChemistryRegistry {
     registry: ChemistryRegistry,
     canonical_to_id: BTreeMap<String, SubstanceId>,
+    processed_generation_keys: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +33,7 @@ pub struct DynamicGenerationReport {
     pub skipped_duplicates: usize,
     pub remaining_queue: usize,
     pub reached_fixed_point: bool,
+    pub generator_errors: Vec<String>,
 }
 
 impl DynamicChemistryRegistry {
@@ -41,6 +45,7 @@ impl DynamicChemistryRegistry {
         let mut result = Self {
             registry,
             canonical_to_id: BTreeMap::new(),
+            processed_generation_keys: BTreeSet::new(),
         };
         result.rebuild_canonical_index()?;
         Ok(result)
@@ -78,7 +83,33 @@ impl DynamicChemistryRegistry {
     ) -> ChemistryResult<DynamicGenerationReport> {
         self.registry.substance(substance_id)?;
         let mut seeds = BTreeSet::from([substance_id.clone()]);
-        self.generate_reactions_from_seeds(&mut seeds, max_iterations)
+        self.generate_reactions_from_scope(&mut seeds, Some(max_iterations))
+    }
+
+    pub fn generate_reactions_for_to_fixed_point(
+        &mut self,
+        substance_id: &SubstanceId,
+    ) -> ChemistryResult<DynamicGenerationReport> {
+        self.registry.substance(substance_id)?;
+        let mut seeds = BTreeSet::from([substance_id.clone()]);
+        self.generate_reactions_from_scope(&mut seeds, None)
+    }
+
+    pub fn generate_reactions_for_substances(
+        &mut self,
+        substance_ids: impl IntoIterator<Item = SubstanceId>,
+        max_iterations: usize,
+    ) -> ChemistryResult<DynamicGenerationReport> {
+        let mut seeds = self.validated_substance_set(substance_ids)?;
+        self.generate_reactions_from_scope(&mut seeds, Some(max_iterations))
+    }
+
+    pub fn generate_reactions_for_substances_to_fixed_point(
+        &mut self,
+        substance_ids: impl IntoIterator<Item = SubstanceId>,
+    ) -> ChemistryResult<DynamicGenerationReport> {
+        let mut seeds = self.validated_substance_set(substance_ids)?;
+        self.generate_reactions_from_scope(&mut seeds, None)
     }
 
     pub fn generate_reactions(
@@ -90,15 +121,24 @@ impl DynamicChemistryRegistry {
             .substances()
             .map(|substance| substance.id.clone())
             .collect::<BTreeSet<_>>();
-        self.generate_reactions_from_seeds(&mut seeds, max_iterations)
+        self.generate_reactions_from_scope(&mut seeds, Some(max_iterations))
     }
 
-    fn generate_reactions_from_seeds(
+    pub fn generate_to_fixed_point(&mut self) -> ChemistryResult<DynamicGenerationReport> {
+        let mut seeds = self
+            .registry
+            .substances()
+            .map(|substance| substance.id.clone())
+            .collect::<BTreeSet<_>>();
+        self.generate_reactions_from_scope(&mut seeds, None)
+    }
+
+    fn generate_reactions_from_scope(
         &mut self,
         seeds: &mut BTreeSet<SubstanceId>,
-        max_iterations: usize,
+        max_iterations: Option<usize>,
     ) -> ChemistryResult<DynamicGenerationReport> {
-        if max_iterations == 0 {
+        if max_iterations == Some(0) {
             return Err(ChemistryError::InvalidReaction {
                 reaction_id: "<dynamic-generation>".to_string(),
                 reason: "max_iterations must be greater than zero".to_string(),
@@ -110,8 +150,21 @@ impl DynamicChemistryRegistry {
         let mut processed_work_items = 0usize;
         let mut skipped_duplicates = 0usize;
         let mut queue = seeds.clone();
-        let mut processed = BTreeSet::new();
-        for iteration in 0..max_iterations {
+        let mut scope = seeds.clone();
+        let mut iteration = 0usize;
+        loop {
+            if max_iterations.is_some_and(|max| iteration >= max) {
+                return Ok(DynamicGenerationReport {
+                    iterations: iteration,
+                    added_substances,
+                    added_reactions,
+                    processed_work_items,
+                    skipped_duplicates,
+                    remaining_queue: queue.len(),
+                    reached_fixed_point: false,
+                    generator_errors: Vec::new(),
+                });
+            }
             if queue.is_empty() {
                 return Ok(DynamicGenerationReport {
                     iterations: iteration,
@@ -121,24 +174,26 @@ impl DynamicChemistryRegistry {
                     skipped_duplicates,
                     remaining_queue: 0,
                     reached_fixed_point: true,
+                    generator_errors: Vec::new(),
                 });
             }
             let current_seeds = queue.clone();
             queue.clear();
             let mut unprocessed_seeds = BTreeSet::new();
             for seed in &current_seeds {
-                let canonical = self
-                    .registry
-                    .substance(seed)?
-                    .molecular_structure
-                    .as_ref()
-                    .map(write_frowns)
-                    .transpose()?
-                    .unwrap_or_else(|| seed.to_string());
-                if !processed.insert(canonical) {
+                let keys = self.generation_keys_for_substance(seed)?;
+                if keys.is_empty() {
                     skipped_duplicates += 1;
                     continue;
                 }
+                let has_new_key = keys
+                    .iter()
+                    .any(|key| !self.processed_generation_keys.contains(key));
+                if !has_new_key {
+                    skipped_duplicates += 1;
+                    continue;
+                }
+                self.processed_generation_keys.extend(keys);
                 unprocessed_seeds.insert(seed.clone());
                 processed_work_items += 1;
                 if processed_work_items > MAX_DYNAMIC_WORK_ITEMS {
@@ -160,11 +215,15 @@ impl DynamicChemistryRegistry {
                     skipped_duplicates,
                     remaining_queue: 0,
                     reached_fixed_point: true,
+                    generator_errors: Vec::new(),
                 });
             }
 
-            let generated =
-                organic::generate_organic_reactions_for(&self.registry, &unprocessed_seeds)?;
+            let generated = organic::generate_organic_reactions_for_scope(
+                &self.registry,
+                &unprocessed_seeds,
+                &scope,
+            )?;
             let mut builder = ChemistryRegistryBuilder::from_registry(&self.registry);
             let mut changed = false;
 
@@ -188,6 +247,16 @@ impl DynamicChemistryRegistry {
                 }
                 self.canonical_to_id.insert(canonical, substance.id.clone());
                 queue.insert(substance.id.clone());
+                scope.insert(substance.id.clone());
+                if queue.len() > MAX_DYNAMIC_QUEUE_ITEMS {
+                    return Err(ChemistryError::GenerationInvariantViolation {
+                        generator: "<dynamic-generation>".to_string(),
+                        substance_id: substance.id.to_string(),
+                        reason: format!(
+                            "dynamic generation queue exceeded {MAX_DYNAMIC_QUEUE_ITEMS} substances before reaching a fixed point"
+                        ),
+                    });
+                }
                 builder = builder.substance(substance);
                 added_substances += 1;
                 changed = true;
@@ -212,6 +281,7 @@ impl DynamicChemistryRegistry {
                     skipped_duplicates,
                     remaining_queue: queue.len(),
                     reached_fixed_point: true,
+                    generator_errors: Vec::new(),
                 });
             }
             self.registry = builder.build()?;
@@ -226,18 +296,11 @@ impl DynamicChemistryRegistry {
                     skipped_duplicates,
                     remaining_queue: 0,
                     reached_fixed_point: true,
+                    generator_errors: Vec::new(),
                 });
             }
+            iteration += 1;
         }
-        Ok(DynamicGenerationReport {
-            iterations: max_iterations,
-            added_substances,
-            added_reactions,
-            processed_work_items,
-            skipped_duplicates,
-            remaining_queue: queue.len(),
-            reached_fixed_point: false,
-        })
     }
 
     fn rebuild_canonical_index(&mut self) -> ChemistryResult<()> {
@@ -252,6 +315,113 @@ impl DynamicChemistryRegistry {
         }
         Ok(())
     }
+
+    fn validated_substance_set(
+        &self,
+        substance_ids: impl IntoIterator<Item = SubstanceId>,
+    ) -> ChemistryResult<BTreeSet<SubstanceId>> {
+        let mut result = BTreeSet::new();
+        for substance_id in substance_ids {
+            self.registry.substance(&substance_id)?;
+            result.insert(substance_id);
+        }
+        Ok(result)
+    }
+
+    fn generation_keys_for_substance(
+        &self,
+        substance_id: &SubstanceId,
+    ) -> ChemistryResult<BTreeSet<String>> {
+        let substance = self.registry.substance(substance_id)?;
+        let Some(structure) = &substance.molecular_structure else {
+            return Ok(BTreeSet::new());
+        };
+        let canonical = write_frowns(structure)?;
+        let mut keys = BTreeSet::new();
+        for group in &substance.functional_groups {
+            for generator in generators_for_group(&group.group_type) {
+                keys.insert(format!(
+                    "{canonical}|{generator}|{}",
+                    functional_group_key(structure, group)
+                ));
+            }
+        }
+        Ok(keys)
+    }
+}
+
+fn generators_for_group(group_type: &FunctionalGroupType) -> &'static [&'static str] {
+    match group_type {
+        FunctionalGroupType::Halide => &[
+            "halide_hydroxide_substitution",
+            "halide_ammonia_substitution",
+            "halide_cyanide_substitution",
+            "halide_amine_substitution",
+        ],
+        FunctionalGroupType::Alcohol => &[
+            "alcohol_oxidation",
+            "alcohol_dehydration",
+            "thionyl_chloride_substitution",
+            "carboxylic_acid_esterification",
+            "acyl_chloride_esterification",
+        ],
+        FunctionalGroupType::Alkoxide => &["alkoxide_protonation"],
+        FunctionalGroupType::Nitrile => &["nitrile_hydrolysis", "nitrile_hydrogenation"],
+        FunctionalGroupType::Nitro => &["nitro_hydrogenation"],
+        FunctionalGroupType::AcylChloride => {
+            &["acyl_chloride_hydrolysis", "acyl_chloride_esterification"]
+        }
+        FunctionalGroupType::CarboxylicAcid => {
+            &["acyl_chloride_formation", "carboxylic_acid_esterification"]
+        }
+        FunctionalGroupType::Carbonyl => &[
+            "aldehyde_oxidation",
+            "cyanide_nucleophilic_addition",
+            "wolff_kishner_reduction",
+        ],
+        FunctionalGroupType::UnsubstitutedAmide => &["amide_hydrolysis"],
+        FunctionalGroupType::PrimaryAmine => &["amine_phosgenation"],
+        FunctionalGroupType::NonTertiaryAmine => {
+            &["cyanamide_addition", "halide_amine_substitution"]
+        }
+        FunctionalGroupType::Isocyanate => &["isocyanate_hydrolysis"],
+        FunctionalGroupType::Borane => &["borane_oxidation"],
+        FunctionalGroupType::BorateEster => &["borate_ester_hydrolysis"],
+        FunctionalGroupType::Alkene => &[
+            "alkene_chlorination",
+            "alkene_chlorohydrination",
+            "alkene_hydrolysis",
+            "alkene_hydroboration_with_borane",
+            "alkene_hydrochlorination",
+            "alkene_hydrogenation",
+            "alkene_hydroiodination",
+            "alkene_iodination",
+        ],
+        FunctionalGroupType::Alkyne => &[
+            "alkyne_chlorination",
+            "alkyne_chlorohydrination",
+            "alkyne_hydrolysis",
+            "alkyne_hydroboration_with_borane",
+            "alkyne_hydrochlorination",
+            "alkyne_hydrogenation",
+            "alkyne_hydroiodination",
+            "alkyne_iodination",
+        ],
+        _ => &[],
+    }
+}
+
+fn functional_group_key(structure: &MolecularStructure, group: &FunctionalGroup) -> String {
+    let mut atoms = group
+        .atoms
+        .iter()
+        .map(|index| {
+            let atom = &structure.atoms[*index];
+            format!("{}:{}:{:.3}", index, atom.element, atom.charge)
+        })
+        .collect::<Vec<_>>();
+    atoms.sort();
+    format!("{:?}|{}", group.group_type, atoms.join(","))
 }
 
 fn build_dynamic_substance(
@@ -355,5 +525,51 @@ mod tests {
         assert_eq!(second.added_substances, 0);
         assert_eq!(second.added_reactions, 0);
         assert!(second.skipped_duplicates > 0 || second.processed_work_items > 0);
+    }
+
+    #[test]
+    fn dynamic_generation_can_run_to_fixed_point_without_iteration_limit() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let methane = registry.resolve_frowns("C").unwrap();
+        let first = registry
+            .generate_reactions_for_to_fixed_point(&methane)
+            .unwrap();
+        let second = registry
+            .generate_reactions_for_to_fixed_point(&methane)
+            .unwrap();
+
+        assert!(first.reached_fixed_point);
+        assert_eq!(first.remaining_queue, 0);
+        assert!(first.generator_errors.is_empty());
+        assert!(second.reached_fixed_point);
+        assert_eq!(second.added_substances, 0);
+        assert_eq!(second.added_reactions, 0);
+        assert_eq!(second.processed_work_items, 0);
+    }
+
+    #[test]
+    fn pair_generators_use_generation_scope_not_whole_registry() {
+        let mut acid_only = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let acetic_acid = acid_only.resolve_frowns("CC(=O)O").unwrap();
+        acid_only.generate_reactions_for(&acetic_acid, 1).unwrap();
+        assert!(!acid_only.registry().reactions().any(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("carboxylic_acid_esterification/destroy_acetic_acid/destroy_ethanol/")
+        }));
+
+        let mut acid_and_alcohol = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let acetic_acid = acid_and_alcohol.resolve_frowns("CC(=O)O").unwrap();
+        let ethanol = acid_and_alcohol.resolve_frowns("CCO").unwrap();
+        acid_and_alcohol
+            .generate_reactions_for_substances([acetic_acid, ethanol], 1)
+            .unwrap();
+        assert!(acid_and_alcohol.registry().reactions().any(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("carboxylic_acid_esterification/destroy_acetic_acid/destroy_ethanol/")
+        }));
     }
 }

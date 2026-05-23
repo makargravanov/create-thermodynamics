@@ -6,6 +6,7 @@ use super::molecule::{
 };
 
 const DESTROY_NAMESPACE: &str = "destroy";
+const MAX_EXACT_CANONICAL_PERMUTATIONS: usize = 10_000_000;
 
 pub fn parse_frowns(input: &str) -> ChemistryResult<MolecularStructure> {
     let trimmed = input.trim();
@@ -123,16 +124,14 @@ fn canonical_graph_body(
                 "graph has too many equivalent atom permutations to canonicalize safely",
             )
         })?;
-    if permutation_count > 100_000 {
-        let mut order = included.iter().copied().collect::<Vec<_>>();
-        order.sort_by_key(|atom| {
-            (
-                labels[*atom].clone(),
-                atom_token(&structure.atoms[*atom]),
-                *atom,
-            )
+    if permutation_count > MAX_EXACT_CANONICAL_PERMUTATIONS {
+        return Err(ChemistryError::GenerationInvariantViolation {
+            generator: "canonical_structure_code".to_string(),
+            substance_id: structure.source_code.clone(),
+            reason: format!(
+                "exact graph canonicalization would require {permutation_count} equivalent atom permutations"
+            ),
         });
-        return graph_code_for_order(structure, &order);
     }
 
     let mut best: Option<String> = None;

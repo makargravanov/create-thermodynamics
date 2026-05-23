@@ -473,12 +473,39 @@ mod tests {
     fn destroy_reaction_catalog_builds() {
         let registry = destroy_registry_builder().unwrap().build().unwrap();
 
-        assert_eq!(DESTROY_EXPLICIT_REACTION_COUNT, 119);
+        assert_eq!(DESTROY_EXPLICIT_REACTION_COUNT, 118);
         assert_eq!(
             DESTROY_REGISTERED_REACTION_COUNT,
             registry.reactions().count()
         );
-        assert_eq!(DESTROY_REGISTERED_REACTION_COUNT, 149);
+        assert_eq!(DESTROY_REGISTERED_REACTION_COUNT, 155);
+    }
+
+    #[test]
+    fn destroy_reverse_reactions_are_registered_as_real_pairs() {
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        for id in [
+            "destroy:chlorine_solvation",
+            "destroy:hydroxide_neutralization",
+            "destroy:iodine_dissolution",
+            "destroy:oleum_formation",
+            "destroy:sodium_amalgamization",
+            "destroy:sulfur_trioxide_hydration",
+            "destroy:tetraborate_equilibrium",
+        ] {
+            let forward = registry.reaction(&id.into()).unwrap();
+            let reverse_id = forward
+                .reverse_reaction_id
+                .as_ref()
+                .expect("forward reaction must point at reverse reaction");
+            let reverse = registry.reaction(reverse_id).unwrap();
+            assert_eq!(reverse.reverse_reaction_id.as_ref(), Some(&forward.id));
+            assert!(!reverse.show_in_jei);
+        }
+
+        assert!(registry
+            .reaction(&"destroy:iron_iii_reduction".into())
+            .is_err());
     }
 
     #[test]

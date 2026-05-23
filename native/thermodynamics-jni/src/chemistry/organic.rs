@@ -31,6 +31,31 @@ pub(crate) struct GeneratedOrganicCatalog {
     pub(crate) reactions: Vec<Reaction>,
 }
 
+struct GenerationScope {
+    substances: BTreeSet<SubstanceId>,
+}
+
+impl GenerationScope {
+    fn all(registry: &ChemistryRegistry) -> Self {
+        Self {
+            substances: registry
+                .substances()
+                .map(|substance| substance.id.clone())
+                .collect(),
+        }
+    }
+
+    fn from_substances(substances: &BTreeSet<SubstanceId>) -> Self {
+        Self {
+            substances: substances.clone(),
+        }
+    }
+
+    fn contains(&self, substance_id: &SubstanceId) -> bool {
+        self.substances.contains(substance_id)
+    }
+}
+
 struct DerivedSubstanceResolver {
     canonical_to_id: BTreeMap<String, SubstanceId>,
     generated_id_to_canonical: BTreeMap<SubstanceId, String>,
@@ -38,24 +63,24 @@ struct DerivedSubstanceResolver {
 }
 
 impl DerivedSubstanceResolver {
-    fn new(registry: &ChemistryRegistry) -> Self {
+    fn new(registry: &ChemistryRegistry) -> ChemistryResult<Self> {
         let mut canonical_to_id = BTreeMap::new();
         for substance in registry.substances() {
             if let Some(structure) = &substance.molecular_structure {
                 canonical_to_id
-                    .entry(structure.canonical_code())
+                    .entry(super::frowns::write_frowns(structure)?)
                     .or_insert_with(|| substance.id.clone());
             }
         }
-        Self {
+        Ok(Self {
             canonical_to_id,
             generated_id_to_canonical: BTreeMap::new(),
             substances: Vec::new(),
-        }
+        })
     }
 
     fn resolve(&mut self, structure: MolecularStructure) -> ChemistryResult<SubstanceId> {
-        let canonical = structure.canonical_code();
+        let canonical = super::frowns::write_frowns(&structure)?;
         if let Some(id) = self.canonical_to_id.get(&canonical) {
             return Ok(id.clone());
         }
@@ -94,24 +119,32 @@ impl DerivedSubstanceResolver {
 pub(crate) fn generate_organic_reactions(
     registry: &ChemistryRegistry,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
-    generate_organic_reactions_with_seeds(registry, None)
+    let scope = GenerationScope::all(registry);
+    generate_organic_reactions_with_seeds(registry, None, &scope)
 }
 
-pub(crate) fn generate_organic_reactions_for(
+pub(crate) fn generate_organic_reactions_for_scope(
     registry: &ChemistryRegistry,
     seeds: &BTreeSet<SubstanceId>,
+    scope: &BTreeSet<SubstanceId>,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
-    generate_organic_reactions_with_seeds(registry, Some(seeds))
+    let scope = GenerationScope::from_substances(scope);
+    generate_organic_reactions_with_seeds(registry, Some(seeds), &scope)
 }
 
 fn generate_organic_reactions_with_seeds(
     registry: &ChemistryRegistry,
     seeds: Option<&BTreeSet<SubstanceId>>,
+    scope: &GenerationScope,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
-    let mut resolver = DerivedSubstanceResolver::new(registry);
+    let mut resolver = DerivedSubstanceResolver::new(registry)?;
     let mut reactions = Vec::new();
     let mut reaction_ids = BTreeSet::new();
-    let reactants = registry.substances().cloned().collect::<Vec<_>>();
+    let reactants = registry
+        .substances()
+        .filter(|substance| scope.contains(&substance.id))
+        .cloned()
+        .collect::<Vec<_>>();
 
     for substance in &reactants {
         if seeds.is_some_and(|seeds| !seeds.contains(&substance.id)) {
@@ -1715,7 +1748,7 @@ mod tests {
                 continue;
             }
             if let Some(structure) = &substance.molecular_structure {
-                assert!(canonical_codes.insert(structure.canonical_code()));
+                assert!(canonical_codes.insert(structure.canonical_code().unwrap()));
             }
         }
         assert!(registry.reactions().count() > super::super::DESTROY_REGISTERED_REACTION_COUNT);

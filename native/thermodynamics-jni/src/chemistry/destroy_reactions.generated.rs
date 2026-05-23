@@ -2,8 +2,8 @@ use super::error::ChemistryResult;
 use super::reaction::Reaction;
 use super::registry::ChemistryRegistryBuilder;
 
-pub const DESTROY_EXPLICIT_REACTION_COUNT: usize = 119;
-pub const DESTROY_REGISTERED_REACTION_COUNT: usize = 149;
+pub const DESTROY_EXPLICIT_REACTION_COUNT: usize = 118;
+pub const DESTROY_REGISTERED_REACTION_COUNT: usize = 155;
 
 pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder) -> ChemistryResult<ChemistryRegistryBuilder> {
     builder = builder.reaction(
@@ -240,9 +240,24 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .reactant("destroy:water", 1, 1)
             .product("destroy:hydrochloric_acid", 1)
             .product("destroy:hypochlorous_acid", 1)
+            .reverse_reaction_id("destroy:chlorine_solvation.reverse")
             .requires_uv()
             .display_as_reversible()
             .pre_exponential_factor(2.0)
+            .activation_energy_kj_per_mol(5.0)
+            .allow_mass_imbalance()
+            .build(),
+    );
+    builder = builder.reaction(
+        Reaction::builder("destroy:chlorine_solvation.reverse")
+            .reactant("destroy:hydrochloric_acid", 1, 1)
+            .reactant("destroy:hypochlorous_acid", 1, 1)
+            .product("destroy:chlorine", 1)
+            .product("destroy:water", 1)
+            .reverse_reaction_id("destroy:chlorine_solvation")
+            .requires_uv()
+            .show_in_jei(false)
+            .activation_energy_kj_per_mol(5.0)
             .allow_mass_imbalance()
             .build(),
     );
@@ -561,10 +576,24 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .reactant("destroy:hydroxide", 1, 1)
             .reactant("destroy:proton", 1, 1)
             .product("destroy:water", 1)
+            .reverse_reaction_id("destroy:hydroxide_neutralization.reverse")
             .display_as_reversible()
             .pre_exponential_factor(130000000.0)
             .activation_energy_kj_per_mol(0.0)
             .enthalpy_change_kj_per_mol(-55.3745)
+            .allow_mass_imbalance()
+            .build(),
+    );
+    builder = builder.reaction(
+        Reaction::builder("destroy:hydroxide_neutralization.reverse")
+            .reactant("destroy:water", 1, 0)
+            .product("destroy:hydroxide", 1)
+            .product("destroy:proton", 1)
+            .reverse_reaction_id("destroy:hydroxide_neutralization")
+            .show_in_jei(false)
+            .pre_exponential_factor(6641.220309)
+            .activation_energy_kj_per_mol(55.3745)
+            .enthalpy_change_kj_per_mol(55.3745)
             .allow_mass_imbalance()
             .build(),
     );
@@ -603,7 +632,18 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .catalyst_order("destroy:water", 0)
             .product("destroy:iodine", 1)
             .external_reactant("addSimpleItemReactant(DestroyItems.IODINE::get, 2f)", 2.0)
+            .reverse_reaction_id("destroy:iodine_dissolution.reverse")
             .display_as_reversible()
+            .allow_mass_imbalance()
+            .build(),
+    );
+    builder = builder.reaction(
+        Reaction::builder("destroy:iodine_dissolution.reverse")
+            .reactant("destroy:iodine", 1, 1)
+            .catalyst_order("destroy:water", 0)
+            .reverse_reaction_id("destroy:iodine_dissolution")
+            .reaction_result("withResult(2.1f, PrecipitateReactionResult.of(DestroyItems.IODINE::asStack))", 2.1)
+            .show_in_jei(false)
             .allow_mass_imbalance()
             .build(),
     );
@@ -632,15 +672,6 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .pre_exponential_factor(10.0)
             .activation_energy_kj_per_mol(10.0)
             .allow_mass_imbalance()
-            .build(),
-    );
-    builder = builder.reaction(
-        Reaction::builder("destroy:iron_iii_reduction")
-            .reactant("destroy:iron_iii", 1, 1)
-            .product("destroy:iron_ii", 1)
-            .display_as_reversible()
-            .allow_mass_imbalance()
-            .allow_charge_imbalance()
             .build(),
     );
     builder = builder.reaction(
@@ -799,8 +830,20 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .reactant("destroy:sulfuric_acid", 1, 1)
             .reactant("destroy:sulfur_trioxide", 1, 1)
             .product("destroy:oleum", 1)
+            .reverse_reaction_id("destroy:oleum_formation.reverse")
             .display_as_reversible()
             .pre_exponential_factor(20000.0)
+            .allow_mass_imbalance()
+            .build(),
+    );
+    builder = builder.reaction(
+        Reaction::builder("destroy:oleum_formation.reverse")
+            .reactant("destroy:oleum", 1, 1)
+            .product("destroy:sulfuric_acid", 1)
+            .product("destroy:sulfur_trioxide", 1)
+            .reverse_reaction_id("destroy:oleum_formation")
+            .show_in_jei(false)
+            .pre_exponential_factor(5000.0)
             .allow_mass_imbalance()
             .build(),
     );
@@ -899,7 +942,19 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .catalyst_order("destroy:mercury", 1)
             .product("destroy:sodium_metal", 1)
             .external_reactant("addSimpleItemTagReactant(AllTags.forgeItemTag(\"ingots/sodium\"), 9.9f)", 9.9)
+            .reverse_reaction_id("destroy:sodium_amalgamization.reverse")
             .display_as_reversible()
+            .activation_energy_kj_per_mol(1.0)
+            .allow_mass_imbalance()
+            .build(),
+    );
+    builder = builder.reaction(
+        Reaction::builder("destroy:sodium_amalgamization.reverse")
+            .reactant("destroy:sodium_metal", 1, 1)
+            .catalyst_order("destroy:mercury", 0)
+            .reverse_reaction_id("destroy:sodium_amalgamization")
+            .reaction_result("withResult(10f, PrecipitateReactionResult.of(DestroyItems.SODIUM_INGOT::asStack))", 10.0)
+            .show_in_jei(false)
             .activation_energy_kj_per_mol(1.0)
             .allow_mass_imbalance()
             .build(),
@@ -999,9 +1054,23 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .reactant("destroy:sulfur_trioxide", 1, 1)
             .reactant("destroy:water", 1, 1)
             .product("destroy:sulfuric_acid", 1)
+            .reverse_reaction_id("destroy:sulfur_trioxide_hydration.reverse")
             .display_as_reversible()
             .activation_energy_kj_per_mol(10.0)
             .enthalpy_change_kj_per_mol(-200.0)
+            .allow_mass_imbalance()
+            .build(),
+    );
+    builder = builder.reaction(
+        Reaction::builder("destroy:sulfur_trioxide_hydration.reverse")
+            .reactant("destroy:sulfuric_acid", 1, 1)
+            .product("destroy:sulfur_trioxide", 1)
+            .product("destroy:water", 1)
+            .reverse_reaction_id("destroy:sulfur_trioxide_hydration")
+            .show_in_jei(false)
+            .pre_exponential_factor(1000.0)
+            .activation_energy_kj_per_mol(210.0)
+            .enthalpy_change_kj_per_mol(200.0)
             .allow_mass_imbalance()
             .build(),
     );
@@ -1020,7 +1089,19 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .reactant("destroy:tetrahydroxyborate", 2, 1)
             .product("destroy:tetrahydroxy_tetraborate", 1)
             .product("destroy:water", 5)
+            .reverse_reaction_id("destroy:tetraborate_equilibrium.reverse")
             .display_as_reversible()
+            .allow_mass_imbalance()
+            .build(),
+    );
+    builder = builder.reaction(
+        Reaction::builder("destroy:tetraborate_equilibrium.reverse")
+            .reactant("destroy:tetrahydroxy_tetraborate", 1, 1)
+            .reactant("destroy:water", 5, 1)
+            .product("destroy:boric_acid", 2)
+            .product("destroy:tetrahydroxyborate", 2)
+            .reverse_reaction_id("destroy:tetraborate_equilibrium")
+            .show_in_jei(false)
             .allow_mass_imbalance()
             .build(),
     );
