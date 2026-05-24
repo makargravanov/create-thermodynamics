@@ -3,6 +3,9 @@ use std::fmt::{Display, Formatter};
 use super::error::{ChemistryError, ChemistryResult};
 use super::functional_group::{find_functional_groups, FunctionalGroup};
 use super::molecule::MolecularStructure;
+use super::redox::{
+    assign_oxidation_states, explicit_oxidation_assignment, ExplicitOxidationState, RedoxRole,
+};
 
 const MOLECULAR_MASS_TOLERANCE_GRAMS_PER_MOL: f64 = 1.0e-6;
 
@@ -89,6 +92,8 @@ pub struct Substance {
     pub color_argb: u32,
     pub tags: Vec<SubstanceTagId>,
     pub phase_properties: SubstancePhaseBehavior,
+    pub redox_roles: Vec<RedoxRole>,
+    pub explicit_oxidation_states: Vec<ExplicitOxidationState>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -205,6 +210,8 @@ impl Substance {
                     can_form_liquid_phase: false,
                 }
             },
+            redox_roles: Vec::new(),
+            explicit_oxidation_states: Vec::new(),
         }
     }
 
@@ -242,6 +249,19 @@ impl Substance {
         solid_density_grams_per_bucket: f64,
     ) -> Self {
         self.solid_density_grams_per_bucket = solid_density_grams_per_bucket;
+        self
+    }
+
+    pub fn with_redox_roles(mut self, redox_roles: Vec<RedoxRole>) -> Self {
+        self.redox_roles = redox_roles;
+        self
+    }
+
+    pub fn with_explicit_oxidation_states(
+        mut self,
+        explicit_oxidation_states: Vec<ExplicitOxidationState>,
+    ) -> Self {
+        self.explicit_oxidation_states = explicit_oxidation_states;
         self
     }
 
@@ -333,6 +353,9 @@ impl Substance {
             });
         }
         self.phase_properties.validate(&self.id, self.charge)?;
+        if !self.explicit_oxidation_states.is_empty() {
+            explicit_oxidation_assignment(&self.id, self.charge, &self.explicit_oxidation_states)?;
+        }
         if let Some(structure) = &self.molecular_structure {
             let summary =
                 structure
@@ -358,6 +381,21 @@ impl Substance {
                     reason: format!(
                         "molecular structure mass {} does not match substance mass {}",
                         summary.molar_mass_grams, self.molar_mass_grams
+                    ),
+                });
+            }
+            let assignment = assign_oxidation_states(structure).map_err(|error| {
+                ChemistryError::InvalidSubstance {
+                    substance_id: self.id.to_string(),
+                    reason: format!("invalid oxidation state assignment: {error}"),
+                }
+            })?;
+            if assignment.total_charge != self.charge {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: self.id.to_string(),
+                    reason: format!(
+                        "oxidation states sum to charge {}, expected {}",
+                        assignment.total_charge, self.charge
                     ),
                 });
             }

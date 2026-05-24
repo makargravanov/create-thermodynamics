@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 
 use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::MixturePhase;
+use super::redox::{RedoxAnnotation, ELECTRON_EXTERNAL_ID};
 use super::substance::SubstanceId;
 
 pub const GAS_CONSTANT_J_PER_MOL_KELVIN: f64 = 8.314_462_618_153_24;
@@ -67,6 +68,7 @@ pub struct Reaction {
     pub products: Vec<StoichiometricTerm>,
     pub orders: BTreeMap<SubstanceId, u32>,
     pub external_reactants: Vec<ExternalRequirement>,
+    pub external_products: Vec<ExternalRequirement>,
     pub external_catalysts: Vec<ExternalRequirement>,
     pub reaction_results: Vec<ReactionResult>,
     pub pre_exponential_factor: f64,
@@ -79,6 +81,7 @@ pub struct Reaction {
     pub show_in_jei_condition: Option<String>,
     pub allow_mass_imbalance: bool,
     pub allow_charge_imbalance: bool,
+    pub redox: Option<RedoxAnnotation>,
     pub phase_access: BTreeMap<SubstanceId, ReactionPhaseAccess>,
     pub product_phases: BTreeMap<SubstanceId, MixturePhase>,
 }
@@ -142,6 +145,7 @@ impl Reaction {
                 products: Vec::new(),
                 orders: BTreeMap::new(),
                 external_reactants: Vec::new(),
+                external_products: Vec::new(),
                 external_catalysts: Vec::new(),
                 reaction_results: Vec::new(),
                 pre_exponential_factor: 10_000.0,
@@ -154,6 +158,7 @@ impl Reaction {
                 show_in_jei_condition: None,
                 allow_mass_imbalance: false,
                 allow_charge_imbalance: false,
+                redox: None,
                 phase_access: BTreeMap::new(),
                 product_phases: BTreeMap::new(),
             },
@@ -176,6 +181,7 @@ impl Reaction {
     pub fn has_external_context(&self) -> bool {
         self.requires_uv
             || !self.external_reactants.is_empty()
+            || !self.external_products.is_empty()
             || !self.external_catalysts.is_empty()
             || !self.reaction_results.is_empty()
     }
@@ -227,6 +233,7 @@ impl Reaction {
         for requirement in self
             .external_reactants
             .iter()
+            .chain(self.external_products.iter())
             .chain(self.external_catalysts.iter())
         {
             if !requirement.moles_per_reaction.is_finite() || requirement.moles_per_reaction <= 0.0
@@ -292,6 +299,26 @@ impl Reaction {
                 reaction_id: reaction_id.clone(),
                 reason: "enthalpy change must be finite".to_string(),
             });
+        }
+        if let Some(redox) = &self.redox {
+            if redox.transferred_electrons == 0 {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "redox annotation must transfer at least one electron".to_string(),
+                });
+            }
+            if self.allow_charge_imbalance {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "redox reactions may not allow charge imbalance".to_string(),
+                });
+            }
+            if !redox.electron_balance_checked {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "redox annotation must be explicitly electron-balanced".to_string(),
+                });
+            }
         }
         Ok(())
     }
@@ -373,6 +400,31 @@ impl ReactionBuilder {
         self
     }
 
+    pub fn chemical_external_product(
+        mut self,
+        description: impl Into<String>,
+        moles: f64,
+        molar_mass_grams: f64,
+        charge: i32,
+    ) -> Self {
+        self.reaction.external_products.push(ExternalRequirement {
+            description: description.into(),
+            moles_per_reaction: moles,
+            molar_mass_grams: Some(molar_mass_grams),
+            charge: Some(charge),
+            unchecked_mass_reason: None,
+        });
+        self
+    }
+
+    pub fn electron_reactant(self, count: u32) -> Self {
+        self.chemical_external_reactant(ELECTRON_EXTERNAL_ID, count as f64, 0.0, -1)
+    }
+
+    pub fn electron_product(self, count: u32) -> Self {
+        self.chemical_external_product(ELECTRON_EXTERNAL_ID, count as f64, 0.0, -1)
+    }
+
     pub fn chemical_external_catalyst(
         mut self,
         description: impl Into<String>,
@@ -445,6 +497,11 @@ impl ReactionBuilder {
 
     pub fn allow_charge_imbalance(mut self) -> Self {
         self.reaction.allow_charge_imbalance = true;
+        self
+    }
+
+    pub fn redox_annotation(mut self, annotation: RedoxAnnotation) -> Self {
+        self.reaction.redox = Some(annotation);
         self
     }
 

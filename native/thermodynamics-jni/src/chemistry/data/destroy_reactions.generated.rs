@@ -1,5 +1,6 @@
 use super::error::ChemistryResult;
 use super::reaction::Reaction;
+use super::redox::{RedoxAnnotation, RedoxEnvironment};
 use super::registry::ChemistryRegistryBuilder;
 
 pub const DESTROY_EXPLICIT_REACTION_COUNT: usize = 118;
@@ -313,6 +314,12 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .reactant("destroy:hydroxide", 10, 1)
             .product("destroy:chromate", 2)
             .product("destroy:water", 8)
+            .redox_annotation(RedoxAnnotation::checked(
+                "destroy:hydrogen_peroxide",
+                "destroy:chromium_iii",
+                6,
+                RedoxEnvironment::Basic,
+            ))
             .allow_mass_imbalance()
             .build(),
     );
@@ -332,6 +339,12 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .reactant("destroy:oxygen", 1, 1)
             .product("destroy:sulfur_trioxide", 2)
             .external_catalyst("addSimpleItemTagCatalyst(AllTags.forgeItemTag(\"dusts/platinum\"), 3f)", 3.0)
+            .redox_annotation(RedoxAnnotation::checked(
+                "destroy:oxygen",
+                "destroy:sulfur_dioxide",
+                4,
+                RedoxEnvironment::Any,
+            ))
             .allow_mass_imbalance()
             .build(),
     );
@@ -653,6 +666,12 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .product("destroy:hydrogen", 3)
             .product("destroy:iron_iii", 2)
             .external_reactant("addSimpleItemTagReactant(AllTags.forgeItemTag(\"dusts/iron\"), 4.5f)", 4.5)
+            .redox_annotation(RedoxAnnotation::checked(
+                "destroy:proton",
+                "external:iron",
+                6,
+                RedoxEnvironment::Acidic,
+            ))
             .allow_mass_imbalance()
             .build(),
     );
@@ -1197,6 +1216,12 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .product("destroy:hydrogen", 1)
             .product("destroy:zinc_ion", 1)
             .external_reactant("addSimpleItemTagReactant(AllTags.forgeItemTag(\"dusts/zinc\"), 9f)", 9.0)
+            .redox_annotation(RedoxAnnotation::checked(
+                "destroy:proton",
+                "external:zinc",
+                2,
+                RedoxEnvironment::Acidic,
+            ))
             .allow_mass_imbalance()
             .build(),
     );

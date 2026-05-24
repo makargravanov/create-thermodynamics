@@ -19,6 +19,8 @@ pub mod organic;
 pub mod reaction;
 #[path = "data/reactions.rs"]
 pub mod reactions;
+#[path = "core/redox.rs"]
+pub mod redox;
 #[path = "core/registry.rs"]
 pub mod registry;
 #[path = "core/simulation.rs"]

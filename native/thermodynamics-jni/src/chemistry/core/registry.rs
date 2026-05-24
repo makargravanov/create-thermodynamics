@@ -3,6 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::MixturePhase;
 use super::reaction::{Reaction, ReactionId, StoichiometricTerm};
+use super::redox::{
+    validate_half_reaction_conservation, validate_half_reaction_shape, validate_redox_annotation,
+    validate_redox_pair, RedoxHalfReaction, RedoxPair,
+};
 use super::solution::{AcidBaseSpec, EquilibriumSpec, IndexedEquilibrium, IndexedEquilibriumTerm};
 use super::substance::{Substance, SubstanceAggregateState, SubstanceId, SubstanceTagId};
 
@@ -112,6 +116,7 @@ pub struct ChemistryRegistry {
     gas_solubility: BTreeMap<SubstanceIndex, GasSolubilityModel>,
     acid_base_specs: Vec<AcidBaseSpec>,
     indexed_equilibria: Vec<IndexedEquilibrium>,
+    redox_half_reactions: BTreeMap<String, RedoxHalfReaction>,
 }
 
 impl ChemistryRegistry {
@@ -257,6 +262,10 @@ impl ChemistryRegistry {
     pub(crate) fn indexed_equilibria(&self) -> &[IndexedEquilibrium] {
         &self.indexed_equilibria
     }
+
+    pub fn redox_half_reactions(&self) -> impl Iterator<Item = &RedoxHalfReaction> {
+        self.redox_half_reactions.values()
+    }
 }
 
 #[derive(Default)]
@@ -268,6 +277,8 @@ pub struct ChemistryRegistryBuilder {
     gas_solubility: Vec<(SubstanceId, GasSolubilityModel)>,
     acid_base_specs: Vec<AcidBaseSpec>,
     equilibria: Vec<EquilibriumSpec>,
+    redox_half_reactions: Vec<RedoxHalfReaction>,
+    redox_pairs: Vec<RedoxPair>,
 }
 
 impl ChemistryRegistryBuilder {
@@ -311,6 +322,8 @@ impl ChemistryRegistryBuilder {
                 })
                 .map(|equilibrium| equilibrium.spec.clone())
                 .collect(),
+            redox_half_reactions: registry.redox_half_reactions.values().cloned().collect(),
+            redox_pairs: Vec::new(),
         }
     }
 
@@ -359,7 +372,31 @@ impl ChemistryRegistryBuilder {
         self
     }
 
+    pub fn redox_half_reaction(mut self, half_reaction: RedoxHalfReaction) -> Self {
+        self.redox_half_reactions.push(half_reaction);
+        self
+    }
+
+    pub fn redox_pair(mut self, pair: RedoxPair) -> Self {
+        self.redox_pairs.push(pair);
+        self
+    }
+
     pub fn build(self) -> ChemistryResult<ChemistryRegistry> {
+        let mut redox_half_reactions = BTreeMap::new();
+        for half in self.redox_half_reactions {
+            validate_half_reaction_shape(&half)?;
+            if redox_half_reactions.insert(half.id.clone(), half).is_some() {
+                return Err(ChemistryError::DuplicateReaction(
+                    "<redox-half>".to_string(),
+                ));
+            }
+        }
+        let mut reactions = self.reactions;
+        for pair in self.redox_pairs {
+            validate_redox_pair(&pair, &redox_half_reactions)?;
+            reactions.push(pair.reaction);
+        }
         let mut substance_map = BTreeMap::new();
         for substance in self.substances {
             substance.validate()?;
@@ -379,7 +416,7 @@ impl ChemistryRegistryBuilder {
         let substance_properties = build_substance_properties_table(&substances_by_index);
 
         let mut reaction_map = BTreeMap::new();
-        for reaction in self.reactions {
+        for reaction in reactions {
             reaction.validate_shape()?;
             let id = reaction.id.clone();
             if reaction_map.insert(id.clone(), reaction).is_some() {
@@ -434,7 +471,9 @@ impl ChemistryRegistryBuilder {
             gas_solubility,
             acid_base_specs,
             indexed_equilibria,
+            redox_half_reactions,
         };
+        registry.validate_redox_half_reactions()?;
         registry.validate_substance_tags()?;
         registry.validate_reactions()?;
         Ok(registry)
@@ -457,7 +496,28 @@ impl ChemistryRegistry {
     }
 
     fn validate_reactions(&self) -> ChemistryResult<()> {
+        let known_reaction_ids = self
+            .reaction_id_to_index
+            .iter()
+            .map(|(id, index)| (id.clone(), index.0))
+            .collect::<BTreeMap<_, _>>();
         for reaction in &self.reactions_by_index {
+            validate_redox_annotation(reaction, &known_reaction_ids, &self.redox_half_reactions)?;
+            if let Some(redox) = &reaction.redox {
+                for participant in [redox.oxidant.as_ref(), redox.reductant.as_ref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    if !participant.as_str().starts_with("external:")
+                        && !self.substance_id_to_index.contains_key(participant)
+                    {
+                        return Err(ChemistryError::UnknownSubstance {
+                            reaction_id: reaction.id.to_string(),
+                            substance_id: participant.to_string(),
+                        });
+                    }
+                }
+            }
             for term in reaction.reactants.iter().chain(reaction.products.iter()) {
                 if !self.substance_id_to_index.contains_key(&term.substance_id) {
                     return Err(ChemistryError::UnknownSubstance {
@@ -490,6 +550,7 @@ impl ChemistryRegistry {
             for requirement in reaction
                 .external_reactants
                 .iter()
+                .chain(reaction.external_products.iter())
                 .chain(reaction.external_catalysts.iter())
             {
                 if requirement.description.trim().is_empty() {
@@ -533,6 +594,15 @@ impl ChemistryRegistry {
                 })
                 .sum::<ChemistryResult<i32>>()?
                 + external_reactant_charge;
+            let external_product_charge = reaction
+                .external_products
+                .iter()
+                .filter_map(|requirement| {
+                    requirement
+                        .charge
+                        .map(|charge| charge * requirement.moles_per_reaction.round() as i32)
+                })
+                .sum::<i32>();
             let product_charge = reaction
                 .products
                 .iter()
@@ -546,7 +616,8 @@ impl ChemistryRegistry {
                             substance_id: term.substance_id.to_string(),
                         })
                 })
-                .sum::<ChemistryResult<i32>>()?;
+                .sum::<ChemistryResult<i32>>()?
+                + external_product_charge;
             if reactant_charge != product_charge && !reaction.allow_charge_imbalance {
                 return Err(ChemistryError::ChargeNotConserved {
                     reaction_id: reaction.id.to_string(),
@@ -573,6 +644,15 @@ impl ChemistryRegistry {
                 })
                 .sum::<ChemistryResult<f64>>()?
                 + external_reactant_mass;
+            let external_product_mass = reaction
+                .external_products
+                .iter()
+                .filter_map(|requirement| {
+                    requirement
+                        .molar_mass_grams
+                        .map(|mass| mass * requirement.moles_per_reaction)
+                })
+                .sum::<f64>();
             let product_mass = reaction
                 .products
                 .iter()
@@ -580,7 +660,8 @@ impl ChemistryRegistry {
                     self.substance(&term.substance_id)
                         .map(|substance| substance.molar_mass_grams * term.coefficient as f64)
                 })
-                .sum::<ChemistryResult<f64>>()?;
+                .sum::<ChemistryResult<f64>>()?
+                + external_product_mass;
             if (reactant_mass - product_mass).abs() > MASS_TOLERANCE_GRAMS_PER_MOL
                 && !reaction.allow_mass_imbalance
             {
@@ -640,6 +721,16 @@ impl ChemistryRegistry {
                     });
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn validate_redox_half_reactions(&self) -> ChemistryResult<()> {
+        for half in self.redox_half_reactions.values() {
+            validate_half_reaction_conservation(half, |substance_id| {
+                let substance = self.substance(substance_id)?;
+                Ok((substance.molar_mass_grams, substance.charge))
+            })?;
         }
         Ok(())
     }

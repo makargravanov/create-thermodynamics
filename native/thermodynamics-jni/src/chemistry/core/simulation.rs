@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::{Mixture, MixturePhase, TRACE_CONCENTRATION_MOL_PER_BUCKET};
 use super::reaction::Reaction;
+use super::redox::RedoxEnvironment;
 use super::registry::{
     ChemistryRegistry, IndexedReaction, ReactionCandidateScratch, SubstanceIndex,
 };
@@ -238,6 +239,9 @@ pub fn reaction_rate_mol_per_bucket_per_tick_with_context(
 ) -> ChemistryResult<f64> {
     let mut rate =
         reaction.rate_constant_per_second(mixture.temperature_kelvin())? / TICKS_PER_SECOND;
+    if !redox_environment_allows_reaction(registry, mixture, reaction)? {
+        return Ok(0.0);
+    }
     if reaction.requires_uv {
         rate *= context.uv_power;
     }
@@ -276,6 +280,9 @@ fn reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
 ) -> ChemistryResult<f64> {
     let mut rate =
         reaction.rate_constant_per_second(mixture.temperature_kelvin())? / TICKS_PER_SECOND;
+    if !redox_environment_allows_reaction(registry, mixture, reaction)? {
+        return Ok(0.0);
+    }
     if reaction.requires_uv {
         rate *= context.uv_power;
     }
@@ -326,6 +333,26 @@ fn context_allows_reaction(reaction: &Reaction, context: &ReactionContext) -> bo
         }
     }
     true
+}
+
+fn redox_environment_allows_reaction(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    reaction: &Reaction,
+) -> ChemistryResult<bool> {
+    let Some(redox) = &reaction.redox else {
+        return Ok(true);
+    };
+    let proton: super::substance::SubstanceId = "destroy:proton".into();
+    let hydroxide: super::substance::SubstanceId = "destroy:hydroxide".into();
+    let proton_activity = mixture.activity_of(registry, &proton, MixturePhase::Aqueous)?;
+    let hydroxide_activity = mixture.activity_of(registry, &hydroxide, MixturePhase::Aqueous)?;
+    Ok(match redox.environment {
+        RedoxEnvironment::Any => true,
+        RedoxEnvironment::Acidic => proton_activity > TRACE_CONCENTRATION_MOL_PER_BUCKET,
+        RedoxEnvironment::Basic => hydroxide_activity > TRACE_CONCENTRATION_MOL_PER_BUCKET,
+        RedoxEnvironment::Neutral => proton_activity <= 1.0e-3 && hydroxide_activity <= 1.0e-3,
+    })
 }
 
 fn limit_by_reactants_and_context(
