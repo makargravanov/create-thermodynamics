@@ -2,6 +2,8 @@ use jni::objects::JClass;
 use jni::sys::{jdouble, jint};
 use jni::JNIEnv;
 
+pub mod chemistry;
+
 const IDEAL_GAS_CONSTANT: f64 = 8.314_462_618_153_24;
 
 #[no_mangle]
