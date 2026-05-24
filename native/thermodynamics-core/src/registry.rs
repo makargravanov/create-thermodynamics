@@ -1,4 +1,4 @@
-use crate::chemistry::{ActivityModel, Element, ElementId, PhaseKind, Species, SpeciesId};
+use crate::chemistry::{Element, ElementId, Species, SpeciesId};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,13 +11,6 @@ pub enum SpeciesRegistryError {
     },
     EmptyComposition(SpeciesId),
     MissingThermoData(SpeciesId),
-    InvalidTemperatureRange(SpeciesId),
-    MissingDataSource(SpeciesId),
-    IncompatibleActivityModel {
-        species_id: SpeciesId,
-        phase: PhaseKind,
-        activity_model: ActivityModel,
-    },
 }
 
 #[derive(Debug, Clone)]
@@ -48,85 +41,10 @@ impl SpeciesRegistry {
             }
             if !species_record
                 .thermo
-                .standard_gibbs_energy
-                .value_joule_per_mol
+                .standard_gibbs_energy_joule_per_mol_298_15
                 .is_finite()
-                || !species_record
-                    .thermo
-                    .standard_gibbs_energy
-                    .reference_temperature_kelvin
-                    .is_finite()
             {
                 return Err(SpeciesRegistryError::MissingThermoData(species_id));
-            }
-            if !species_record
-                .thermo
-                .standard_enthalpy_of_formation
-                .value_joule_per_mol
-                .is_finite()
-                || !species_record
-                    .thermo
-                    .standard_enthalpy_of_formation
-                    .reference_temperature_kelvin
-                    .is_finite()
-                || !species_record
-                    .thermo
-                    .constant_pressure_heat_capacity
-                    .value_joule_per_mol_kelvin
-                    .is_finite()
-            {
-                return Err(SpeciesRegistryError::MissingThermoData(species_id));
-            }
-            let valid_range = species_record.thermo.valid_temperature_range;
-            if !valid_range.min_kelvin.is_finite()
-                || !valid_range.max_kelvin.is_finite()
-                || valid_range.min_kelvin <= 0.0
-                || valid_range.min_kelvin > valid_range.max_kelvin
-                || species_record
-                    .thermo
-                    .standard_gibbs_energy
-                    .reference_temperature_kelvin
-                    < valid_range.min_kelvin
-                || species_record
-                    .thermo
-                    .standard_gibbs_energy
-                    .reference_temperature_kelvin
-                    > valid_range.max_kelvin
-                || species_record
-                    .thermo
-                    .standard_enthalpy_of_formation
-                    .reference_temperature_kelvin
-                    < valid_range.min_kelvin
-                || species_record
-                    .thermo
-                    .standard_enthalpy_of_formation
-                    .reference_temperature_kelvin
-                    > valid_range.max_kelvin
-            {
-                return Err(SpeciesRegistryError::InvalidTemperatureRange(species_id));
-            }
-            for source in [
-                species_record.thermo.standard_gibbs_energy.source,
-                species_record.thermo.standard_enthalpy_of_formation.source,
-                species_record.thermo.constant_pressure_heat_capacity.source,
-            ] {
-                if source.citation.trim().is_empty() || source.note.trim().is_empty() {
-                    return Err(SpeciesRegistryError::MissingDataSource(species_id));
-                }
-            }
-            match (species_record.phase, species_record.activity_model) {
-                (PhaseKind::Aqueous, ActivityModel::DaviesAqueous)
-                | (PhaseKind::Aqueous, ActivityModel::IdealMolalityAqueous)
-                | (PhaseKind::Aqueous, ActivityModel::UnitActivity)
-                | (PhaseKind::Solid, ActivityModel::UnitActivity)
-                | (PhaseKind::Gas, ActivityModel::UnitActivity) => {}
-                (phase, activity_model) => {
-                    return Err(SpeciesRegistryError::IncompatibleActivityModel {
-                        species_id,
-                        phase,
-                        activity_model,
-                    });
-                }
             }
             for element_id in species_record.composition.keys() {
                 if !element_ids.contains(element_id) {

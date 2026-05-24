@@ -1,5 +1,5 @@
 use crate::activity::{davies_log10_gamma, DAVIES_MAX_IONIC_STRENGTH_MOLAL};
-use crate::chemistry::{ActivityModel, PhaseKind, SpeciesAmount, SpeciesId};
+use crate::chemistry::{PhaseKind, SpeciesAmount, SpeciesId};
 use crate::equilibrium::EquilibriumResult;
 use crate::registry::SpeciesRegistry;
 
@@ -102,15 +102,9 @@ pub fn analyze_aqueous_equilibrium(
                     continue;
                 }
                 let molality_mol_per_kg_water = amount.amount_mol.max(0.0) / solvent_water_mass_kg;
-                let activity_coefficient = match species.activity_model {
-                    ActivityModel::DaviesAqueous => {
-                        let log10_gamma =
-                            davies_log10_gamma(species.charge_number, ionic_strength_molal)
-                                .expect("ionic strength range checked before activity calculation");
-                        10.0_f64.powf(log10_gamma)
-                    }
-                    ActivityModel::IdealMolalityAqueous | ActivityModel::UnitActivity => 1.0,
-                };
+                let log10_gamma = davies_log10_gamma(species.charge_number, ionic_strength_molal)
+                    .expect("ionic strength range checked before activity calculation");
+                let activity_coefficient = 10.0_f64.powf(log10_gamma);
                 aqueous_species.push(AqueousSpeciesSummary {
                     species_id: amount.species_id,
                     amount_mol: amount.amount_mol,
