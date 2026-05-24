@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::MixturePhase;
 use super::reaction::{Reaction, ReactionId, StoichiometricTerm};
-use super::substance::{Substance, SubstanceId, SubstanceTagId};
+use super::substance::{Substance, SubstanceAggregateState, SubstanceId, SubstanceTagId};
 
 const MASS_TOLERANCE_GRAMS_PER_MOL: f64 = 1.0e-6;
 const THERMO_TOLERANCE: f64 = 1.0e-6;
@@ -70,9 +70,29 @@ pub(crate) struct SubstancePropertiesTable {
     pub charge: Vec<i32>,
     pub molar_mass_grams: Vec<f64>,
     pub liquid_density_grams_per_bucket: Vec<f64>,
+    pub solid_density_grams_per_bucket: Vec<f64>,
+    pub melting_point_kelvin: Vec<f64>,
     pub boiling_point_kelvin: Vec<f64>,
     pub molar_heat_capacity_j_per_mol_kelvin: Vec<f64>,
+    pub fusion_heat_j_per_mol: Vec<f64>,
     pub latent_heat_j_per_mol: Vec<f64>,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum SolventMiscibility {
+    FullyMiscible,
+    PartiallyMiscible { limit_mol_per_bucket: f64 },
+    Immiscible,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GasSolubilityModel {
+    Henry {
+        henry_mol_per_bucket_pascal: f64,
+        temperature_kelvin: f64,
+        salting_out_coefficient: f64,
+        estimated: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +106,8 @@ pub struct ChemistryRegistry {
     unindexed_reaction_indices: Vec<ReactionIndex>,
     substance_properties: SubstancePropertiesTable,
     substance_tags: BTreeSet<SubstanceTagId>,
+    solvent_miscibility: BTreeMap<(SubstanceIndex, SubstanceIndex), SolventMiscibility>,
+    gas_solubility: BTreeMap<SubstanceIndex, GasSolubilityModel>,
 }
 
 impl ChemistryRegistry {
@@ -206,6 +228,23 @@ impl ChemistryRegistry {
     pub(crate) fn substance_properties(&self) -> &SubstancePropertiesTable {
         &self.substance_properties
     }
+
+    pub(crate) fn solvent_miscibility(
+        &self,
+        left: SubstanceIndex,
+        right: SubstanceIndex,
+    ) -> SolventMiscibility {
+        if left == right {
+            return SolventMiscibility::FullyMiscible;
+        }
+        ordered_pair(left, right)
+            .and_then(|key| self.solvent_miscibility.get(&key).copied())
+            .unwrap_or(SolventMiscibility::Immiscible)
+    }
+
+    pub(crate) fn gas_solubility(&self, substance: SubstanceIndex) -> Option<&GasSolubilityModel> {
+        self.gas_solubility.get(&substance)
+    }
 }
 
 #[derive(Default)]
@@ -213,6 +252,8 @@ pub struct ChemistryRegistryBuilder {
     substances: Vec<Substance>,
     reactions: Vec<Reaction>,
     substance_tags: BTreeSet<SubstanceTagId>,
+    solvent_miscibility: Vec<(SubstanceId, SubstanceId, SolventMiscibility)>,
+    gas_solubility: Vec<(SubstanceId, GasSolubilityModel)>,
 }
 
 impl ChemistryRegistryBuilder {
@@ -225,6 +266,27 @@ impl ChemistryRegistryBuilder {
             substances: registry.substances_by_index.clone(),
             reactions: registry.reactions_by_index.clone(),
             substance_tags: registry.substance_tags.clone(),
+            solvent_miscibility: registry
+                .solvent_miscibility
+                .iter()
+                .map(|((left, right), miscibility)| {
+                    (
+                        registry.substances_by_index[left.0].id.clone(),
+                        registry.substances_by_index[right.0].id.clone(),
+                        *miscibility,
+                    )
+                })
+                .collect(),
+            gas_solubility: registry
+                .gas_solubility
+                .iter()
+                .map(|(substance, model)| {
+                    (
+                        registry.substances_by_index[substance.0].id.clone(),
+                        model.clone(),
+                    )
+                })
+                .collect(),
         }
     }
 
@@ -240,6 +302,26 @@ impl ChemistryRegistryBuilder {
 
     pub fn substance_tag(mut self, tag_id: impl Into<SubstanceTagId>) -> Self {
         self.substance_tags.insert(tag_id.into());
+        self
+    }
+
+    pub fn solvent_miscibility(
+        mut self,
+        left: impl Into<SubstanceId>,
+        right: impl Into<SubstanceId>,
+        miscibility: SolventMiscibility,
+    ) -> Self {
+        self.solvent_miscibility
+            .push((left.into(), right.into(), miscibility));
+        self
+    }
+
+    pub fn gas_solubility(
+        mut self,
+        substance: impl Into<SubstanceId>,
+        model: GasSolubilityModel,
+    ) -> Self {
+        self.gas_solubility.push((substance.into(), model));
         self
     }
 
@@ -283,6 +365,16 @@ impl ChemistryRegistryBuilder {
             build_indexed_reactions(&reactions_by_index, &substance_id_to_index)?;
         let (reaction_index_by_substance, unindexed_reaction_indices) =
             build_reaction_index(&indexed_reactions, substances_by_index.len());
+        let solvent_miscibility = build_solvent_miscibility(
+            &self.solvent_miscibility,
+            &substances_by_index,
+            &substance_id_to_index,
+        )?;
+        let gas_solubility = build_gas_solubility(
+            &self.gas_solubility,
+            &substances_by_index,
+            &substance_id_to_index,
+        )?;
         let registry = ChemistryRegistry {
             substances_by_index,
             substance_id_to_index,
@@ -293,6 +385,8 @@ impl ChemistryRegistryBuilder {
             unindexed_reaction_indices,
             substance_properties,
             substance_tags: self.substance_tags,
+            solvent_miscibility,
+            gas_solubility,
         };
         registry.validate_substance_tags()?;
         registry.validate_reactions()?;
@@ -526,6 +620,14 @@ fn build_substance_properties_table(substances: &[Substance]) -> SubstanceProper
             .iter()
             .map(|substance| substance.liquid_density_grams_per_bucket)
             .collect(),
+        solid_density_grams_per_bucket: substances
+            .iter()
+            .map(|substance| substance.solid_density_grams_per_bucket)
+            .collect(),
+        melting_point_kelvin: substances
+            .iter()
+            .map(|substance| substance.melting_point_kelvin)
+            .collect(),
         boiling_point_kelvin: substances
             .iter()
             .map(|substance| substance.boiling_point_kelvin)
@@ -534,11 +636,142 @@ fn build_substance_properties_table(substances: &[Substance]) -> SubstanceProper
             .iter()
             .map(|substance| substance.molar_heat_capacity_j_per_mol_kelvin)
             .collect(),
+        fusion_heat_j_per_mol: substances
+            .iter()
+            .map(|substance| substance.fusion_heat_j_per_mol)
+            .collect(),
         latent_heat_j_per_mol: substances
             .iter()
             .map(|substance| substance.latent_heat_j_per_mol)
             .collect(),
     }
+}
+
+fn build_solvent_miscibility(
+    entries: &[(SubstanceId, SubstanceId, SolventMiscibility)],
+    substances: &[Substance],
+    substance_id_to_index: &BTreeMap<SubstanceId, SubstanceIndex>,
+) -> ChemistryResult<BTreeMap<(SubstanceIndex, SubstanceIndex), SolventMiscibility>> {
+    let mut result = BTreeMap::new();
+    for (left_id, right_id, miscibility) in entries {
+        let left = *substance_id_to_index.get(left_id).ok_or_else(|| {
+            ChemistryError::InvalidSubstance {
+                substance_id: left_id.to_string(),
+                reason: "unknown solvent in miscibility table".to_string(),
+            }
+        })?;
+        let right = *substance_id_to_index.get(right_id).ok_or_else(|| {
+            ChemistryError::InvalidSubstance {
+                substance_id: right_id.to_string(),
+                reason: "unknown solvent in miscibility table".to_string(),
+            }
+        })?;
+        validate_solvent_for_miscibility(&substances[left.0])?;
+        validate_solvent_for_miscibility(&substances[right.0])?;
+        validate_miscibility(*miscibility, left_id)?;
+        let Some(key) = ordered_pair(left, right) else {
+            continue;
+        };
+        if result.insert(key, *miscibility).is_some() {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: format!("{left_id}+{right_id}"),
+                reason: "duplicate solvent miscibility entry".to_string(),
+            });
+        }
+    }
+    Ok(result)
+}
+
+fn validate_solvent_for_miscibility(substance: &Substance) -> ChemistryResult<()> {
+    if !substance.phase_properties.can_form_liquid_phase {
+        return Err(ChemistryError::InvalidSubstance {
+            substance_id: substance.id.to_string(),
+            reason: "miscibility table may only reference liquid-forming solvents".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_miscibility(
+    miscibility: SolventMiscibility,
+    substance_id: &SubstanceId,
+) -> ChemistryResult<()> {
+    if let SolventMiscibility::PartiallyMiscible {
+        limit_mol_per_bucket,
+    } = miscibility
+    {
+        if !limit_mol_per_bucket.is_finite() || limit_mol_per_bucket < 0.0 {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: substance_id.to_string(),
+                reason: "partial miscibility limit must be non-negative and finite".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn build_gas_solubility(
+    entries: &[(SubstanceId, GasSolubilityModel)],
+    substances: &[Substance],
+    substance_id_to_index: &BTreeMap<SubstanceId, SubstanceIndex>,
+) -> ChemistryResult<BTreeMap<SubstanceIndex, GasSolubilityModel>> {
+    let mut result = BTreeMap::new();
+    for (substance_id, model) in entries {
+        let substance = *substance_id_to_index.get(substance_id).ok_or_else(|| {
+            ChemistryError::InvalidSubstance {
+                substance_id: substance_id.to_string(),
+                reason: "unknown substance in gas solubility table".to_string(),
+            }
+        })?;
+        if substances[substance.0].aggregate_state_at(298.0)? != SubstanceAggregateState::Gas {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: substance_id.to_string(),
+                reason: "gas solubility table may only reference substances that are gases near room temperature".to_string(),
+            });
+        }
+        validate_gas_solubility_model(substance_id, model)?;
+        if result.insert(substance, model.clone()).is_some() {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: substance_id.to_string(),
+                reason: "duplicate gas solubility entry".to_string(),
+            });
+        }
+    }
+    Ok(result)
+}
+
+fn validate_gas_solubility_model(
+    substance_id: &SubstanceId,
+    model: &GasSolubilityModel,
+) -> ChemistryResult<()> {
+    match model {
+        GasSolubilityModel::Henry {
+            henry_mol_per_bucket_pascal,
+            temperature_kelvin,
+            salting_out_coefficient,
+            estimated: _,
+        } => {
+            if !henry_mol_per_bucket_pascal.is_finite() || *henry_mol_per_bucket_pascal < 0.0 {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: substance_id.to_string(),
+                    reason: "Henry constant must be non-negative and finite".to_string(),
+                });
+            }
+            if !temperature_kelvin.is_finite() || *temperature_kelvin <= 0.0 {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: substance_id.to_string(),
+                    reason: "Henry reference temperature must be positive and finite".to_string(),
+                });
+            }
+            if !salting_out_coefficient.is_finite() || *salting_out_coefficient < 0.0 {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: substance_id.to_string(),
+                    reason: "salting-out coefficient must be non-negative and finite".to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn build_indexed_reactions(
@@ -671,6 +904,19 @@ fn insert_sorted_unique<T: Ord + Copy>(values: &mut Vec<T>, value: T) {
     match values.binary_search(&value) {
         Ok(_) => {}
         Err(index) => values.insert(index, value),
+    }
+}
+
+fn ordered_pair(
+    left: SubstanceIndex,
+    right: SubstanceIndex,
+) -> Option<(SubstanceIndex, SubstanceIndex)> {
+    if left == right {
+        None
+    } else if left < right {
+        Some((left, right))
+    } else {
+        Some((right, left))
     }
 }
 

@@ -76,8 +76,11 @@ pub struct Substance {
     pub charge: i32,
     pub molar_mass_grams: f64,
     pub liquid_density_grams_per_bucket: f64,
+    pub solid_density_grams_per_bucket: f64,
+    pub melting_point_kelvin: f64,
     pub boiling_point_kelvin: f64,
     pub molar_heat_capacity_j_per_mol_kelvin: f64,
+    pub fusion_heat_j_per_mol: f64,
     pub latent_heat_j_per_mol: f64,
     pub structure_code: Option<String>,
     pub molecular_structure: Option<MolecularStructure>,
@@ -85,7 +88,14 @@ pub struct Substance {
     pub translation_key: Option<String>,
     pub color_argb: u32,
     pub tags: Vec<SubstanceTagId>,
-    pub phase_properties: SubstancePhaseProperties,
+    pub phase_properties: SubstancePhaseBehavior,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum SubstanceAggregateState {
+    Solid,
+    Liquid,
+    Gas,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -95,7 +105,7 @@ pub enum LiquidPhasePreference {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct SubstancePhaseProperties {
+pub struct SubstancePhaseBehavior {
     pub preferred_liquid_phase: LiquidPhasePreference,
     pub aqueous_solubility_mol_per_bucket: Option<f64>,
     pub organic_solubility_mol_per_bucket: Option<f64>,
@@ -103,7 +113,9 @@ pub struct SubstancePhaseProperties {
     pub can_form_liquid_phase: bool,
 }
 
-impl SubstancePhaseProperties {
+pub type SubstancePhaseProperties = SubstancePhaseBehavior;
+
+impl SubstancePhaseBehavior {
     pub fn aqueous_unlimited() -> Self {
         Self {
             preferred_liquid_phase: LiquidPhasePreference::Aqueous,
@@ -170,8 +182,11 @@ impl Substance {
             charge,
             molar_mass_grams,
             liquid_density_grams_per_bucket,
+            solid_density_grams_per_bucket: liquid_density_grams_per_bucket,
+            melting_point_kelvin: 0.0,
             boiling_point_kelvin,
             molar_heat_capacity_j_per_mol_kelvin,
+            fusion_heat_j_per_mol: 0.0,
             latent_heat_j_per_mol,
             structure_code: None,
             molecular_structure: None,
@@ -212,6 +227,43 @@ impl Substance {
         self
     }
 
+    pub fn with_melting_point_kelvin(mut self, melting_point_kelvin: f64) -> Self {
+        self.melting_point_kelvin = melting_point_kelvin;
+        self
+    }
+
+    pub fn with_fusion_heat_j_per_mol(mut self, fusion_heat_j_per_mol: f64) -> Self {
+        self.fusion_heat_j_per_mol = fusion_heat_j_per_mol;
+        self
+    }
+
+    pub fn with_solid_density_grams_per_bucket(
+        mut self,
+        solid_density_grams_per_bucket: f64,
+    ) -> Self {
+        self.solid_density_grams_per_bucket = solid_density_grams_per_bucket;
+        self
+    }
+
+    pub fn aggregate_state_at(
+        &self,
+        temperature_kelvin: f64,
+    ) -> ChemistryResult<SubstanceAggregateState> {
+        if !temperature_kelvin.is_finite() || temperature_kelvin < 0.0 {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: self.id.to_string(),
+                reason: "temperature must be non-negative and finite".to_string(),
+            });
+        }
+        if temperature_kelvin > self.boiling_point_kelvin {
+            Ok(SubstanceAggregateState::Gas)
+        } else if temperature_kelvin < self.melting_point_kelvin {
+            Ok(SubstanceAggregateState::Solid)
+        } else {
+            Ok(SubstanceAggregateState::Liquid)
+        }
+    }
+
     pub fn with_molecular_structure(mut self, molecular_structure: MolecularStructure) -> Self {
         self.functional_groups = find_functional_groups(&molecular_structure);
         self.molecular_structure = Some(molecular_structure);
@@ -234,10 +286,30 @@ impl Substance {
                 reason: "liquid density must be positive and finite".to_string(),
             });
         }
+        if !self.solid_density_grams_per_bucket.is_finite()
+            || self.solid_density_grams_per_bucket <= 0.0
+        {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: id,
+                reason: "solid density must be positive and finite".to_string(),
+            });
+        }
+        if !self.melting_point_kelvin.is_finite() || self.melting_point_kelvin < 0.0 {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: id,
+                reason: "melting point must be non-negative and finite".to_string(),
+            });
+        }
         if !self.boiling_point_kelvin.is_finite() || self.boiling_point_kelvin < 0.0 {
             return Err(ChemistryError::InvalidSubstance {
                 substance_id: id,
                 reason: "boiling point must be non-negative and finite".to_string(),
+            });
+        }
+        if self.melting_point_kelvin > self.boiling_point_kelvin {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: id,
+                reason: "melting point must not be above boiling point".to_string(),
             });
         }
         if !self.molar_heat_capacity_j_per_mol_kelvin.is_finite()
@@ -252,6 +324,12 @@ impl Substance {
             return Err(ChemistryError::InvalidSubstance {
                 substance_id: id,
                 reason: "latent heat must be non-negative and finite".to_string(),
+            });
+        }
+        if !self.fusion_heat_j_per_mol.is_finite() || self.fusion_heat_j_per_mol < 0.0 {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: id,
+                reason: "fusion heat must be non-negative and finite".to_string(),
             });
         }
         self.phase_properties.validate(&self.id, self.charge)?;

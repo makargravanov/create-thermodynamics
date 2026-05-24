@@ -2,7 +2,7 @@ use super::error::{ChemistryError, ChemistryResult};
 use super::molecule::{
     parse_java_structure, parse_legacy_structure, MolecularStructure, MolecularSummary,
 };
-use super::registry::ChemistryRegistryBuilder;
+use super::registry::{ChemistryRegistryBuilder, GasSolubilityModel, SolventMiscibility};
 use super::substance::{
     LiquidPhasePreference, Substance, SubstanceId, SubstancePhaseProperties, SubstanceTagId,
 };
@@ -37,7 +37,47 @@ pub fn destroy_substances_registry_builder() -> ChemistryResult<ChemistryRegistr
     for raw in DESTROY_SUBSTANCES {
         builder = builder.substance(raw.to_substance()?);
     }
+    builder = register_phase_tables(builder);
     Ok(builder)
+}
+
+fn register_phase_tables(builder: ChemistryRegistryBuilder) -> ChemistryRegistryBuilder {
+    builder
+        .gas_solubility(
+            "destroy:oxygen",
+            GasSolubilityModel::Henry {
+                henry_mol_per_bucket_pascal: 1.3e-8,
+                temperature_kelvin: 298.0,
+                salting_out_coefficient: 0.12,
+                estimated: true,
+            },
+        )
+        .gas_solubility(
+            "destroy:hydrogen",
+            GasSolubilityModel::Henry {
+                henry_mol_per_bucket_pascal: 7.8e-9,
+                temperature_kelvin: 298.0,
+                salting_out_coefficient: 0.08,
+                estimated: true,
+            },
+        )
+        .solvent_miscibility(
+            "destroy:water",
+            "destroy:ethanol",
+            SolventMiscibility::FullyMiscible,
+        )
+        .solvent_miscibility(
+            "destroy:water",
+            "destroy:acetone",
+            SolventMiscibility::FullyMiscible,
+        )
+        .solvent_miscibility(
+            "destroy:water",
+            "destroy:chloroform",
+            SolventMiscibility::PartiallyMiscible {
+                limit_mol_per_bucket: 0.1,
+            },
+        )
 }
 
 impl RawSubstance {
