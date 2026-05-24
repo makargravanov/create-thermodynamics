@@ -44,7 +44,7 @@ pub fn destroy_registry_with_generated_reactions_builder(
 mod tests {
     use super::destroy_registry_builder;
     use super::error::ChemistryError;
-    use super::mixture::Mixture;
+    use super::mixture::{Mixture, MixturePhase};
     use super::reaction::Reaction;
     use super::registry::{ChemistryRegistryBuilder, ReactionCandidateScratch};
     use super::simulation::{
@@ -145,6 +145,8 @@ mod tests {
                     .reactant("destroy:hydrogen", 2, 1)
                     .reactant("destroy:oxygen", 1, 1)
                     .product("destroy:water", 2)
+                    .reactant_phase_access("destroy:hydrogen", [MixturePhase::Gas])
+                    .reactant_phase_access("destroy:oxygen", [MixturePhase::Gas])
                     .pre_exponential_factor(1.0e12)
                     .activation_energy_kj_per_mol(0.0)
                     .enthalpy_change_kj_per_mol(-240.0)
@@ -461,6 +463,8 @@ mod tests {
                     .reactant("destroy:hydrogen", 2, 1)
                     .reactant("destroy:oxygen", 1, 1)
                     .product("destroy:water", 2)
+                    .reactant_phase_access("destroy:hydrogen", [MixturePhase::Gas])
+                    .reactant_phase_access("destroy:oxygen", [MixturePhase::Gas])
                     .requires_uv()
                     .pre_exponential_factor(1.0e12)
                     .activation_energy_kj_per_mol(0.0)
@@ -507,6 +511,7 @@ mod tests {
                 Reaction::builder("destroy:external_water")
                     .reactant("destroy:hydrogen", 1, 1)
                     .product("destroy:water", 1)
+                    .reactant_phase_access("destroy:hydrogen", [MixturePhase::Gas])
                     .chemical_external_reactant("external:oxygen_atom", 1.0, 16.0, 0)
                     .chemical_external_catalyst("external:nickel", 1.0, 58.69, 0)
                     .reaction_result("external:water_result", 1.0)

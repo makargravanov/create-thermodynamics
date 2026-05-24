@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::error::{ChemistryError, ChemistryResult};
-use super::mixture::{Mixture, TRACE_CONCENTRATION_MOL_PER_BUCKET};
+use super::mixture::{Mixture, MixturePhase, TRACE_CONCENTRATION_MOL_PER_BUCKET};
 use super::reaction::Reaction;
 use super::registry::{
     ChemistryRegistry, IndexedReaction, ReactionCandidateScratch, SubstanceIndex,
@@ -231,7 +231,16 @@ pub fn reaction_rate_mol_per_bucket_per_tick_with_context(
     }
     for (substance_id, order) in &reaction.orders {
         registry.substance(substance_id)?;
-        let concentration = mixture.concentration_of(substance_id);
+        let phases = reaction
+            .phase_access
+            .get(substance_id)
+            .cloned()
+            .unwrap_or_else(super::reaction::ReactionPhaseAccess::liquid)
+            .phases;
+        let concentration = phases
+            .iter()
+            .map(|phase| mixture.concentration_in_phase(substance_id, *phase))
+            .sum::<f64>();
         if concentration <= 0.0 {
             return Ok(0.0);
         }
@@ -257,8 +266,8 @@ fn reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
     if reaction.requires_uv {
         rate *= context.uv_power;
     }
-    for (substance, order) in &indexed_reaction.orders {
-        let concentration = mixture.concentration_of_index(*substance);
+    for (substance, order, phases) in &indexed_reaction.orders {
+        let concentration = mixture.concentration_of_index_in_phases(*substance, phases);
         if concentration <= 0.0 {
             return Ok(0.0);
         }
@@ -314,7 +323,8 @@ fn limit_by_reactants_and_context(
             .reactants
             .iter()
             .fold(requested_moles, |current, reactant| {
-                let available = mixture.concentration_of_index(reactant.substance)
+                let available = mixture
+                    .concentration_of_index_in_phases(reactant.substance, &reactant.phases)
                     / reactant.coefficient as f64;
                 current.min(available)
             });
@@ -355,6 +365,7 @@ fn apply_reaction(
         mixture,
         context,
         reaction,
+        indexed_reaction,
         moles_per_bucket,
         &deltas,
         &mixture_checkpoint,
@@ -371,11 +382,36 @@ fn apply_reaction_inner(
     mixture: &mut Mixture,
     context: &mut ReactionContext,
     reaction: &Reaction,
+    indexed_reaction: &IndexedReaction,
     moles_per_bucket: f64,
-    deltas: &[(SubstanceIndex, f64)],
-    mixture_checkpoint: &super::mixture::MixtureCheckpoint,
+    _deltas: &[(SubstanceIndex, f64)],
+    _mixture_checkpoint: &super::mixture::MixtureCheckpoint,
 ) -> ChemistryResult<ReactionApplication> {
-    let max_concentration_delta = mixture.apply_concentration_deltas_by_index(registry, deltas)?;
+    let reactants = indexed_reaction
+        .reactants
+        .iter()
+        .map(|term| (term.substance, term.coefficient, term.phases.clone()))
+        .collect::<Vec<_>>();
+    let products = indexed_reaction
+        .products
+        .iter()
+        .map(|term| {
+            (
+                term.substance,
+                term.coefficient,
+                term.phases
+                    .first()
+                    .copied()
+                    .unwrap_or(MixturePhase::Aqueous),
+            )
+        })
+        .collect::<Vec<_>>();
+    let max_concentration_delta = mixture.apply_reaction_phase_deltas_by_index(
+        registry,
+        &reactants,
+        &products,
+        moles_per_bucket,
+    )?;
     apply_external_reactants(context, reaction, moles_per_bucket)?;
     apply_reaction_results(context, reaction, moles_per_bucket);
     mixture.heat(
@@ -384,8 +420,7 @@ fn apply_reaction_inner(
     )?;
     Ok(ReactionApplication {
         max_concentration_delta,
-        thermal_changed: reaction.enthalpy_change_kj_per_mol != 0.0
-            && mixture.changed_since_checkpoint(mixture_checkpoint),
+        thermal_changed: reaction.enthalpy_change_kj_per_mol != 0.0 && moles_per_bucket > 0.0,
     })
 }
 
@@ -567,7 +602,7 @@ fn add_external(
 mod tests {
     use super::*;
     use crate::chemistry::registry::ChemistryRegistryBuilder;
-    use crate::chemistry::substance::Substance;
+    use crate::chemistry::substance::{LiquidPhasePreference, Substance, SubstancePhaseProperties};
 
     fn simple_registry(reaction: Reaction) -> ChemistryRegistry {
         ChemistryRegistryBuilder::new()
@@ -594,6 +629,39 @@ mod tests {
                 0,
                 20.0,
                 20_000.0,
+                500.0,
+                100.0,
+                20_000.0,
+            ))
+            .reaction(reaction)
+            .build()
+            .unwrap()
+    }
+
+    fn precipitate_registry(reaction: Reaction) -> ChemistryRegistry {
+        ChemistryRegistryBuilder::new()
+            .substance(
+                Substance::new(
+                    "destroy:solid_reactant",
+                    0,
+                    10.0,
+                    10_000.0,
+                    500.0,
+                    100.0,
+                    20_000.0,
+                )
+                .with_phase_properties(SubstancePhaseProperties {
+                    preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+                    aqueous_solubility_mol_per_bucket: Some(0.1),
+                    organic_solubility_mol_per_bucket: Some(0.0),
+                    can_precipitate: true,
+                }),
+            )
+            .substance(Substance::new(
+                "destroy:product",
+                0,
+                10.0,
+                10_000.0,
                 500.0,
                 100.0,
                 20_000.0,
@@ -690,5 +758,36 @@ mod tests {
 
         assert!(changed);
         assert!(mixture.temperature_kelvin() > 298.0);
+    }
+
+    #[test]
+    fn default_reaction_access_does_not_consume_solid_precipitate() {
+        let registry = precipitate_registry(
+            Reaction::builder("destroy:solid_to_product")
+                .reactant("destroy:solid_reactant", 1, 1)
+                .product("destroy:product", 1)
+                .pre_exponential_factor(1.0e12)
+                .activation_energy_kj_per_mol(0.0)
+                .build(),
+        );
+        let reactant: crate::chemistry::substance::SubstanceId = "destroy:solid_reactant".into();
+        let product: crate::chemistry::substance::SubstanceId = "destroy:product".into();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, reactant.clone(), 1.0)
+            .unwrap();
+
+        react_for_tick(&registry, &mut mixture, 1).unwrap();
+
+        assert!((mixture.concentration_of(&reactant) - 0.9).abs() < 1.0e-9);
+        assert_eq!(
+            mixture.concentration_in_phase(&reactant, MixturePhase::Aqueous),
+            0.1
+        );
+        assert_eq!(
+            mixture.concentration_in_phase(&reactant, MixturePhase::Solid),
+            0.8
+        );
+        assert!((mixture.concentration_of(&product) - 0.1).abs() < 1.0e-9);
     }
 }

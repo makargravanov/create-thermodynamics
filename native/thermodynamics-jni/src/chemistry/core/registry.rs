@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::error::{ChemistryError, ChemistryResult};
+use super::mixture::MixturePhase;
 use super::reaction::{Reaction, ReactionId, StoichiometricTerm};
 use super::substance::{Substance, SubstanceId, SubstanceTagId};
 
@@ -53,6 +54,7 @@ impl ReactionCandidateScratch {
 pub(crate) struct IndexedStoichiometricTerm {
     pub substance: SubstanceIndex,
     pub coefficient: u32,
+    pub phases: Vec<MixturePhase>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,7 +62,7 @@ pub(crate) struct IndexedReaction {
     pub reaction: ReactionIndex,
     pub reactants: Vec<IndexedStoichiometricTerm>,
     pub products: Vec<IndexedStoichiometricTerm>,
-    pub orders: Vec<(SubstanceIndex, u32)>,
+    pub orders: Vec<(SubstanceIndex, u32, Vec<MixturePhase>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -331,6 +333,18 @@ impl ChemistryRegistry {
                     });
                 }
             }
+            for substance_id in reaction
+                .phase_access
+                .keys()
+                .chain(reaction.product_phases.keys())
+            {
+                if !self.substance_id_to_index.contains_key(substance_id) {
+                    return Err(ChemistryError::UnknownSubstance {
+                        reaction_id: reaction.id.to_string(),
+                        substance_id: substance_id.to_string(),
+                    });
+                }
+            }
 
             for requirement in reaction
                 .external_reactants
@@ -544,7 +558,7 @@ fn build_indexed_reactions(
             let products = reaction
                 .products
                 .iter()
-                .map(|term| indexed_stoichiometric_term(reaction, term, substance_id_to_index))
+                .map(|term| indexed_product_term(reaction, term, substance_id_to_index))
                 .collect::<ChemistryResult<Vec<_>>>()?;
             let orders = reaction
                 .orders
@@ -557,7 +571,16 @@ fn build_indexed_reactions(
                             reaction_id: reaction.id.to_string(),
                             substance_id: substance_id.to_string(),
                         })?;
-                    Ok((substance, *order))
+                    Ok((
+                        substance,
+                        *order,
+                        reaction
+                            .phase_access
+                            .get(substance_id)
+                            .cloned()
+                            .unwrap_or_else(super::reaction::ReactionPhaseAccess::liquid)
+                            .phases,
+                    ))
                 })
                 .collect::<ChemistryResult<Vec<_>>>()?;
             Ok(IndexedReaction {
@@ -585,6 +608,35 @@ fn indexed_stoichiometric_term(
     Ok(IndexedStoichiometricTerm {
         substance,
         coefficient: term.coefficient,
+        phases: reaction
+            .phase_access
+            .get(&term.substance_id)
+            .cloned()
+            .unwrap_or_else(super::reaction::ReactionPhaseAccess::liquid)
+            .phases,
+    })
+}
+
+fn indexed_product_term(
+    reaction: &Reaction,
+    term: &StoichiometricTerm,
+    substance_id_to_index: &BTreeMap<SubstanceId, SubstanceIndex>,
+) -> ChemistryResult<IndexedStoichiometricTerm> {
+    let substance = substance_id_to_index
+        .get(&term.substance_id)
+        .copied()
+        .ok_or_else(|| ChemistryError::UnknownSubstance {
+            reaction_id: reaction.id.to_string(),
+            substance_id: term.substance_id.to_string(),
+        })?;
+    Ok(IndexedStoichiometricTerm {
+        substance,
+        coefficient: term.coefficient,
+        phases: vec![reaction
+            .product_phases
+            .get(&term.substance_id)
+            .copied()
+            .unwrap_or(MixturePhase::Aqueous)],
     })
 }
 
@@ -599,7 +651,7 @@ fn build_reaction_index(
         for reactant in &indexed_reaction.reactants {
             insert_sorted_unique(&mut indexed_substances, reactant.substance);
         }
-        for (substance, _) in &indexed_reaction.orders {
+        for (substance, _, _) in &indexed_reaction.orders {
             insert_sorted_unique(&mut indexed_substances, *substance);
         }
 

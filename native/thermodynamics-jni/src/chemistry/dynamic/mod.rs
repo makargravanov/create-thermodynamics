@@ -8,7 +8,9 @@ use super::molecule::MolecularStructure;
 use super::organic::{self, GroupParticipant, OrganicGenerationSpace};
 use super::reaction::{Reaction, ReactionId};
 use super::registry::{ChemistryRegistry, SubstanceIndex};
-use super::substance::{Substance, SubstanceId, SubstanceTagId};
+use super::substance::{
+    LiquidPhasePreference, Substance, SubstanceId, SubstancePhaseProperties, SubstanceTagId,
+};
 
 const DEFAULT_DYNAMIC_DENSITY: f64 = 1000.0;
 const DEFAULT_DYNAMIC_HEAT_CAPACITY: f64 = 100.0;
@@ -1134,12 +1136,55 @@ fn build_dynamic_substance(
         DEFAULT_DYNAMIC_HEAT_CAPACITY,
         DEFAULT_DYNAMIC_LATENT_HEAT,
     )
+    .with_phase_properties(estimate_dynamic_phase_properties(
+        summary.charge,
+        &structure,
+    ))
     .with_catalog_metadata(Some(canonical_frowns), None, DEFAULT_DYNAMIC_COLOR, tags)
     .with_molecular_structure(structure))
 }
 
 fn estimate_dynamic_boiling_point(molar_mass_grams: f64) -> f64 {
     2.042_598_921_281_41 * molar_mass_grams + 178.176_866_128_713
+}
+
+fn estimate_dynamic_phase_properties(
+    charge: i32,
+    structure: &MolecularStructure,
+) -> SubstancePhaseProperties {
+    if charge != 0 {
+        return SubstancePhaseProperties {
+            preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+            aqueous_solubility_mol_per_bucket: Some(10.0),
+            organic_solubility_mol_per_bucket: Some(0.0),
+            can_precipitate: true,
+        };
+    }
+    let polar_atoms = structure
+        .atoms
+        .iter()
+        .filter(|atom| {
+            matches!(
+                atom.element.as_str(),
+                "O" | "N" | "S" | "P" | "B" | "F" | "Cl" | "Br" | "I"
+            )
+        })
+        .count();
+    let carbon_atoms = structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == "C")
+        .count();
+    if polar_atoms > carbon_atoms {
+        SubstancePhaseProperties {
+            preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+            aqueous_solubility_mol_per_bucket: None,
+            organic_solubility_mol_per_bucket: Some(0.25),
+            can_precipitate: false,
+        }
+    } else {
+        SubstancePhaseProperties::organic_unlimited(0.05 + polar_atoms as f64 * 0.05)
+    }
 }
 
 #[cfg(test)]
@@ -1212,6 +1257,26 @@ mod tests {
             .iter()
             .any(|tag| tag.as_str() == "destroy:hypothetical"));
         assert!(registry.validate_substance_can_enter_mixture(&id).is_err());
+    }
+
+    #[test]
+    fn dynamic_substance_gets_phase_properties_from_structure() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let hydrocarbon = registry.resolve_frowns("CCCCCCCC").unwrap();
+        let substance = registry.substance(&hydrocarbon).unwrap();
+
+        assert_eq!(
+            substance.phase_properties.preferred_liquid_phase,
+            LiquidPhasePreference::Organic
+        );
+        assert_eq!(
+            substance.phase_properties.aqueous_solubility_mol_per_bucket,
+            Some(0.05)
+        );
+        assert_eq!(
+            substance.phase_properties.organic_solubility_mol_per_bucket,
+            None
+        );
     }
 
     #[test]

@@ -85,6 +85,61 @@ pub struct Substance {
     pub translation_key: Option<String>,
     pub color_argb: u32,
     pub tags: Vec<SubstanceTagId>,
+    pub phase_properties: SubstancePhaseProperties,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum LiquidPhasePreference {
+    Aqueous,
+    Organic,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubstancePhaseProperties {
+    pub preferred_liquid_phase: LiquidPhasePreference,
+    pub aqueous_solubility_mol_per_bucket: Option<f64>,
+    pub organic_solubility_mol_per_bucket: Option<f64>,
+    pub can_precipitate: bool,
+}
+
+impl SubstancePhaseProperties {
+    pub fn aqueous_unlimited() -> Self {
+        Self {
+            preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+            aqueous_solubility_mol_per_bucket: None,
+            organic_solubility_mol_per_bucket: Some(0.0),
+            can_precipitate: false,
+        }
+    }
+
+    pub fn organic_unlimited(aqueous_solubility_mol_per_bucket: f64) -> Self {
+        Self {
+            preferred_liquid_phase: LiquidPhasePreference::Organic,
+            aqueous_solubility_mol_per_bucket: Some(aqueous_solubility_mol_per_bucket),
+            organic_solubility_mol_per_bucket: None,
+            can_precipitate: false,
+        }
+    }
+
+    pub fn validate(&self, substance_id: &SubstanceId, charge: i32) -> ChemistryResult<()> {
+        validate_solubility_limit(
+            substance_id,
+            "aqueous solubility",
+            self.aqueous_solubility_mol_per_bucket,
+        )?;
+        validate_solubility_limit(
+            substance_id,
+            "organic solubility",
+            self.organic_solubility_mol_per_bucket,
+        )?;
+        if charge != 0 && self.preferred_liquid_phase != LiquidPhasePreference::Aqueous {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: substance_id.to_string(),
+                reason: "charged substances must prefer the aqueous phase".to_string(),
+            });
+        }
+        Ok(())
+    }
 }
 
 impl Substance {
@@ -111,6 +166,16 @@ impl Substance {
             translation_key: None,
             color_argb: 0x20FF_FFFF,
             tags: Vec::new(),
+            phase_properties: if charge == 0 {
+                SubstancePhaseProperties::organic_unlimited(0.05)
+            } else {
+                SubstancePhaseProperties {
+                    preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+                    aqueous_solubility_mol_per_bucket: Some(10.0),
+                    organic_solubility_mol_per_bucket: Some(0.0),
+                    can_precipitate: true,
+                }
+            },
         }
     }
 
@@ -125,6 +190,11 @@ impl Substance {
         self.translation_key = translation_key;
         self.color_argb = color_argb;
         self.tags = tags;
+        self
+    }
+
+    pub fn with_phase_properties(mut self, phase_properties: SubstancePhaseProperties) -> Self {
+        self.phase_properties = phase_properties;
         self
     }
 
@@ -170,6 +240,7 @@ impl Substance {
                 reason: "latent heat must be non-negative and finite".to_string(),
             });
         }
+        self.phase_properties.validate(&self.id, self.charge)?;
         if let Some(structure) = &self.molecular_structure {
             let summary =
                 structure
@@ -201,4 +272,20 @@ impl Substance {
         }
         Ok(())
     }
+}
+
+fn validate_solubility_limit(
+    substance_id: &SubstanceId,
+    name: &str,
+    value: Option<f64>,
+) -> ChemistryResult<()> {
+    if let Some(value) = value {
+        if !value.is_finite() || value < 0.0 {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: substance_id.to_string(),
+                reason: format!("{name} must be non-negative and finite"),
+            });
+        }
+    }
+    Ok(())
 }

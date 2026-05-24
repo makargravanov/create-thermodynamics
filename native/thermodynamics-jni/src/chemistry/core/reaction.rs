@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
 use super::error::{ChemistryError, ChemistryResult};
+use super::mixture::MixturePhase;
 use super::substance::SubstanceId;
 
 pub const GAS_CONSTANT_J_PER_MOL_KELVIN: f64 = 8.314_462_618_153_24;
@@ -78,6 +79,43 @@ pub struct Reaction {
     pub show_in_jei_condition: Option<String>,
     pub allow_mass_imbalance: bool,
     pub allow_charge_imbalance: bool,
+    pub phase_access: BTreeMap<SubstanceId, ReactionPhaseAccess>,
+    pub product_phases: BTreeMap<SubstanceId, MixturePhase>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReactionPhaseAccess {
+    pub phases: Vec<MixturePhase>,
+}
+
+impl ReactionPhaseAccess {
+    pub fn liquid() -> Self {
+        Self {
+            phases: vec![MixturePhase::Aqueous, MixturePhase::Organic],
+        }
+    }
+
+    pub fn single(phase: MixturePhase) -> Self {
+        Self {
+            phases: vec![phase],
+        }
+    }
+
+    pub fn new(phases: impl IntoIterator<Item = MixturePhase>) -> ChemistryResult<Self> {
+        let mut unique = Vec::new();
+        for phase in phases {
+            if !unique.contains(&phase) {
+                unique.push(phase);
+            }
+        }
+        if unique.is_empty() {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: "<phase-access>".to_string(),
+                reason: "reaction phase access must contain at least one phase".to_string(),
+            });
+        }
+        Ok(Self { phases: unique })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +154,8 @@ impl Reaction {
                 show_in_jei_condition: None,
                 allow_mass_imbalance: false,
                 allow_charge_imbalance: false,
+                phase_access: BTreeMap::new(),
+                product_phases: BTreeMap::new(),
             },
         }
     }
@@ -167,6 +207,20 @@ impl Reaction {
                 return Err(ChemistryError::InvalidReaction {
                     reaction_id: reaction_id.clone(),
                     reason: "stoichiometric coefficients must be greater than zero".to_string(),
+                });
+            }
+        }
+        for (substance_id, access) in &self.phase_access {
+            if substance_id.as_str().trim().is_empty() {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "phase access substance id must not be empty".to_string(),
+                });
+            }
+            if access.phases.is_empty() {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "phase access must contain at least one phase".to_string(),
                 });
             }
         }
@@ -391,6 +445,31 @@ impl ReactionBuilder {
 
     pub fn allow_charge_imbalance(mut self) -> Self {
         self.reaction.allow_charge_imbalance = true;
+        self
+    }
+
+    pub fn reactant_phase_access(
+        mut self,
+        substance_id: impl Into<SubstanceId>,
+        phases: impl IntoIterator<Item = MixturePhase>,
+    ) -> Self {
+        self.reaction.phase_access.insert(
+            substance_id.into(),
+            ReactionPhaseAccess {
+                phases: phases.into_iter().collect(),
+            },
+        );
+        self
+    }
+
+    pub fn product_phase(
+        mut self,
+        substance_id: impl Into<SubstanceId>,
+        phase: MixturePhase,
+    ) -> Self {
+        self.reaction
+            .product_phases
+            .insert(substance_id.into(), phase);
         self
     }
 

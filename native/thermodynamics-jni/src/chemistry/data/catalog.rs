@@ -3,7 +3,9 @@ use super::molecule::{
     parse_java_structure, parse_legacy_structure, MolecularStructure, MolecularSummary,
 };
 use super::registry::ChemistryRegistryBuilder;
-use super::substance::{Substance, SubstanceId, SubstanceTagId};
+use super::substance::{
+    LiquidPhasePreference, Substance, SubstanceId, SubstancePhaseProperties, SubstanceTagId,
+};
 
 const DEFAULT_DENSITY_GRAMS_PER_BUCKET: f64 = 1000.0;
 const DEFAULT_MOLAR_HEAT_CAPACITY: f64 = 100.0;
@@ -78,6 +80,7 @@ impl RawSubstance {
             molar_heat_capacity,
             DEFAULT_LATENT_HEAT,
         )
+        .with_phase_properties(estimate_phase_properties(self.id, &summary, self.tags))
         .with_catalog_metadata(
             self.structure_code
                 .or(self.java_structure_code)
@@ -88,6 +91,44 @@ impl RawSubstance {
         )
         .with_molecular_structure(structure))
     }
+}
+
+fn estimate_phase_properties(
+    id: &str,
+    summary: &MolecularSummary,
+    tags: &[&str],
+) -> SubstancePhaseProperties {
+    if id == "water" {
+        return SubstancePhaseProperties::aqueous_unlimited();
+    }
+    if matches!(id, "proton" | "hydroxide") {
+        return SubstancePhaseProperties {
+            preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+            aqueous_solubility_mol_per_bucket: None,
+            organic_solubility_mol_per_bucket: Some(0.0),
+            can_precipitate: false,
+        };
+    }
+    if summary.charge != 0 {
+        return SubstancePhaseProperties {
+            preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+            aqueous_solubility_mol_per_bucket: Some(10.0),
+            organic_solubility_mol_per_bucket: Some(0.0),
+            can_precipitate: true,
+        };
+    }
+    if tags.contains(&"solvent") {
+        return SubstancePhaseProperties::organic_unlimited(0.1);
+    }
+    if id.ends_with("_acid") || id.contains("acid") || id == "ammonia" {
+        return SubstancePhaseProperties {
+            preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+            aqueous_solubility_mol_per_bucket: None,
+            organic_solubility_mol_per_bucket: Some(0.25),
+            can_precipitate: false,
+        };
+    }
+    SubstancePhaseProperties::organic_unlimited(0.05)
 }
 
 fn estimate_boiling_point(molar_mass_grams: f64) -> f64 {
