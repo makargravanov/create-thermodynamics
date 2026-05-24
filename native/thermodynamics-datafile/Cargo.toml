@@ -1,7 +1,0 @@
-[package]
-name = "thermodynamics-datafile"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-thermodynamics-core = { path = "../thermodynamics-core" }

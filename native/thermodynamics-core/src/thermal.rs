@@ -16,7 +16,6 @@ pub enum ThermalError {
         amount_mol: f64,
     },
     MissingSpeciesData(SpeciesId),
-    MissingThermalData(SpeciesId),
     UnsupportedTemperatureRange {
         species_id: SpeciesId,
         temperature_kelvin: f64,
@@ -77,16 +76,8 @@ pub fn mixture_enthalpy_joule(
             });
         }
 
-        let standard_enthalpy = species
-            .thermo
-            .standard_enthalpy_of_formation
-            .as_ref()
-            .ok_or(ThermalError::MissingThermalData(amount.species_id))?;
-        let heat_capacity = species
-            .thermo
-            .constant_pressure_heat_capacity
-            .as_ref()
-            .ok_or(ThermalError::MissingThermalData(amount.species_id))?;
+        let standard_enthalpy = species.thermo.standard_enthalpy_of_formation;
+        let heat_capacity = species.thermo.constant_pressure_heat_capacity;
         enthalpy_joule += amount.amount_mol
             * (standard_enthalpy.value_joule_per_mol
                 + heat_capacity.value_joule_per_mol_kelvin
@@ -111,13 +102,11 @@ pub fn mixture_heat_capacity_joule_per_kelvin(
         let species = registry
             .species(amount.species_id)
             .ok_or(ThermalError::MissingSpeciesData(amount.species_id))?;
-        let heat_capacity = species
-            .thermo
-            .constant_pressure_heat_capacity
-            .as_ref()
-            .ok_or(ThermalError::MissingThermalData(amount.species_id))?;
-        heat_capacity_joule_per_kelvin +=
-            amount.amount_mol * heat_capacity.value_joule_per_mol_kelvin;
+        heat_capacity_joule_per_kelvin += amount.amount_mol
+            * species
+                .thermo
+                .constant_pressure_heat_capacity
+                .value_joule_per_mol_kelvin;
     }
 
     if !heat_capacity_joule_per_kelvin.is_finite() || heat_capacity_joule_per_kelvin <= 0.0 {

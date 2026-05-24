@@ -2,8 +2,6 @@
 members = [
     "thermodynamics-core",
     "thermodynamics-data",
-    "thermodynamics-datafile",
-    "thermodynamics-importer",
     "thermodynamics-jni",
 ]
 resolver = "2"

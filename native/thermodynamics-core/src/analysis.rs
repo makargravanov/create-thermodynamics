@@ -5,7 +5,6 @@ use crate::registry::SpeciesRegistry;
 
 const WATER_MOLAR_MASS_KILOGRAM_PER_MOL: f64 = 0.018_015_28;
 const MIN_ACTIVITY: f64 = 1.0e-300;
-const ACTIVE_PHASE_AMOUNT_MOL: f64 = 1.0e-12;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AqueousEquilibriumSummary {
@@ -27,20 +26,6 @@ pub struct AqueousSpeciesSummary {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PhaseEquilibriumSummary {
-    pub phases: Vec<PhaseAmountSummary>,
-    pub active_species: Vec<SpeciesAmount>,
-    pub boundary_species: Vec<SpeciesAmount>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PhaseAmountSummary {
-    pub phase: PhaseKind,
-    pub total_amount_mol: f64,
-    pub active_species_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum EquilibriumAnalysisError {
     MissingSpeciesData(SpeciesId),
     MissingWaterSolvent(SpeciesId),
@@ -59,68 +44,6 @@ pub enum EquilibriumAnalysisError {
         ionic_strength_molal: f64,
         max_valid_ionic_strength_molal: f64,
     },
-}
-
-pub fn analyze_phase_equilibrium(
-    registry: &SpeciesRegistry,
-    result: &EquilibriumResult,
-) -> Result<PhaseEquilibriumSummary, EquilibriumAnalysisError> {
-    let mut aqueous_total = 0.0;
-    let mut solid_total = 0.0;
-    let mut gas_total = 0.0;
-    let mut aqueous_count = 0;
-    let mut solid_count = 0;
-    let mut gas_count = 0;
-    let mut active_species = Vec::new();
-    let mut boundary_species = Vec::new();
-
-    for amount in &result.species_amounts_mol {
-        let species = registry.species(amount.species_id).ok_or(
-            EquilibriumAnalysisError::MissingSpeciesData(amount.species_id),
-        )?;
-        let amount_mol = amount.amount_mol.max(0.0);
-        if amount_mol > ACTIVE_PHASE_AMOUNT_MOL {
-            active_species.push(*amount);
-            match species.phase {
-                PhaseKind::Aqueous => {
-                    aqueous_total += amount_mol;
-                    aqueous_count += 1;
-                }
-                PhaseKind::Solid => {
-                    solid_total += amount_mol;
-                    solid_count += 1;
-                }
-                PhaseKind::Gas => {
-                    gas_total += amount_mol;
-                    gas_count += 1;
-                }
-            }
-        } else {
-            boundary_species.push(*amount);
-        }
-    }
-
-    Ok(PhaseEquilibriumSummary {
-        phases: vec![
-            PhaseAmountSummary {
-                phase: PhaseKind::Aqueous,
-                total_amount_mol: aqueous_total,
-                active_species_count: aqueous_count,
-            },
-            PhaseAmountSummary {
-                phase: PhaseKind::Solid,
-                total_amount_mol: solid_total,
-                active_species_count: solid_count,
-            },
-            PhaseAmountSummary {
-                phase: PhaseKind::Gas,
-                total_amount_mol: gas_total,
-                active_species_count: gas_count,
-            },
-        ],
-        active_species,
-        boundary_species,
-    })
 }
 
 pub fn analyze_aqueous_equilibrium(

@@ -28,7 +28,7 @@ pub enum ActivityModel {
 pub struct Element {
     pub id: ElementId,
     pub atomic_number: u8,
-    pub symbol: String,
+    pub symbol: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -37,44 +37,44 @@ pub struct TemperatureRange {
     pub max_kelvin: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DataSource {
-    pub citation: String,
-    pub note: String,
+    pub citation: &'static str,
+    pub note: &'static str,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StandardGibbsEnergy {
     pub value_joule_per_mol: f64,
     pub reference_temperature_kelvin: f64,
     pub source: DataSource,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StandardEnthalpyOfFormation {
     pub value_joule_per_mol: f64,
     pub reference_temperature_kelvin: f64,
     pub source: DataSource,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConstantPressureHeatCapacity {
     pub value_joule_per_mol_kelvin: f64,
     pub source: DataSource,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StandardThermo {
     pub standard_gibbs_energy: StandardGibbsEnergy,
-    pub standard_enthalpy_of_formation: Option<StandardEnthalpyOfFormation>,
-    pub constant_pressure_heat_capacity: Option<ConstantPressureHeatCapacity>,
+    pub standard_enthalpy_of_formation: StandardEnthalpyOfFormation,
+    pub constant_pressure_heat_capacity: ConstantPressureHeatCapacity,
     pub valid_temperature_range: TemperatureRange,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Species {
     pub id: SpeciesId,
-    pub symbol: String,
+    pub symbol: &'static str,
     pub composition: BTreeMap<ElementId, u16>,
     pub charge_number: i8,
     pub phase: PhaseKind,
