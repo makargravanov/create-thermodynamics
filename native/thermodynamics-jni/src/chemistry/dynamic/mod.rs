@@ -82,13 +82,12 @@ enum OrganicGeneratorKind {
 #[derive(Debug, Clone)]
 pub struct DynamicChemistryRegistry {
     static_registry: ChemistryRegistry,
-    dynamic_substances: BTreeMap<SubstanceId, Substance>,
-    dynamic_substance_indices: BTreeMap<SubstanceId, usize>,
-    dynamic_reactions: BTreeMap<ReactionId, Reaction>,
-    dynamic_reaction_ids_by_index: Vec<ReactionId>,
-    dynamic_reaction_index_by_substance:
-        BTreeMap<KnownSubstanceIndex, BTreeSet<DynamicReactionIndex>>,
-    dynamic_unindexed_reaction_indices: BTreeSet<DynamicReactionIndex>,
+    dynamic_substances: Vec<Substance>,
+    dynamic_substance_id_to_index: BTreeMap<SubstanceId, usize>,
+    dynamic_reactions: Vec<Reaction>,
+    dynamic_reaction_id_to_index: BTreeMap<ReactionId, DynamicReactionIndex>,
+    dynamic_reaction_index_by_substance: Vec<Vec<DynamicReactionIndex>>,
+    dynamic_unindexed_reaction_indices: Vec<DynamicReactionIndex>,
     canonical_to_id: BTreeMap<String, SubstanceId>,
     processed_generation_keys: BTreeSet<GenerationKey>,
 }
@@ -111,14 +110,15 @@ impl DynamicChemistryRegistry {
     }
 
     pub fn from_registry(registry: ChemistryRegistry) -> ChemistryResult<Self> {
+        let static_substance_count = registry.substance_count();
         let mut result = Self {
             static_registry: registry,
-            dynamic_substances: BTreeMap::new(),
-            dynamic_substance_indices: BTreeMap::new(),
-            dynamic_reactions: BTreeMap::new(),
-            dynamic_reaction_ids_by_index: Vec::new(),
-            dynamic_reaction_index_by_substance: BTreeMap::new(),
-            dynamic_unindexed_reaction_indices: BTreeSet::new(),
+            dynamic_substances: Vec::new(),
+            dynamic_substance_id_to_index: BTreeMap::new(),
+            dynamic_reactions: Vec::new(),
+            dynamic_reaction_id_to_index: BTreeMap::new(),
+            dynamic_reaction_index_by_substance: vec![Vec::new(); static_substance_count],
+            dynamic_unindexed_reaction_indices: Vec::new(),
             canonical_to_id: BTreeMap::new(),
             processed_generation_keys: BTreeSet::new(),
         };
@@ -131,15 +131,17 @@ impl DynamicChemistryRegistry {
     }
 
     pub fn substance(&self, id: &SubstanceId) -> ChemistryResult<&Substance> {
-        self.dynamic_substances
+        self.dynamic_substance_id_to_index
             .get(id)
+            .and_then(|index| self.dynamic_substances.get(*index))
             .or_else(|| self.static_registry.substance(id).ok())
             .ok_or_else(|| ChemistryError::InvalidMixtureState(format!("unknown substance '{id}'")))
     }
 
     pub fn reaction(&self, id: &ReactionId) -> ChemistryResult<&Reaction> {
-        self.dynamic_reactions
+        self.dynamic_reaction_id_to_index
             .get(id)
+            .and_then(|index| self.dynamic_reactions.get(index.0))
             .or_else(|| self.static_registry.reaction(id).ok())
             .ok_or_else(|| ChemistryError::UnknownReaction(id.to_string()))
     }
@@ -147,13 +149,13 @@ impl DynamicChemistryRegistry {
     pub fn substances(&self) -> impl Iterator<Item = &Substance> {
         self.static_registry
             .substances()
-            .chain(self.dynamic_substances.values())
+            .chain(self.dynamic_substances.iter())
     }
 
     pub fn reactions(&self) -> impl Iterator<Item = &Reaction> {
         self.static_registry
             .reactions()
-            .chain(self.dynamic_reactions.values())
+            .chain(self.dynamic_reactions.iter())
     }
 
     pub fn validate_substance_can_enter_mixture(
@@ -181,16 +183,29 @@ impl DynamicChemistryRegistry {
         I: IntoIterator<Item = &'substances SubstanceId>,
     {
         let substance_ids = substances.into_iter().collect::<Vec<_>>();
-        let mut dynamic_reaction_indices = self.dynamic_unindexed_reaction_indices.clone();
+        let mut seen = vec![false; self.dynamic_reactions.len()];
+        let mut dynamic_reaction_indices = Vec::new();
+        for reaction_index in &self.dynamic_unindexed_reaction_indices {
+            mark_dynamic_reaction_candidate(
+                &mut seen,
+                &mut dynamic_reaction_indices,
+                *reaction_index,
+            );
+        }
         for substance_id in &substance_ids {
             let Some(substance_index) = self.known_substance_index(substance_id) else {
                 continue;
             };
-            if let Some(indexed_reactions) = self
-                .dynamic_reaction_index_by_substance
-                .get(&substance_index)
-            {
-                dynamic_reaction_indices.extend(indexed_reactions.iter().copied());
+            let slot =
+                known_substance_slot(self.static_registry.substance_count(), substance_index);
+            if let Some(indexed_reactions) = self.dynamic_reaction_index_by_substance.get(slot) {
+                for reaction_index in indexed_reactions {
+                    mark_dynamic_reaction_candidate(
+                        &mut seen,
+                        &mut dynamic_reaction_indices,
+                        *reaction_index,
+                    );
+                }
             }
         }
         let mut result = self
@@ -469,7 +484,9 @@ impl DynamicChemistryRegistry {
     fn add_dynamic_substance(&mut self, substance: Substance) -> ChemistryResult<()> {
         substance.validate()?;
         if self.static_registry.substance(&substance.id).is_ok()
-            || self.dynamic_substances.contains_key(&substance.id)
+            || self
+                .dynamic_substance_id_to_index
+                .contains_key(&substance.id)
         {
             return Err(ChemistryError::DuplicateSubstance(substance.id.to_string()));
         }
@@ -481,42 +498,42 @@ impl DynamicChemistryRegistry {
                 });
             }
         }
-        let substance_index = self.dynamic_substance_indices.len();
-        self.dynamic_substance_indices
+        let substance_index = self.dynamic_substances.len();
+        self.dynamic_substance_id_to_index
             .insert(substance.id.clone(), substance_index);
-        self.dynamic_substances
-            .insert(substance.id.clone(), substance);
+        self.dynamic_substances.push(substance);
+        self.dynamic_reaction_index_by_substance.push(Vec::new());
         Ok(())
     }
 
     fn add_dynamic_reaction(&mut self, reaction: Reaction) -> ChemistryResult<()> {
         if self.static_registry.reaction(&reaction.id).is_ok()
-            || self.dynamic_reactions.contains_key(&reaction.id)
+            || self.dynamic_reaction_id_to_index.contains_key(&reaction.id)
         {
             return Err(ChemistryError::DuplicateReaction(reaction.id.to_string()));
         }
         self.validate_dynamic_reaction(&reaction)?;
-        let reaction_index = DynamicReactionIndex(self.dynamic_reaction_ids_by_index.len());
-        self.dynamic_reaction_ids_by_index.push(reaction.id.clone());
+        let reaction_index = DynamicReactionIndex(self.dynamic_reactions.len());
         let indexed_substances = self.indexed_substances_for_reaction(&reaction);
         index_dynamic_reaction(
             &mut self.dynamic_reaction_index_by_substance,
             &mut self.dynamic_unindexed_reaction_indices,
+            self.static_registry.substance_count(),
             reaction_index,
             indexed_substances,
         );
-        self.dynamic_reactions.insert(reaction.id.clone(), reaction);
+        self.dynamic_reaction_id_to_index
+            .insert(reaction.id.clone(), reaction_index);
+        self.dynamic_reactions.push(reaction);
         Ok(())
     }
 
     fn dynamic_reaction_by_index(&self, index: DynamicReactionIndex) -> Option<&Reaction> {
-        self.dynamic_reaction_ids_by_index
-            .get(index.0)
-            .and_then(|reaction_id| self.dynamic_reactions.get(reaction_id))
+        self.dynamic_reactions.get(index.0)
     }
 
     fn known_substance_index(&self, substance_id: &SubstanceId) -> Option<KnownSubstanceIndex> {
-        self.dynamic_substance_indices
+        self.dynamic_substance_id_to_index
             .get(substance_id)
             .copied()
             .map(KnownSubstanceIndex::Dynamic)
@@ -527,19 +544,16 @@ impl DynamicChemistryRegistry {
             })
     }
 
-    fn indexed_substances_for_reaction(
-        &self,
-        reaction: &Reaction,
-    ) -> BTreeSet<KnownSubstanceIndex> {
-        let mut substances = BTreeSet::new();
+    fn indexed_substances_for_reaction(&self, reaction: &Reaction) -> Vec<KnownSubstanceIndex> {
+        let mut substances = Vec::new();
         for reactant in &reaction.reactants {
             if let Some(substance_index) = self.known_substance_index(&reactant.substance_id) {
-                substances.insert(substance_index);
+                insert_sorted_unique(&mut substances, substance_index);
             }
         }
         for ordered_substance in reaction.orders.keys() {
             if let Some(substance_index) = self.known_substance_index(ordered_substance) {
-                substances.insert(substance_index);
+                insert_sorted_unique(&mut substances, substance_index);
             }
         }
         substances
@@ -649,11 +663,9 @@ impl DynamicChemistryRegistry {
         &self,
         substance_id: &SubstanceId,
     ) -> ChemistryResult<BTreeSet<GenerationKey>> {
-        let substance_index = self
-            .known_substance_index(substance_id)
-            .ok_or_else(|| ChemistryError::InvalidMixtureState(format!(
-                "unknown substance '{substance_id}'"
-            )))?;
+        let substance_index = self.known_substance_index(substance_id).ok_or_else(|| {
+            ChemistryError::InvalidMixtureState(format!("unknown substance '{substance_id}'"))
+        })?;
         let substance = self.substance(substance_id)?;
         if substance.molecular_structure.is_none() {
             return Ok(BTreeSet::new());
@@ -740,21 +752,50 @@ fn generators_for_group(group_type: &FunctionalGroupType) -> &'static [OrganicGe
 }
 
 fn index_dynamic_reaction(
-    by_substance: &mut BTreeMap<KnownSubstanceIndex, BTreeSet<DynamicReactionIndex>>,
-    unindexed: &mut BTreeSet<DynamicReactionIndex>,
+    by_substance: &mut Vec<Vec<DynamicReactionIndex>>,
+    unindexed: &mut Vec<DynamicReactionIndex>,
+    static_substance_count: usize,
     reaction_index: DynamicReactionIndex,
-    substances: BTreeSet<KnownSubstanceIndex>,
+    substances: Vec<KnownSubstanceIndex>,
 ) {
     if substances.is_empty() {
-        unindexed.insert(reaction_index);
+        unindexed.push(reaction_index);
         return;
     }
 
-    for substance_id in substances {
-        by_substance
-            .entry(substance_id)
-            .or_default()
-            .insert(reaction_index);
+    for substance in substances {
+        let slot = known_substance_slot(static_substance_count, substance);
+        if by_substance.len() <= slot {
+            by_substance.resize(slot + 1, Vec::new());
+        }
+        by_substance[slot].push(reaction_index);
+    }
+}
+
+fn known_substance_slot(static_substance_count: usize, substance: KnownSubstanceIndex) -> usize {
+    match substance {
+        KnownSubstanceIndex::Static(index) => index.as_usize(),
+        KnownSubstanceIndex::Dynamic(index) => static_substance_count + index,
+    }
+}
+
+fn insert_sorted_unique<T: Ord + Copy>(values: &mut Vec<T>, value: T) {
+    match values.binary_search(&value) {
+        Ok(_) => {}
+        Err(index) => values.insert(index, value),
+    }
+}
+
+fn mark_dynamic_reaction_candidate(
+    seen: &mut [bool],
+    result: &mut Vec<DynamicReactionIndex>,
+    reaction_index: DynamicReactionIndex,
+) {
+    if let Some(slot) = seen.get_mut(reaction_index.0) {
+        if !*slot {
+            *slot = true;
+            result.push(reaction_index);
+        }
     }
 }
 

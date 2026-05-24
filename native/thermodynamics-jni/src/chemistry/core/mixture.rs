@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::error::{ChemistryError, ChemistryResult};
-use super::registry::ChemistryRegistry;
+use super::registry::{ChemistryRegistry, SubstanceIndex};
 use super::substance::{SubstanceId, SubstanceTagId};
 
 pub const DEFAULT_TEMPERATURE_KELVIN: f64 = 298.0;
@@ -10,8 +10,16 @@ pub const TRACE_CONCENTRATION_MOL_PER_BUCKET: f64 = 1.0 / 512.0 / 512.0;
 #[derive(Debug, Clone)]
 pub struct Mixture {
     temperature_kelvin: f64,
-    concentrations_mol_per_bucket: BTreeMap<SubstanceId, f64>,
-    gaseous_fractions: BTreeMap<SubstanceId, f64>,
+    components: Vec<MixtureComponent>,
+    positions_by_substance: Vec<Option<usize>>,
+}
+
+#[derive(Debug, Clone)]
+struct MixtureComponent {
+    substance: SubstanceIndex,
+    substance_id: SubstanceId,
+    concentration_mol_per_bucket: f64,
+    gaseous_fraction: f64,
 }
 
 impl Mixture {
@@ -23,8 +31,8 @@ impl Mixture {
         }
         Ok(Self {
             temperature_kelvin,
-            concentrations_mol_per_bucket: BTreeMap::new(),
-            gaseous_fractions: BTreeMap::new(),
+            components: Vec::new(),
+            positions_by_substance: Vec::new(),
         })
     }
 
@@ -37,21 +45,41 @@ impl Mixture {
     }
 
     pub fn concentration_of(&self, substance_id: &SubstanceId) -> f64 {
-        self.concentrations_mol_per_bucket
-            .get(substance_id)
-            .copied()
+        self.components
+            .iter()
+            .find(|component| &component.substance_id == substance_id)
+            .map(|component| component.concentration_mol_per_bucket)
             .unwrap_or(0.0)
     }
 
     pub fn gaseous_fraction_of(&self, substance_id: &SubstanceId) -> f64 {
-        self.gaseous_fractions
-            .get(substance_id)
-            .copied()
+        self.components
+            .iter()
+            .find(|component| &component.substance_id == substance_id)
+            .map(|component| component.gaseous_fraction)
             .unwrap_or(0.0)
     }
 
     pub fn substances(&self) -> impl Iterator<Item = &SubstanceId> {
-        self.concentrations_mol_per_bucket.keys()
+        self.components
+            .iter()
+            .map(|component| &component.substance_id)
+    }
+
+    pub(crate) fn component_indices(&self) -> impl Iterator<Item = SubstanceIndex> + '_ {
+        self.components.iter().map(|component| component.substance)
+    }
+
+    pub(crate) fn concentration_of_index(&self, substance: SubstanceIndex) -> f64 {
+        self.position_of_substance(substance)
+            .map(|position| self.components[position].concentration_mol_per_bucket)
+            .unwrap_or(0.0)
+    }
+
+    pub(crate) fn gaseous_fraction_of_index(&self, substance: SubstanceIndex) -> f64 {
+        self.position_of_substance(substance)
+            .map(|position| self.components[position].gaseous_fraction)
+            .unwrap_or(0.0)
     }
 
     pub fn add_substance(
@@ -61,6 +89,9 @@ impl Mixture {
         concentration_mol_per_bucket: f64,
     ) -> ChemistryResult<()> {
         let substance_id = substance_id.into();
+        let substance_index = registry.substance_index(&substance_id).ok_or_else(|| {
+            ChemistryError::InvalidMixtureState(format!("unknown substance '{substance_id}'"))
+        })?;
         let substance = registry.substance(&substance_id)?;
         if substance
             .tags
@@ -75,23 +106,19 @@ impl Mixture {
         if concentration_mol_per_bucket == 0.0 {
             return Ok(());
         }
-        let new_concentration = self.concentration_of(&substance_id) + concentration_mol_per_bucket;
-        self.concentrations_mol_per_bucket
-            .insert(substance_id.clone(), new_concentration);
-        self.gaseous_fractions
-            .entry(substance_id.clone())
-            .or_insert_with(|| {
-                if registry
-                    .substance(&substance_id)
-                    .expect("already validated")
-                    .boiling_point_kelvin
-                    < self.temperature_kelvin
-                {
-                    1.0
-                } else {
-                    0.0
-                }
-            });
+        self.ensure_position_capacity(registry);
+        let initial_gas = if substance.boiling_point_kelvin < self.temperature_kelvin {
+            1.0
+        } else {
+            0.0
+        };
+        self.change_concentration_by_index_unchecked(
+            registry,
+            substance_index,
+            substance_id,
+            concentration_mol_per_bucket,
+            initial_gas,
+        )?;
         self.validate(registry)
     }
 
@@ -102,11 +129,12 @@ impl Mixture {
         gaseous_fraction: f64,
     ) -> ChemistryResult<()> {
         let substance_id = substance_id.into();
-        registry.substance(&substance_id)?;
+        let substance_index = registry.substance_index(&substance_id).ok_or_else(|| {
+            ChemistryError::InvalidMixtureState(format!("unknown substance '{substance_id}'"))
+        })?;
         validate_gaseous_fraction(gaseous_fraction)?;
-        if self.concentration_of(&substance_id) > 0.0 {
-            self.gaseous_fractions
-                .insert(substance_id, gaseous_fraction);
+        if let Some(position) = self.position_of_substance(substance_index) {
+            self.components[position].gaseous_fraction = gaseous_fraction;
         }
         self.validate(registry)
     }
@@ -117,39 +145,91 @@ impl Mixture {
         substance_id: &SubstanceId,
         delta_mol_per_bucket: f64,
     ) -> ChemistryResult<()> {
-        registry.substance(substance_id)?;
+        let substance_index = registry.substance_index(substance_id).ok_or_else(|| {
+            ChemistryError::InvalidMixtureState(format!("unknown substance '{substance_id}'"))
+        })?;
+        self.change_concentration_by_index(registry, substance_index, delta_mol_per_bucket)
+    }
+
+    pub(crate) fn change_concentration_by_index(
+        &mut self,
+        registry: &ChemistryRegistry,
+        substance: SubstanceIndex,
+        delta_mol_per_bucket: f64,
+    ) -> ChemistryResult<()> {
+        let substance_id = registry.substance_by_index(substance)?.id.clone();
         if !delta_mol_per_bucket.is_finite() {
             return Err(ChemistryError::InvalidMixtureState(
                 "concentration change must be finite".to_string(),
             ));
         }
-        let current = self.concentration_of(substance_id);
+        self.ensure_position_capacity(registry);
+        let current = self.concentration_of_index(substance);
         let next = current + delta_mol_per_bucket;
         if next < -TRACE_CONCENTRATION_MOL_PER_BUCKET {
             return Err(ChemistryError::InvalidMixtureState(format!(
-                "substance '{substance_id}' would become negative: {next}"
+                "substance '{}' would become negative: {next}",
+                substance_id
             )));
         }
         if next <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
-            self.concentrations_mol_per_bucket.remove(substance_id);
-            self.gaseous_fractions.remove(substance_id);
+            self.remove_component(substance);
         } else {
-            self.concentrations_mol_per_bucket
-                .insert(substance_id.clone(), next);
-            self.gaseous_fractions
-                .entry(substance_id.clone())
-                .or_insert_with(|| {
-                    if registry
-                        .substance(substance_id)
-                        .expect("already validated")
-                        .boiling_point_kelvin
-                        < self.temperature_kelvin
-                    {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                });
+            let initial_gas = if registry.substance_by_index(substance)?.boiling_point_kelvin
+                < self.temperature_kelvin
+            {
+                1.0
+            } else {
+                0.0
+            };
+            self.change_concentration_by_index_unchecked(
+                registry,
+                substance,
+                substance_id,
+                delta_mol_per_bucket,
+                initial_gas,
+            )?;
+        }
+        self.validate(registry)
+    }
+
+    pub(crate) fn apply_concentration_deltas_by_index(
+        &mut self,
+        registry: &ChemistryRegistry,
+        deltas: &[(SubstanceIndex, f64)],
+    ) -> ChemistryResult<()> {
+        self.ensure_position_capacity(registry);
+        let mut next = Vec::new();
+        for (substance, delta) in deltas {
+            if !delta.is_finite() {
+                return Err(ChemistryError::InvalidMixtureState(
+                    "concentration change must be finite".to_string(),
+                ));
+            }
+            let current = self.concentration_of_index(*substance);
+            let value = current + delta;
+            if value < -TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                let substance_id = &registry.substance_by_index(*substance)?.id;
+                return Err(ChemistryError::InvalidMixtureState(format!(
+                    "substance '{substance_id}' would become negative: {value}"
+                )));
+            }
+            next.push((*substance, value));
+        }
+        for (substance, value) in next {
+            if value <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                self.remove_component(substance);
+            } else if let Some(position) = self.position_of_substance(substance) {
+                self.components[position].concentration_mol_per_bucket = value;
+            } else {
+                let substance_data = registry.substance_by_index(substance)?;
+                let initial_gas = if substance_data.boiling_point_kelvin < self.temperature_kelvin {
+                    1.0
+                } else {
+                    0.0
+                };
+                self.insert_component(substance, substance_data.id.clone(), value, initial_gas);
+            }
         }
         self.validate(registry)
     }
@@ -164,7 +244,7 @@ impl Mixture {
                 "heat energy must be finite".to_string(),
             ));
         }
-        if energy_j_per_bucket == 0.0 || self.concentrations_mol_per_bucket.is_empty() {
+        if energy_j_per_bucket == 0.0 || self.components.is_empty() {
             return self.validate(registry);
         }
 
@@ -183,7 +263,7 @@ impl Mixture {
             }
             let temperature_change = energy_j_per_bucket / heat_capacity;
             if temperature_change > 0.0 {
-                if let Some((substance_id, boiling_point)) =
+                if let Some((substance_index, boiling_point)) =
                     self.next_higher_boiling_point(registry)?
                 {
                     if self.temperature_kelvin + temperature_change >= boiling_point {
@@ -192,23 +272,26 @@ impl Mixture {
                         self.temperature_kelvin = boiling_point;
                         energy_j_per_bucket -= energy_to_boiling;
 
-                        let concentration = self.concentration_of(&substance_id);
-                        let current_gas = self.gaseous_fraction_of(&substance_id);
+                        let concentration = self.concentration_of_index(substance_index);
+                        let current_gas = self.gaseous_fraction_of_index(substance_index);
                         let liquid_concentration = concentration * (1.0 - current_gas);
-                        let latent_heat = registry.substance(&substance_id)?.latent_heat_j_per_mol;
+                        let latent_heat = registry.substance_properties().latent_heat_j_per_mol
+                            [substance_index.as_usize()];
                         let energy_to_fully_boil = liquid_concentration * latent_heat;
                         if energy_to_fully_boil <= 0.0 {
-                            self.gaseous_fractions.insert(substance_id, 1.0);
+                            self.set_gaseous_fraction_by_index(substance_index, 1.0);
                             continue;
                         }
                         if energy_j_per_bucket >= energy_to_fully_boil {
-                            self.gaseous_fractions.insert(substance_id, 1.0);
+                            self.set_gaseous_fraction_by_index(substance_index, 1.0);
                             energy_j_per_bucket -= energy_to_fully_boil;
                         } else {
                             let boiled_fraction =
                                 energy_j_per_bucket / (latent_heat * concentration);
-                            self.gaseous_fractions
-                                .insert(substance_id, current_gas + boiled_fraction);
+                            self.set_gaseous_fraction_by_index(
+                                substance_index,
+                                current_gas + boiled_fraction,
+                            );
                             energy_j_per_bucket = 0.0;
                         }
                         continue;
@@ -217,7 +300,7 @@ impl Mixture {
                 self.temperature_kelvin += temperature_change;
                 energy_j_per_bucket = 0.0;
             } else {
-                if let Some((substance_id, boiling_point)) =
+                if let Some((substance_index, boiling_point)) =
                     self.next_lower_boiling_point(registry)?
                 {
                     if self.temperature_kelvin + temperature_change < boiling_point {
@@ -226,23 +309,26 @@ impl Mixture {
                         self.temperature_kelvin = boiling_point;
                         energy_j_per_bucket -= energy_to_boiling;
 
-                        let concentration = self.concentration_of(&substance_id);
-                        let current_gas = self.gaseous_fraction_of(&substance_id);
+                        let concentration = self.concentration_of_index(substance_index);
+                        let current_gas = self.gaseous_fraction_of_index(substance_index);
                         let gas_concentration = concentration * current_gas;
-                        let latent_heat = registry.substance(&substance_id)?.latent_heat_j_per_mol;
+                        let latent_heat = registry.substance_properties().latent_heat_j_per_mol
+                            [substance_index.as_usize()];
                         let released_by_full_condensation = gas_concentration * latent_heat;
                         if released_by_full_condensation <= 0.0 {
-                            self.gaseous_fractions.insert(substance_id, 0.0);
+                            self.set_gaseous_fraction_by_index(substance_index, 0.0);
                             continue;
                         }
                         if -energy_j_per_bucket >= released_by_full_condensation {
-                            self.gaseous_fractions.insert(substance_id, 0.0);
+                            self.set_gaseous_fraction_by_index(substance_index, 0.0);
                             energy_j_per_bucket += released_by_full_condensation;
                         } else {
                             let condensed_fraction =
                                 -energy_j_per_bucket / (latent_heat * concentration);
-                            self.gaseous_fractions
-                                .insert(substance_id, current_gas - condensed_fraction);
+                            self.set_gaseous_fraction_by_index(
+                                substance_index,
+                                current_gas - condensed_fraction,
+                            );
                             energy_j_per_bucket = 0.0;
                         }
                         continue;
@@ -260,16 +346,12 @@ impl Mixture {
         &self,
         registry: &ChemistryRegistry,
     ) -> ChemistryResult<f64> {
-        self.concentrations_mol_per_bucket.iter().try_fold(
-            0.0,
-            |acc, (substance_id, concentration)| {
-                Ok(acc
-                    + registry
-                        .substance(substance_id)?
-                        .molar_heat_capacity_j_per_mol_kelvin
-                        * concentration)
-            },
-        )
+        self.validate_registry_shape(registry)?;
+        let properties = registry.substance_properties();
+        Ok(self.components.iter().fold(0.0, |acc, component| {
+            acc + properties.molar_heat_capacity_j_per_mol_kelvin[component.substance.as_usize()]
+                * component.concentration_mol_per_bucket
+        }))
     }
 
     pub fn recalculate_volume_millibuckets(
@@ -279,11 +361,14 @@ impl Mixture {
     ) -> ChemistryResult<u32> {
         self.validate(registry)?;
         let mut liquid_buckets = 0.0;
-        for (substance_id, concentration) in &self.concentrations_mol_per_bucket {
-            let substance = registry.substance(substance_id)?;
-            let liquid_fraction = 1.0 - self.gaseous_fraction_of(substance_id);
-            liquid_buckets += concentration * substance.molar_mass_grams * liquid_fraction
-                / substance.liquid_density_grams_per_bucket;
+        let properties = registry.substance_properties();
+        for component in &self.components {
+            let liquid_fraction = 1.0 - component.gaseous_fraction;
+            let index = component.substance.as_usize();
+            liquid_buckets += component.concentration_mol_per_bucket
+                * properties.molar_mass_grams[index]
+                * liquid_fraction
+                / properties.liquid_density_grams_per_bucket[index];
         }
         let calculated = (liquid_buckets * 1000.0).round();
         if calculated.is_finite() && calculated > 0.0 && calculated <= u32::MAX as f64 {
@@ -320,19 +405,19 @@ impl Mixture {
                 ));
             }
             mixture.validate(registry)?;
-            for (substance_id, concentration) in &mixture.concentrations_mol_per_bucket {
-                let moles = concentration * amount;
+            for component in &mixture.components {
+                let moles = component.concentration_mol_per_bucket * amount;
                 *moles_by_substance
-                    .entry(substance_id.clone())
+                    .entry(component.substance_id.clone())
                     .or_insert(0.0) += moles;
-                let substance = registry.substance(substance_id)?;
+                let substance = registry.substance_by_index(component.substance)?;
                 total_energy += substance.molar_heat_capacity_j_per_mol_kelvin
-                    * concentration
+                    * component.concentration_mol_per_bucket
                     * mixture.temperature_kelvin
                     * amount;
                 total_energy += substance.latent_heat_j_per_mol
-                    * concentration
-                    * mixture.gaseous_fraction_of(substance_id)
+                    * component.concentration_mol_per_bucket
+                    * component.gaseous_fraction
                     * amount;
             }
         }
@@ -340,7 +425,10 @@ impl Mixture {
         let mut result = Mixture::new(0.0)?;
         for (substance_id, moles) in moles_by_substance {
             result.add_substance(registry, substance_id.clone(), moles / total_amount)?;
-            result.gaseous_fractions.insert(substance_id, 0.0);
+            let substance_index = registry.substance_index(&substance_id).ok_or_else(|| {
+                ChemistryError::InvalidMixtureState(format!("unknown substance '{substance_id}'"))
+            })?;
+            result.set_gaseous_fraction_by_index(substance_index, 0.0);
         }
         result.heat(registry, total_energy / total_amount)?;
         Ok(result)
@@ -352,19 +440,35 @@ impl Mixture {
                 "temperature must be non-negative and finite".to_string(),
             ));
         }
-        for (substance_id, concentration) in &self.concentrations_mol_per_bucket {
-            registry.substance(substance_id)?;
-            validate_concentration(*concentration)?;
-            let gas = self.gaseous_fraction_of(substance_id);
-            validate_gaseous_fraction(gas)?;
-        }
-        for substance_id in self.gaseous_fractions.keys() {
-            if !self
-                .concentrations_mol_per_bucket
-                .contains_key(substance_id)
+        self.validate_registry_shape(registry)?;
+        let mut seen = BTreeSet::new();
+        for (position, component) in self.components.iter().enumerate() {
+            let substance = registry.substance_by_index(component.substance)?;
+            if substance.id != component.substance_id {
+                return Err(ChemistryError::InvalidMixtureState(format!(
+                    "mixture component '{}' does not match registry index {}",
+                    component.substance_id,
+                    component.substance.as_usize()
+                )));
+            }
+            if !seen.insert(component.substance) {
+                return Err(ChemistryError::InvalidMixtureState(format!(
+                    "duplicate mixture component '{}'",
+                    component.substance_id
+                )));
+            }
+            validate_concentration(component.concentration_mol_per_bucket)?;
+            validate_gaseous_fraction(component.gaseous_fraction)?;
+            if self
+                .positions_by_substance
+                .get(component.substance.as_usize())
+                .copied()
+                .flatten()
+                != Some(position)
             {
                 return Err(ChemistryError::InvalidMixtureState(format!(
-                    "substance '{substance_id}' has gas fraction but no concentration"
+                    "mixture position index is inconsistent for '{}'",
+                    component.substance_id
                 )));
             }
         }
@@ -374,17 +478,13 @@ impl Mixture {
     fn next_higher_boiling_point(
         &self,
         registry: &ChemistryRegistry,
-    ) -> ChemistryResult<Option<(SubstanceId, f64)>> {
+    ) -> ChemistryResult<Option<(SubstanceIndex, f64)>> {
         let mut candidates = BTreeSet::new();
-        for substance_id in self.substances() {
-            let substance = registry.substance(substance_id)?;
-            if substance.boiling_point_kelvin >= self.temperature_kelvin
-                && self.gaseous_fraction_of(substance_id) < 1.0
-            {
-                candidates.insert((
-                    ordered_f64(substance.boiling_point_kelvin),
-                    substance_id.clone(),
-                ));
+        let properties = registry.substance_properties();
+        for component in &self.components {
+            let boiling_point = properties.boiling_point_kelvin[component.substance.as_usize()];
+            if boiling_point >= self.temperature_kelvin && component.gaseous_fraction < 1.0 {
+                candidates.insert((ordered_f64(boiling_point), component.substance));
             }
         }
         Ok(candidates.into_iter().next().map(|(bp, id)| (id, bp.0)))
@@ -393,21 +493,112 @@ impl Mixture {
     fn next_lower_boiling_point(
         &self,
         registry: &ChemistryRegistry,
-    ) -> ChemistryResult<Option<(SubstanceId, f64)>> {
-        let mut best: Option<(SubstanceId, f64)> = None;
-        for substance_id in self.substances() {
-            let substance = registry.substance(substance_id)?;
-            if substance.boiling_point_kelvin <= self.temperature_kelvin
-                && self.gaseous_fraction_of(substance_id) > 0.0
+    ) -> ChemistryResult<Option<(SubstanceIndex, f64)>> {
+        let mut best: Option<(SubstanceIndex, f64)> = None;
+        let properties = registry.substance_properties();
+        for component in &self.components {
+            let boiling_point = properties.boiling_point_kelvin[component.substance.as_usize()];
+            if boiling_point <= self.temperature_kelvin
+                && component.gaseous_fraction > 0.0
                 && best
                     .as_ref()
-                    .map(|(_, bp)| substance.boiling_point_kelvin > *bp)
+                    .map(|(_, bp)| boiling_point > *bp)
                     .unwrap_or(true)
             {
-                best = Some((substance_id.clone(), substance.boiling_point_kelvin));
+                best = Some((component.substance, boiling_point));
             }
         }
         Ok(best)
+    }
+
+    fn position_of_substance(&self, substance: SubstanceIndex) -> Option<usize> {
+        self.positions_by_substance
+            .get(substance.as_usize())
+            .copied()
+            .flatten()
+    }
+
+    fn ensure_position_capacity(&mut self, registry: &ChemistryRegistry) {
+        if self.positions_by_substance.len() < registry.substance_count() {
+            self.positions_by_substance
+                .resize(registry.substance_count(), None);
+        }
+    }
+
+    fn insert_component(
+        &mut self,
+        substance: SubstanceIndex,
+        substance_id: SubstanceId,
+        concentration_mol_per_bucket: f64,
+        gaseous_fraction: f64,
+    ) {
+        let position = self.components.len();
+        self.components.push(MixtureComponent {
+            substance,
+            substance_id,
+            concentration_mol_per_bucket,
+            gaseous_fraction,
+        });
+        if self.positions_by_substance.len() <= substance.as_usize() {
+            self.positions_by_substance
+                .resize(substance.as_usize() + 1, None);
+        }
+        self.positions_by_substance[substance.as_usize()] = Some(position);
+    }
+
+    fn remove_component(&mut self, substance: SubstanceIndex) {
+        let Some(position) = self.position_of_substance(substance) else {
+            return;
+        };
+        self.components.remove(position);
+        self.rebuild_positions();
+    }
+
+    fn rebuild_positions(&mut self) {
+        self.positions_by_substance.fill(None);
+        for (position, component) in self.components.iter().enumerate() {
+            if self.positions_by_substance.len() <= component.substance.as_usize() {
+                self.positions_by_substance
+                    .resize(component.substance.as_usize() + 1, None);
+            }
+            self.positions_by_substance[component.substance.as_usize()] = Some(position);
+        }
+    }
+
+    fn set_gaseous_fraction_by_index(&mut self, substance: SubstanceIndex, value: f64) {
+        if let Some(position) = self.position_of_substance(substance) {
+            self.components[position].gaseous_fraction = value;
+        }
+    }
+
+    fn change_concentration_by_index_unchecked(
+        &mut self,
+        registry: &ChemistryRegistry,
+        substance: SubstanceIndex,
+        substance_id: SubstanceId,
+        delta_mol_per_bucket: f64,
+        initial_gas: f64,
+    ) -> ChemistryResult<()> {
+        registry.substance_by_index(substance)?;
+        if let Some(position) = self.position_of_substance(substance) {
+            self.components[position].concentration_mol_per_bucket += delta_mol_per_bucket;
+        } else {
+            self.insert_component(substance, substance_id, delta_mol_per_bucket, initial_gas);
+        }
+        Ok(())
+    }
+
+    fn validate_registry_shape(&self, registry: &ChemistryRegistry) -> ChemistryResult<()> {
+        for component in &self.components {
+            if component.substance.as_usize() >= registry.substance_count() {
+                return Err(ChemistryError::InvalidMixtureState(format!(
+                    "mixture component '{}' uses substance index {} outside registry",
+                    component.substance_id,
+                    component.substance.as_usize()
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -475,16 +666,44 @@ mod tests {
     fn recalculate_volume_rejects_invalid_mixture_state() {
         let registry = test_registry();
         let water: SubstanceId = "destroy:water".into();
+        let water_index = registry.substance_index(&water).unwrap();
         let mut mixture = Mixture::new(298.0).unwrap();
-        mixture
-            .concentrations_mol_per_bucket
-            .insert(water.clone(), 1.0);
-        mixture.gaseous_fractions.insert(water, 1.5);
+        mixture.components.push(MixtureComponent {
+            substance: water_index,
+            substance_id: water,
+            concentration_mol_per_bucket: 1.0,
+            gaseous_fraction: 1.5,
+        });
+        mixture.positions_by_substance = vec![Some(0)];
 
         let error = mixture
             .recalculate_volume_millibuckets(&registry, 1000)
             .unwrap_err();
 
         assert!(matches!(error, ChemistryError::InvalidMixtureState(_)));
+    }
+
+    #[test]
+    fn public_substance_accessors_match_index_storage() {
+        let registry = test_registry();
+        let water: SubstanceId = "destroy:water".into();
+        let water_index = registry.substance_index(&water).unwrap();
+        let mut mixture = Mixture::new(298.0).unwrap();
+
+        mixture
+            .add_substance(&registry, water.clone(), 2.0)
+            .unwrap();
+        mixture
+            .set_gaseous_fraction(&registry, water.clone(), 0.25)
+            .unwrap();
+
+        assert_eq!(mixture.concentration_of(&water), 2.0);
+        assert_eq!(mixture.concentration_of_index(water_index), 2.0);
+        assert_eq!(mixture.gaseous_fraction_of(&water), 0.25);
+        assert_eq!(mixture.gaseous_fraction_of_index(water_index), 0.25);
+        assert_eq!(
+            mixture.substances().cloned().collect::<Vec<_>>(),
+            vec![water]
+        );
     }
 }

@@ -329,6 +329,45 @@ mod tests {
     }
 
     #[test]
+    fn numeric_registry_indices_match_public_lookup() {
+        let registry = test_registry();
+        let water = water_id();
+        let oxygen: SubstanceId = "destroy:oxygen".into();
+        let combustion = "destroy:combustion".into();
+
+        let water_index = registry.substance_index(&water).unwrap();
+        let oxygen_index = registry.substance_index(&oxygen).unwrap();
+        assert_ne!(water_index, oxygen_index);
+        assert_eq!(registry.substance_by_index(water_index).unwrap().id, water);
+
+        let reaction_index = registry.reaction_index(&combustion).unwrap();
+        assert_eq!(
+            registry.reaction_by_index(reaction_index).unwrap().id,
+            combustion
+        );
+    }
+
+    #[test]
+    fn indexed_reaction_candidates_match_public_candidates() {
+        let registry = test_registry();
+        let hydrogen: SubstanceId = "destroy:hydrogen".into();
+        let hydrogen_index = registry.substance_index(&hydrogen).unwrap();
+
+        let public_candidates = registry
+            .reaction_candidates_for_substances([&hydrogen])
+            .into_iter()
+            .map(|reaction| reaction.id.to_string())
+            .collect::<Vec<_>>();
+        let indexed_candidates = registry
+            .reaction_candidate_indices_for_substance_indices([hydrogen_index])
+            .into_iter()
+            .map(|index| registry.reaction_by_index(index).unwrap().id.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(indexed_candidates, public_candidates);
+    }
+
+    #[test]
     fn uv_context_controls_reaction_rate() {
         let registry = ChemistryRegistryBuilder::new()
             .substance(Substance::new(

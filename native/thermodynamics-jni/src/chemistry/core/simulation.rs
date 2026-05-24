@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::{Mixture, TRACE_CONCENTRATION_MOL_PER_BUCKET};
 use super::reaction::Reaction;
-use super::registry::ChemistryRegistry;
+use super::registry::{ChemistryRegistry, IndexedReaction, SubstanceIndex};
 
 pub const TICKS_PER_SECOND: f64 = 20.0;
 pub const EQUILIBRIUM_EPSILON_MOL_PER_BUCKET: f64 = TRACE_CONCENTRATION_MOL_PER_BUCKET;
@@ -87,27 +87,50 @@ pub fn react_for_tick_with_context(
     for _ in 0..cycles {
         let before = snapshot(mixture);
         let mut reactions_with_rates = Vec::new();
-        for reaction in registry.reaction_candidates_for_substances(mixture.substances()) {
+        for reaction_index in
+            registry.reaction_candidate_indices_for_substance_indices(mixture.component_indices())
+        {
+            let reaction = registry.reaction_by_index(reaction_index)?;
+            let indexed_reaction = registry.indexed_reaction(reaction_index)?;
             if !context_allows_reaction(reaction, context) {
                 continue;
             }
-            let rate = reaction_rate_mol_per_bucket_per_tick_with_context(
-                registry, mixture, reaction, context,
+            let rate = reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
+                mixture,
+                reaction,
+                indexed_reaction,
+                context,
             )? / cycles as f64;
             if rate > 0.0 {
-                reactions_with_rates.push((reaction, rate));
+                reactions_with_rates.push((reaction_index, rate));
             }
         }
-        reactions_with_rates.sort_by(|(left_reaction, left), (right_reaction, right)| {
+        reactions_with_rates.sort_by(|(left_index, left), (right_index, right)| {
+            let left_reaction = registry
+                .reaction_by_index(*left_index)
+                .expect("reaction candidate index must be valid");
+            let right_reaction = registry
+                .reaction_by_index(*right_index)
+                .expect("reaction candidate index must be valid");
             right
                 .total_cmp(left)
                 .then_with(|| left_reaction.id.as_str().cmp(right_reaction.id.as_str()))
         });
 
-        for (reaction, rate) in reactions_with_rates {
-            let limited = limit_by_reactants_and_context(mixture, context, reaction, rate);
+        for (reaction_index, rate) in reactions_with_rates {
+            let reaction = registry.reaction_by_index(reaction_index)?;
+            let indexed_reaction = registry.indexed_reaction(reaction_index)?;
+            let limited =
+                limit_by_reactants_and_context(mixture, context, reaction, indexed_reaction, rate);
             if limited > 0.0 {
-                apply_reaction(registry, mixture, context, reaction, limited)?;
+                apply_reaction(
+                    registry,
+                    mixture,
+                    context,
+                    reaction,
+                    indexed_reaction,
+                    limited,
+                )?;
             }
         }
 
@@ -200,6 +223,33 @@ pub fn reaction_rate_mol_per_bucket_per_tick_with_context(
     Ok(rate)
 }
 
+fn reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
+    mixture: &Mixture,
+    reaction: &Reaction,
+    indexed_reaction: &IndexedReaction,
+    context: &ReactionContext,
+) -> ChemistryResult<f64> {
+    let mut rate =
+        reaction.rate_constant_per_second(mixture.temperature_kelvin())? / TICKS_PER_SECOND;
+    if reaction.requires_uv {
+        rate *= context.uv_power;
+    }
+    for (substance, order) in &indexed_reaction.orders {
+        let concentration = mixture.concentration_of_index(*substance);
+        if concentration <= 0.0 {
+            return Ok(0.0);
+        }
+        rate *= concentration.powi(*order as i32);
+    }
+    if !rate.is_finite() || rate < 0.0 {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: reaction.id.to_string(),
+            reason: "calculated reaction rate must be non-negative and finite".to_string(),
+        });
+    }
+    Ok(rate)
+}
+
 fn context_allows_reaction(reaction: &Reaction, context: &ReactionContext) -> bool {
     if reaction.requires_uv && context.uv_power <= 0.0 {
         return false;
@@ -233,16 +283,18 @@ fn limit_by_reactants_and_context(
     mixture: &Mixture,
     context: &ReactionContext,
     reaction: &Reaction,
+    indexed_reaction: &IndexedReaction,
     requested_moles: f64,
 ) -> f64 {
-    let molecule_limited = reaction
-        .reactants
-        .iter()
-        .fold(requested_moles, |current, reactant| {
-            let available =
-                mixture.concentration_of(&reactant.substance_id) / reactant.coefficient as f64;
-            current.min(available)
-        });
+    let molecule_limited =
+        indexed_reaction
+            .reactants
+            .iter()
+            .fold(requested_moles, |current, reactant| {
+                let available = mixture.concentration_of_index(reactant.substance)
+                    / reactant.coefficient as f64;
+                current.min(available)
+            });
     reaction
         .external_reactants
         .iter()
@@ -262,6 +314,7 @@ fn apply_reaction(
     mixture: &mut Mixture,
     context: &mut ReactionContext,
     reaction: &Reaction,
+    indexed_reaction: &IndexedReaction,
     moles_per_bucket: f64,
 ) -> ChemistryResult<()> {
     if !moles_per_bucket.is_finite() || moles_per_bucket < 0.0 {
@@ -270,20 +323,77 @@ fn apply_reaction(
             reason: "moles to apply must be non-negative and finite".to_string(),
         });
     }
-    for reactant in &reaction.reactants {
-        mixture.change_concentration(
-            registry,
-            &reactant.substance_id,
+    let previous_mixture = mixture.clone();
+    let previous_context = context.clone();
+    let result = apply_reaction_inner(
+        registry,
+        mixture,
+        context,
+        reaction,
+        indexed_reaction,
+        moles_per_bucket,
+    );
+    if result.is_err() {
+        *mixture = previous_mixture;
+        *context = previous_context;
+    }
+    result
+}
+
+fn apply_reaction_inner(
+    registry: &ChemistryRegistry,
+    mixture: &mut Mixture,
+    context: &mut ReactionContext,
+    reaction: &Reaction,
+    indexed_reaction: &IndexedReaction,
+    moles_per_bucket: f64,
+) -> ChemistryResult<()> {
+    let mut deltas = Vec::new();
+    for reactant in &indexed_reaction.reactants {
+        add_delta(
+            &mut deltas,
+            reactant.substance,
             -(reactant.coefficient as f64) * moles_per_bucket,
-        )?;
+        );
     }
-    for product in &reaction.products {
-        mixture.change_concentration(
-            registry,
-            &product.substance_id,
+    for product in &indexed_reaction.products {
+        add_delta(
+            &mut deltas,
+            product.substance,
             (product.coefficient as f64) * moles_per_bucket,
-        )?;
+        );
     }
+    mixture.apply_concentration_deltas_by_index(registry, &deltas)?;
+    apply_external_reactants(context, reaction, moles_per_bucket)?;
+    for result in &reaction.reaction_results {
+        *context
+            .reaction_results
+            .entry(result.description.clone())
+            .or_insert(0.0) += result.moles_per_reaction * moles_per_bucket;
+    }
+    mixture.heat(
+        registry,
+        -reaction.enthalpy_change_kj_per_mol * 1000.0 * moles_per_bucket,
+    )?;
+    Ok(())
+}
+
+fn add_delta(deltas: &mut Vec<(SubstanceIndex, f64)>, substance: SubstanceIndex, delta: f64) {
+    if let Some((_, existing)) = deltas
+        .iter_mut()
+        .find(|(existing_substance, _)| *existing_substance == substance)
+    {
+        *existing += delta;
+    } else {
+        deltas.push((substance, delta));
+    }
+}
+
+fn apply_external_reactants(
+    context: &mut ReactionContext,
+    reaction: &Reaction,
+    moles_per_bucket: f64,
+) -> ChemistryResult<()> {
     for external in &reaction.external_reactants {
         let current = context
             .external_reactants
@@ -305,16 +415,6 @@ fn apply_reaction(
                 .insert(external.description.clone(), next);
         }
     }
-    for result in &reaction.reaction_results {
-        *context
-            .reaction_results
-            .entry(result.description.clone())
-            .or_insert(0.0) += result.moles_per_reaction * moles_per_bucket;
-    }
-    mixture.heat(
-        registry,
-        -reaction.enthalpy_change_kj_per_mol * 1000.0 * moles_per_bucket,
-    )?;
     Ok(())
 }
 
@@ -338,23 +438,25 @@ fn add_external(
     Ok(())
 }
 
-fn snapshot(mixture: &Mixture) -> Vec<(String, f64)> {
+fn snapshot(mixture: &Mixture) -> Vec<(SubstanceIndex, f64)> {
     mixture
-        .substances()
-        .map(|id| (id.to_string(), mixture.concentration_of(id)))
+        .component_indices()
+        .map(|substance| (substance, mixture.concentration_of_index(substance)))
         .collect()
 }
 
-fn changed_since(mixture: &Mixture, before: &[(String, f64)]) -> bool {
-    for (id, previous) in before {
-        let current = mixture.concentration_of(&id.as_str().into());
+fn changed_since(mixture: &Mixture, before: &[(SubstanceIndex, f64)]) -> bool {
+    for (substance, previous) in before {
+        let current = mixture.concentration_of_index(*substance);
         if (current - previous).abs() > EQUILIBRIUM_EPSILON_MOL_PER_BUCKET {
             return true;
         }
     }
-    for id in mixture.substances() {
-        if !before.iter().any(|(before_id, _)| before_id == id.as_str())
-            && mixture.concentration_of(id) > EQUILIBRIUM_EPSILON_MOL_PER_BUCKET
+    for substance in mixture.component_indices() {
+        if !before
+            .iter()
+            .any(|(before_substance, _)| *before_substance == substance)
+            && mixture.concentration_of_index(substance) > EQUILIBRIUM_EPSILON_MOL_PER_BUCKET
         {
             return true;
         }
