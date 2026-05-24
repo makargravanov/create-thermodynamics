@@ -49,6 +49,7 @@ fn register_phase_tables(builder: ChemistryRegistryBuilder) -> ChemistryRegistry
                 henry_mol_per_bucket_pascal: 1.3e-8,
                 temperature_kelvin: 298.0,
                 salting_out_coefficient: 0.12,
+                transfer_coefficient_per_tick: 0.15,
                 estimated: true,
             },
         )
@@ -58,6 +59,7 @@ fn register_phase_tables(builder: ChemistryRegistryBuilder) -> ChemistryRegistry
                 henry_mol_per_bucket_pascal: 7.8e-9,
                 temperature_kelvin: 298.0,
                 salting_out_coefficient: 0.08,
+                transfer_coefficient_per_tick: 0.15,
                 estimated: true,
             },
         )

@@ -91,6 +91,7 @@ pub enum GasSolubilityModel {
         henry_mol_per_bucket_pascal: f64,
         temperature_kelvin: f64,
         salting_out_coefficient: f64,
+        transfer_coefficient_per_tick: f64,
         estimated: bool,
     },
 }
@@ -749,6 +750,7 @@ fn validate_gas_solubility_model(
             henry_mol_per_bucket_pascal,
             temperature_kelvin,
             salting_out_coefficient,
+            transfer_coefficient_per_tick,
             estimated: _,
         } => {
             if !henry_mol_per_bucket_pascal.is_finite() || *henry_mol_per_bucket_pascal < 0.0 {
@@ -767,6 +769,12 @@ fn validate_gas_solubility_model(
                 return Err(ChemistryError::InvalidSubstance {
                     substance_id: substance_id.to_string(),
                     reason: "salting-out coefficient must be non-negative and finite".to_string(),
+                });
+            }
+            if !transfer_coefficient_per_tick.is_finite() || *transfer_coefficient_per_tick < 0.0 {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: substance_id.to_string(),
+                    reason: "gas transfer coefficient must be non-negative and finite".to_string(),
                 });
             }
         }

@@ -107,6 +107,11 @@ pub fn react_for_tick_with_context(
     let mut candidate_scratch = ReactionCandidateScratch::new();
     let mut reactions_with_rates = Vec::new();
     for _ in 0..cycles {
+        let gas_transfer_delta =
+            mixture.transfer_gases_toward_solubility_equilibrium(registry, 1.0 / cycles as f64)?;
+        if gas_transfer_delta > EQUILIBRIUM_EPSILON_MOL_PER_BUCKET {
+            any_changed = true;
+        }
         registry.collect_reaction_candidate_indices_for_substance_indices(
             mixture.component_indices(),
             &mut candidate_scratch,

@@ -195,6 +195,83 @@ impl Mixture {
             / BUCKET_VOLUME_CUBIC_METERS
     }
 
+    pub fn transfer_gases_toward_solubility_equilibrium(
+        &mut self,
+        registry: &ChemistryRegistry,
+        ticks: f64,
+    ) -> ChemistryResult<f64> {
+        if !ticks.is_finite() || ticks < 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "gas transfer time must be non-negative and finite".to_string(),
+            ));
+        }
+        if ticks == 0.0 {
+            return self.validate(registry).map(|_| 0.0);
+        }
+        self.validate_registry_shape(registry)?;
+        let gas_pressure_pascal = self.gas_pressure_pascal();
+        let ionic_strength = self.ionic_strength(registry)?;
+        let mut max_delta = 0.0_f64;
+        let gas_substances = self
+            .components
+            .iter()
+            .filter_map(|component| {
+                registry
+                    .gas_solubility(component.substance)
+                    .map(|model| (component.substance, model.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (substance, model) in gas_substances {
+            let target_dissolved = gas_dissolved_limit(
+                Some(&model),
+                gas_pressure_pascal,
+                ionic_strength,
+                self.temperature_kelvin,
+            )?;
+            let coefficient = gas_transfer_coefficient_per_tick(&model);
+            let fraction = 1.0 - (-coefficient * ticks).exp();
+            if fraction <= 0.0 {
+                continue;
+            }
+            let Some(position) = self.position_of_substance(substance) else {
+                continue;
+            };
+            let current_dissolved = self.components[position]
+                .amount_in_phases(&[MixturePhase::Aqueous, MixturePhase::Organic]);
+            let difference = target_dissolved - current_dissolved;
+            if difference.abs() <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                continue;
+            }
+            if difference > 0.0 {
+                let available_gas = self.components[position].amount_in_phase(MixturePhase::Gas);
+                let moved = (difference * fraction).min(available_gas);
+                if moved <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                    continue;
+                }
+                self.components[position].remove_from_phase(MixturePhase::Gas, moved)?;
+                let preferred = preferred_phase(
+                    registry
+                        .substance_by_index(substance)?
+                        .phase_properties
+                        .preferred_liquid_phase,
+                );
+                self.add_to_phase_for_substance(registry, substance, preferred, moved)?;
+                max_delta = max_delta.max(moved);
+            } else {
+                let moved = (-difference * fraction).min(current_dissolved);
+                if moved <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                    continue;
+                }
+                self.components[position]
+                    .remove_from_phases(&[MixturePhase::Aqueous, MixturePhase::Organic], moved)?;
+                self.components[position].add_to_phase(MixturePhase::Gas, moved);
+                max_delta = max_delta.max(moved);
+            }
+        }
+        self.equilibrate_phases(registry)?;
+        Ok(max_delta)
+    }
+
     pub fn substances(&self) -> impl Iterator<Item = &SubstanceId> {
         self.components
             .iter()
@@ -738,8 +815,6 @@ impl Mixture {
             .iter()
             .map(|component| (component.substance, component.total_concentration()))
             .collect::<Vec<_>>();
-        let gas_pressure_pascal = self.gas_pressure_pascal();
-        let ionic_strength = self.ionic_strength(registry)?;
         let solvent_clusters = self.solvent_clusters(registry)?;
         for position in 0..self.components.len() {
             let substance = registry.substance_by_index(self.components[position].substance)?;
@@ -747,13 +822,8 @@ impl Mixture {
             let mut next = ComponentPhaseAmounts::default();
             match substance.aggregate_state_at(self.temperature_kelvin)? {
                 SubstanceAggregateState::Gas => {
-                    let dissolved = gas_dissolved_limit(
-                        registry.gas_solubility(self.components[position].substance),
-                        gas_pressure_pascal,
-                        ionic_strength,
-                        self.temperature_kelvin,
-                    )?
-                    .min(total);
+                    let current_gas = self.components[position].amount_in_phase(MixturePhase::Gas);
+                    let dissolved = (total - current_gas).max(0.0);
                     next.gas_mol_per_bucket = total - dissolved;
                     if dissolved > 0.0 {
                         distribute_condensed_amount(
@@ -1558,6 +1628,7 @@ fn gas_dissolved_limit(
             henry_mol_per_bucket_pascal,
             temperature_kelvin: reference_temperature,
             salting_out_coefficient,
+            transfer_coefficient_per_tick: _,
             estimated: _,
         } => {
             if !pressure_pascal.is_finite() || pressure_pascal < 0.0 {
@@ -1583,6 +1654,15 @@ fn gas_dissolved_limit(
             }
             Ok(dissolved)
         }
+    }
+}
+
+fn gas_transfer_coefficient_per_tick(model: &GasSolubilityModel) -> f64 {
+    match model {
+        GasSolubilityModel::Henry {
+            transfer_coefficient_per_tick,
+            ..
+        } => *transfer_coefficient_per_tick,
     }
 }
 
@@ -1786,6 +1866,7 @@ mod tests {
                     henry_mol_per_bucket_pascal: 1.0e-8,
                     temperature_kelvin: 298.0,
                     salting_out_coefficient: 0.5,
+                    transfer_coefficient_per_tick: 0.25,
                     estimated: false,
                 },
             )
@@ -2060,11 +2141,16 @@ mod tests {
         let sodium: SubstanceId = "destroy:sodium".into();
         let mut pure = Mixture::new(298.0).unwrap();
         pure.add_substance(&registry, oxygen.clone(), 1.0).unwrap();
+        pure.transfer_gases_toward_solubility_equilibrium(&registry, 1.0)
+            .unwrap();
         let pure_dissolved = pure.concentration_in_phase(&oxygen, MixturePhase::Aqueous);
 
         let mut salty = Mixture::new(298.0).unwrap();
         salty.add_substance(&registry, sodium, 1.0).unwrap();
         salty.add_substance(&registry, oxygen.clone(), 1.0).unwrap();
+        salty
+            .transfer_gases_toward_solubility_equilibrium(&registry, 1.0)
+            .unwrap();
         let salty_dissolved = salty.concentration_in_phase(&oxygen, MixturePhase::Aqueous);
 
         assert!(pure.gas_pressure_pascal() > 0.0);
@@ -2085,6 +2171,36 @@ mod tests {
             0.0
         );
         assert_eq!(mixture.concentration_in_phase(&gas, MixturePhase::Gas), 1.0);
+    }
+
+    #[test]
+    fn gas_transfer_moves_toward_henry_limit_gradually() {
+        let registry = gas_registry();
+        let oxygen: SubstanceId = "destroy:oxygen".into();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, oxygen.clone(), 1.0)
+            .unwrap();
+
+        assert_eq!(
+            mixture.concentration_in_phase(&oxygen, MixturePhase::Aqueous),
+            0.0
+        );
+
+        let first_delta = mixture
+            .transfer_gases_toward_solubility_equilibrium(&registry, 1.0)
+            .unwrap();
+        let after_first = mixture.concentration_in_phase(&oxygen, MixturePhase::Aqueous);
+        let second_delta = mixture
+            .transfer_gases_toward_solubility_equilibrium(&registry, 1.0)
+            .unwrap();
+        let after_second = mixture.concentration_in_phase(&oxygen, MixturePhase::Aqueous);
+
+        assert!(first_delta > 0.0);
+        assert!(second_delta > 0.0);
+        assert!(after_first > 0.0);
+        assert!(after_second > after_first);
+        assert!(mixture.concentration_in_phase(&oxygen, MixturePhase::Gas) > 0.0);
     }
 
     #[test]
