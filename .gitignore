@@ -42,4 +42,3 @@ repo/
 
 ### Rust ###
 native/**/target/
-/Destroy/
