@@ -45,6 +45,7 @@ impl GenerationScope {
         }
     }
 
+    #[cfg(test)]
     fn from_substances(substances: &BTreeSet<SubstanceId>) -> Self {
         Self {
             substances: substances.clone(),
@@ -57,10 +58,10 @@ impl GenerationScope {
 }
 
 #[derive(Clone, Copy)]
-struct GroupParticipant<'a> {
-    substance: &'a Substance,
-    structure: &'a MolecularStructure,
-    group_index: usize,
+pub(crate) struct GroupParticipant<'a> {
+    pub(crate) substance: &'a Substance,
+    pub(crate) structure: &'a MolecularStructure,
+    pub(crate) group_index: usize,
 }
 
 impl<'a> GroupParticipant<'a> {
@@ -82,7 +83,7 @@ impl<'a> GroupParticipant<'a> {
     }
 }
 
-struct OrganicGenerationSpace<'a> {
+pub(crate) struct OrganicGenerationSpace<'a> {
     all_substances: Vec<&'a Substance>,
     participants_by_group: BTreeMap<FunctionalGroupType, Vec<GroupParticipant<'a>>>,
 }
@@ -122,6 +123,15 @@ impl<'a> OrganicGenerationSpace<'a> {
         })
     }
 
+    pub(crate) fn from_participants(
+        participants_by_group: BTreeMap<FunctionalGroupType, Vec<GroupParticipant<'a>>>,
+    ) -> Self {
+        Self {
+            all_substances: Vec::new(),
+            participants_by_group,
+        }
+    }
+
     fn participants(&self) -> impl Iterator<Item = GroupParticipant<'a>> + '_ {
         self.participants_by_group
             .values()
@@ -146,22 +156,12 @@ struct DerivedSubstanceResolver {
 }
 
 impl DerivedSubstanceResolver {
-    fn new_from_substances<'a>(
-        substances: impl IntoIterator<Item = &'a Substance>,
-    ) -> ChemistryResult<Self> {
-        let mut canonical_to_id = BTreeMap::new();
-        for substance in substances {
-            if let Some(structure) = &substance.molecular_structure {
-                canonical_to_id
-                    .entry(super::frowns::write_frowns(structure)?)
-                    .or_insert_with(|| substance.id.clone());
-            }
-        }
-        Ok(Self {
+    fn new_from_canonical_to_id(canonical_to_id: BTreeMap<String, SubstanceId>) -> Self {
+        Self {
             canonical_to_id,
             generated_id_to_canonical: BTreeMap::new(),
             substances: Vec::new(),
-        })
+        }
     }
 
     fn resolve(&mut self, structure: MolecularStructure) -> ChemistryResult<SubstanceId> {
@@ -209,6 +209,7 @@ pub(crate) fn generate_organic_reactions(
     generate_organic_reactions_with_space(&space, None)
 }
 
+#[cfg(test)]
 pub(crate) fn generate_organic_reactions_for_substances(
     substances: &[&Substance],
     seeds: &BTreeSet<SubstanceId>,
@@ -223,15 +224,24 @@ fn generate_organic_reactions_with_space(
     space: &OrganicGenerationSpace<'_>,
     seeds: Option<&BTreeSet<SubstanceId>>,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
-    let mut resolver =
-        DerivedSubstanceResolver::new_from_substances(space.all_substances.iter().copied())?;
+    let canonical_to_id = canonical_to_id_from_substances(space.all_substances.iter().copied())?;
+    let seed_participants = space
+        .participants()
+        .filter(|participant| participant.is_seed(seeds))
+        .collect::<Vec<_>>();
+    generate_organic_reactions_for_seed_participants(space, seed_participants, canonical_to_id)
+}
+
+pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
+    space: &OrganicGenerationSpace<'a>,
+    seed_participants: impl IntoIterator<Item = GroupParticipant<'a>>,
+    canonical_to_id: BTreeMap<String, SubstanceId>,
+) -> ChemistryResult<GeneratedOrganicCatalog> {
+    let mut resolver = DerivedSubstanceResolver::new_from_canonical_to_id(canonical_to_id);
     let mut reactions = Vec::new();
     let mut reaction_ids = BTreeSet::new();
 
-    for participant in space.participants() {
-        if !participant.is_seed(seeds) {
-            continue;
-        }
+    for participant in seed_participants {
         let substance = participant.substance;
         let structure = participant.structure;
         let group = participant.group()?;
@@ -380,71 +390,129 @@ fn generate_organic_reactions_with_space(
             }
             _ => {}
         }
-    }
 
-    for acid in space.participants_of(&FunctionalGroupType::CarboxylicAcid) {
-        let acid_is_seed = acid.is_seed(seeds);
-        for alcohol in space.participants_of(&FunctionalGroupType::Alcohol) {
-            if seeds.is_some_and(|seeds| !acid_is_seed && !seeds.contains(&alcohol.substance.id)) {
-                continue;
-            }
-            let reaction = generate_carboxylic_acid_esterification(
-                acid.substance,
-                acid.structure,
-                acid.group()?,
-                alcohol.substance,
-                alcohol.structure,
-                alcohol.group()?,
-                &mut resolver,
-            )?;
-            push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-        }
-    }
-
-    for acyl_chloride in space.participants_of(&FunctionalGroupType::AcylChloride) {
-        let acyl_chloride_is_seed = acyl_chloride.is_seed(seeds);
-        for alcohol in space.participants_of(&FunctionalGroupType::Alcohol) {
-            if seeds.is_some_and(|seeds| {
-                !acyl_chloride_is_seed && !seeds.contains(&alcohol.substance.id)
-            }) {
-                continue;
-            }
-            let reaction = generate_acyl_chloride_esterification(
-                acyl_chloride.substance,
-                acyl_chloride.structure,
-                acyl_chloride.group()?,
-                alcohol.substance,
-                alcohol.structure,
-                alcohol.group()?,
-                &mut resolver,
-            )?;
-            push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-        }
-    }
-
-    for halide in space.participants_of(&FunctionalGroupType::Halide) {
-        let halide_is_seed = halide.is_seed(seeds);
-        for amine in space.participants_of(&FunctionalGroupType::NonTertiaryAmine) {
-            if seeds.is_some_and(|seeds| !halide_is_seed && !seeds.contains(&amine.substance.id)) {
-                continue;
-            }
-            let reaction = generate_halide_amine_substitution(
-                halide.substance,
-                halide.structure,
-                halide.group()?,
-                amine.substance,
-                amine.structure,
-                amine.group()?,
-                &mut resolver,
-            )?;
-            push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-        }
+        generate_pair_reactions_for_seed(
+            participant,
+            space,
+            &mut resolver,
+            &mut reactions,
+            &mut reaction_ids,
+        )?;
     }
 
     Ok(GeneratedOrganicCatalog {
         substances: resolver.substances,
         reactions,
     })
+}
+
+fn canonical_to_id_from_substances<'a>(
+    substances: impl IntoIterator<Item = &'a Substance>,
+) -> ChemistryResult<BTreeMap<String, SubstanceId>> {
+    let mut canonical_to_id = BTreeMap::new();
+    for substance in substances {
+        if let Some(structure) = &substance.molecular_structure {
+            canonical_to_id
+                .entry(super::frowns::write_frowns(structure)?)
+                .or_insert_with(|| substance.id.clone());
+        }
+    }
+    Ok(canonical_to_id)
+}
+
+fn generate_pair_reactions_for_seed(
+    seed: GroupParticipant<'_>,
+    space: &OrganicGenerationSpace<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+    reactions: &mut Vec<Reaction>,
+    reaction_ids: &mut BTreeSet<String>,
+) -> ChemistryResult<()> {
+    match seed.group()?.group_type {
+        FunctionalGroupType::CarboxylicAcid => {
+            for alcohol in space.participants_of(&FunctionalGroupType::Alcohol) {
+                let reaction = generate_carboxylic_acid_esterification(
+                    seed.substance,
+                    seed.structure,
+                    seed.group()?,
+                    alcohol.substance,
+                    alcohol.structure,
+                    alcohol.group()?,
+                    resolver,
+                )?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+        }
+        FunctionalGroupType::Alcohol => {
+            for acid in space.participants_of(&FunctionalGroupType::CarboxylicAcid) {
+                let reaction = generate_carboxylic_acid_esterification(
+                    acid.substance,
+                    acid.structure,
+                    acid.group()?,
+                    seed.substance,
+                    seed.structure,
+                    seed.group()?,
+                    resolver,
+                )?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+            for acyl_chloride in space.participants_of(&FunctionalGroupType::AcylChloride) {
+                let reaction = generate_acyl_chloride_esterification(
+                    acyl_chloride.substance,
+                    acyl_chloride.structure,
+                    acyl_chloride.group()?,
+                    seed.substance,
+                    seed.structure,
+                    seed.group()?,
+                    resolver,
+                )?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+        }
+        FunctionalGroupType::AcylChloride => {
+            for alcohol in space.participants_of(&FunctionalGroupType::Alcohol) {
+                let reaction = generate_acyl_chloride_esterification(
+                    seed.substance,
+                    seed.structure,
+                    seed.group()?,
+                    alcohol.substance,
+                    alcohol.structure,
+                    alcohol.group()?,
+                    resolver,
+                )?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+        }
+        FunctionalGroupType::Halide => {
+            for amine in space.participants_of(&FunctionalGroupType::NonTertiaryAmine) {
+                let reaction = generate_halide_amine_substitution(
+                    seed.substance,
+                    seed.structure,
+                    seed.group()?,
+                    amine.substance,
+                    amine.structure,
+                    amine.group()?,
+                    resolver,
+                )?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+        }
+        FunctionalGroupType::NonTertiaryAmine => {
+            for halide in space.participants_of(&FunctionalGroupType::Halide) {
+                let reaction = generate_halide_amine_substitution(
+                    halide.substance,
+                    halide.structure,
+                    halide.group()?,
+                    seed.substance,
+                    seed.structure,
+                    seed.group()?,
+                    resolver,
+                )?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn push_unique_reaction(
@@ -455,10 +523,8 @@ fn push_unique_reaction(
     let id = reaction.id.to_string();
     if reaction_ids.insert(id.clone()) {
         reactions.push(reaction);
-        Ok(())
-    } else {
-        Err(ChemistryError::DuplicateReaction(id))
     }
+    Ok(())
 }
 
 fn generate_halide_hydroxide_substitution(

@@ -164,6 +164,10 @@ impl ChemistryRegistry {
         self.substances_by_index.len()
     }
 
+    pub(crate) fn substance_indices(&self) -> impl Iterator<Item = SubstanceIndex> + '_ {
+        (0..self.substances_by_index.len()).map(SubstanceIndex)
+    }
+
     pub fn has_substance_tag(&self, id: &SubstanceTagId) -> bool {
         self.substance_tags.contains(id)
     }
