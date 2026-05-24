@@ -20,7 +20,6 @@ pub enum PhaseKind {
 pub enum ActivityModel {
     DaviesAqueous,
     IdealMolalityAqueous,
-    IdealGas,
     UnitActivity,
 }
 

@@ -109,9 +109,7 @@ pub fn analyze_aqueous_equilibrium(
                                 .expect("ionic strength range checked before activity calculation");
                         10.0_f64.powf(log10_gamma)
                     }
-                    ActivityModel::IdealMolalityAqueous
-                    | ActivityModel::IdealGas
-                    | ActivityModel::UnitActivity => 1.0,
+                    ActivityModel::IdealMolalityAqueous | ActivityModel::UnitActivity => 1.0,
                 };
                 aqueous_species.push(AqueousSpeciesSummary {
                     species_id: amount.species_id,

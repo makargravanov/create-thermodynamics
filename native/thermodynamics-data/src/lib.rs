@@ -23,8 +23,6 @@ pub const CO3_2_MINUS: SpeciesId = SpeciesId(7);
 pub const HCO3_MINUS: SpeciesId = SpeciesId(8);
 pub const CO2_AQ: SpeciesId = SpeciesId(9);
 pub const CACO3_S: SpeciesId = SpeciesId(10);
-pub const H2O_G: SpeciesId = SpeciesId(11);
-pub const CO2_G: SpeciesId = SpeciesId(12);
 
 const VALID_MIN_TEMPERATURE_KELVIN: f64 = 273.15;
 const VALID_MAX_TEMPERATURE_KELVIN: f64 = 373.15;
@@ -58,8 +56,6 @@ pub fn curated_species_ids() -> Vec<SpeciesId> {
         HCO3_MINUS,
         CO2_AQ,
         CACO3_S,
-        H2O_G,
-        CO2_G,
     ]
 }
 
@@ -195,24 +191,6 @@ fn curated_species() -> Vec<Species> {
             -1_207_100.0,
             82.0,
         ),
-        gas(
-            H2O_G,
-            "H2O(g)",
-            &[(ELEMENT_H, 2), (ELEMENT_O, 1)],
-            0,
-            -228_570.0,
-            -241_820.0,
-            33.6,
-        ),
-        gas(
-            CO2_G,
-            "CO2(g)",
-            &[(ELEMENT_C, 1), (ELEMENT_O, 2)],
-            0,
-            -394_360.0,
-            -393_510.0,
-            37.1,
-        ),
     ]
 }
 
@@ -258,28 +236,6 @@ fn solid(
         charge_number,
         PhaseKind::Solid,
         ActivityModel::UnitActivity,
-        standard_gibbs_energy_joule_per_mol_298_15,
-        standard_enthalpy_joule_per_mol_298_15,
-        heat_capacity_joule_per_mol_kelvin,
-    )
-}
-
-fn gas(
-    id: SpeciesId,
-    symbol: &'static str,
-    composition: &[(ElementId, u16)],
-    charge_number: i8,
-    standard_gibbs_energy_joule_per_mol_298_15: f64,
-    standard_enthalpy_joule_per_mol_298_15: f64,
-    heat_capacity_joule_per_mol_kelvin: f64,
-) -> Species {
-    species(
-        id,
-        symbol,
-        composition,
-        charge_number,
-        PhaseKind::Gas,
-        ActivityModel::IdealGas,
         standard_gibbs_energy_joule_per_mol_298_15,
         standard_enthalpy_joule_per_mol_298_15,
         heat_capacity_joule_per_mol_kelvin,
@@ -338,7 +294,7 @@ mod tests {
         analyze_aqueous_equilibrium, mixture_enthalpy_joule,
         mixture_heat_capacity_joule_per_kelvin, solve_adiabatic_equilibrium, solve_equilibrium,
         solve_temperature_for_enthalpy, thermal_state_for_composition, AdiabaticEquilibriumProblem,
-        EquilibriumError, EquilibriumProblem, SpeciesAmount, DAVIES_MAX_IONIC_STRENGTH_MOLAL,
+        EquilibriumError, SpeciesAmount, DAVIES_MAX_IONIC_STRENGTH_MOLAL,
     };
 
     fn amount(species_id: SpeciesId, amount_mol: f64) -> SpeciesAmount {
@@ -426,10 +382,6 @@ mod tests {
         );
     }
 
-    fn solvent_water_kg(water_mol: f64) -> f64 {
-        water_mol * 0.018_015_28
-    }
-
     #[test]
     fn curated_registry_has_complete_species_data() {
         let registry = curated_registry().unwrap();
@@ -504,99 +456,6 @@ mod tests {
         let warm = mixture_enthalpy_joule(&registry, &[amount(H2O_L, 1.0)], 308.15).unwrap();
 
         assert!(((warm - cold) - 753.0).abs() < 1.0e-9);
-    }
-
-    #[test]
-    fn water_vaporization_enthalpy_matches_curated_formation_enthalpies() {
-        let registry = curated_registry().unwrap();
-        let liquid = mixture_enthalpy_joule(&registry, &[amount(H2O_L, 1.0)], 298.15).unwrap();
-        let vapor = mixture_enthalpy_joule(&registry, &[amount(H2O_G, 1.0)], 298.15).unwrap();
-
-        assert!(((vapor - liquid) - 44_010.0).abs() < 1.0e-9);
-    }
-
-    #[test]
-    fn water_prefers_vapor_below_reference_saturation_pressure() {
-        let registry = curated_registry().unwrap();
-        let problem = EquilibriumProblem {
-            temperature_kelvin: 298.15,
-            pressure_pascal: 1_500.0,
-            initial_species_amounts_mol: vec![amount(H2O_L, 1.0)],
-            candidate_species: vec![H2O_L, H2O_G],
-        };
-
-        let result = solve_equilibrium(&registry, &problem).unwrap();
-
-        assert!(result_amount(&result, H2O_G) > 0.99);
-        assert!(result_amount(&result, H2O_L) < 1.0e-6);
-    }
-
-    #[test]
-    fn water_prefers_liquid_above_reference_saturation_pressure() {
-        let registry = curated_registry().unwrap();
-        let problem = EquilibriumProblem {
-            temperature_kelvin: 298.15,
-            pressure_pascal: 10_000.0,
-            initial_species_amounts_mol: vec![amount(H2O_G, 1.0)],
-            candidate_species: vec![H2O_L, H2O_G],
-        };
-
-        let result = solve_equilibrium(&registry, &problem).unwrap();
-
-        assert!(result_amount(&result, H2O_L) > 0.99);
-        assert!(result_amount(&result, H2O_G) < 1.0e-6);
-    }
-
-    #[test]
-    fn carbon_dioxide_gas_dissolves_to_standard_aqueous_activity_ratio() {
-        let registry = curated_registry().unwrap();
-        let water_mol = 55.5;
-        let problem = EquilibriumProblem {
-            temperature_kelvin: 298.15,
-            pressure_pascal: 101_325.0,
-            initial_species_amounts_mol: vec![amount(H2O_L, water_mol), amount(CO2_G, 1.0)],
-            candidate_species: vec![H2O_L, CO2_AQ, CO2_G],
-        };
-
-        let result = solve_equilibrium(&registry, &problem).unwrap();
-        let dissolved_molality =
-            result_amount(&result, CO2_AQ) / solvent_water_kg(result_amount(&result, H2O_L));
-        let gas_fugacity_ratio = problem.pressure_pascal / 100_000.0;
-        let expected_ratio =
-            expected_equilibrium_constant(&registry, &[(CO2_AQ, 1.0)], &[(CO2_G, 1.0)]);
-
-        assert_relative_error(
-            dissolved_molality / gas_fugacity_ratio,
-            expected_ratio,
-            0.02,
-        );
-        assert!(result_amount(&result, CO2_G) > 0.9);
-    }
-
-    #[test]
-    fn dissolved_carbon_dioxide_tracks_gas_pressure() {
-        let registry = curated_registry().unwrap();
-        let water_mol = 55.5;
-        let low_pressure_problem = EquilibriumProblem {
-            temperature_kelvin: 298.15,
-            pressure_pascal: 10_000.0,
-            initial_species_amounts_mol: vec![amount(H2O_L, water_mol), amount(CO2_G, 1.0)],
-            candidate_species: vec![H2O_L, CO2_AQ, CO2_G],
-        };
-        let high_pressure_problem = EquilibriumProblem {
-            temperature_kelvin: 298.15,
-            pressure_pascal: 100_000.0,
-            initial_species_amounts_mol: vec![amount(H2O_L, water_mol), amount(CO2_G, 1.0)],
-            candidate_species: vec![H2O_L, CO2_AQ, CO2_G],
-        };
-
-        let low_pressure_result = solve_equilibrium(&registry, &low_pressure_problem).unwrap();
-        let high_pressure_result = solve_equilibrium(&registry, &high_pressure_problem).unwrap();
-        let low_pressure_dissolved = result_amount(&low_pressure_result, CO2_AQ);
-        let high_pressure_dissolved = result_amount(&high_pressure_result, CO2_AQ);
-
-        assert!(high_pressure_dissolved > low_pressure_dissolved * 8.0);
-        assert_relative_error(high_pressure_dissolved / low_pressure_dissolved, 10.0, 0.15);
     }
 
     #[test]
@@ -707,14 +566,6 @@ mod tests {
         assert_eq!(
             registry.species(CACO3_S).unwrap().activity_model,
             ActivityModel::UnitActivity
-        );
-        assert_eq!(
-            registry.species(H2O_G).unwrap().activity_model,
-            ActivityModel::IdealGas
-        );
-        assert_eq!(
-            registry.species(CO2_G).unwrap().activity_model,
-            ActivityModel::IdealGas
         );
 
         for species_id in [
