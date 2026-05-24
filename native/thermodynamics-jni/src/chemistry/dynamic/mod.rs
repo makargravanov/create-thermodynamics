@@ -1138,6 +1138,7 @@ fn build_dynamic_substance(
     )
     .with_phase_properties(estimate_dynamic_phase_properties(
         summary.charge,
+        summary.molar_mass_grams,
         &structure,
     ))
     .with_catalog_metadata(Some(canonical_frowns), None, DEFAULT_DYNAMIC_COLOR, tags)
@@ -1150,9 +1151,11 @@ fn estimate_dynamic_boiling_point(molar_mass_grams: f64) -> f64 {
 
 fn estimate_dynamic_phase_properties(
     charge: i32,
+    molar_mass_grams: f64,
     structure: &MolecularStructure,
 ) -> SubstancePhaseProperties {
-    if charge != 0 {
+    let estimate = estimate_dynamic_phase_profile(charge, molar_mass_grams, structure);
+    if estimate.ionic {
         return SubstancePhaseProperties {
             preferred_liquid_phase: LiquidPhasePreference::Aqueous,
             aqueous_solubility_mol_per_bucket: Some(10.0),
@@ -1160,31 +1163,134 @@ fn estimate_dynamic_phase_properties(
             can_precipitate: true,
         };
     }
-    let polar_atoms = structure
-        .atoms
-        .iter()
-        .filter(|atom| {
-            matches!(
-                atom.element.as_str(),
-                "O" | "N" | "S" | "P" | "B" | "F" | "Cl" | "Br" | "I"
-            )
-        })
-        .count();
-    let carbon_atoms = structure
-        .atoms
-        .iter()
-        .filter(|atom| atom.element == "C")
-        .count();
-    if polar_atoms > carbon_atoms {
+
+    let can_precipitate = estimate.solid_forming_tendency >= 0.7;
+    if estimate.estimated_log_p <= -0.5 || estimate.polarity_score >= 4.0 {
+        let organic_solubility = (0.35
+            - estimate.polarity_score * 0.04
+            - estimate.hydrogen_bond_donor_count as f64 * 0.03)
+            .clamp(0.02, 0.35);
         SubstancePhaseProperties {
             preferred_liquid_phase: LiquidPhasePreference::Aqueous,
             aqueous_solubility_mol_per_bucket: None,
-            organic_solubility_mol_per_bucket: Some(0.25),
-            can_precipitate: false,
+            organic_solubility_mol_per_bucket: Some(organic_solubility),
+            can_precipitate,
+        }
+    } else if estimate.estimated_log_p >= 1.0 {
+        let aqueous_solubility = (0.08
+            + estimate.polarity_score * 0.04
+            + estimate.hydrogen_bond_acceptor_count as f64 * 0.02
+            - estimate.estimated_log_p * 0.02)
+            .clamp(0.005, 0.5);
+        SubstancePhaseProperties {
+            preferred_liquid_phase: LiquidPhasePreference::Organic,
+            aqueous_solubility_mol_per_bucket: Some(aqueous_solubility),
+            organic_solubility_mol_per_bucket: None,
+            can_precipitate,
+        }
+    } else if estimate.carbon_count >= estimate.hetero_atom_count {
+        SubstancePhaseProperties {
+            preferred_liquid_phase: LiquidPhasePreference::Organic,
+            aqueous_solubility_mol_per_bucket: Some(
+                (0.2 + estimate.polarity_score * 0.05).clamp(0.05, 0.7),
+            ),
+            organic_solubility_mol_per_bucket: None,
+            can_precipitate,
         }
     } else {
-        SubstancePhaseProperties::organic_unlimited(0.05 + polar_atoms as f64 * 0.05)
+        SubstancePhaseProperties {
+            preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+            aqueous_solubility_mol_per_bucket: None,
+            organic_solubility_mol_per_bucket: Some(0.2),
+            can_precipitate,
+        }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct DynamicPhaseEstimate {
+    polarity_score: f64,
+    hydrogen_bond_donor_count: usize,
+    hydrogen_bond_acceptor_count: usize,
+    carbon_count: usize,
+    hetero_atom_count: usize,
+    ionic: bool,
+    estimated_log_p: f64,
+    solid_forming_tendency: f64,
+}
+
+fn estimate_dynamic_phase_profile(
+    charge: i32,
+    molar_mass_grams: f64,
+    structure: &MolecularStructure,
+) -> DynamicPhaseEstimate {
+    let carbon_count = count_atoms(structure, "C");
+    let halogen_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| matches!(atom.element.as_str(), "F" | "Cl" | "Br" | "I"))
+        .count();
+    let hetero_atom_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| !matches!(atom.element.as_str(), "C" | "H" | "R"))
+        .count();
+    let hydrogen_bond_donor_count = structure
+        .atoms
+        .iter()
+        .enumerate()
+        .filter(|(index, atom)| {
+            matches!(atom.element.as_str(), "O" | "N" | "S")
+                && structure.explicit_hydrogen_count(*index) > 0
+        })
+        .count();
+    let hydrogen_bond_acceptor_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| matches!(atom.element.as_str(), "O" | "N" | "S" | "P"))
+        .filter(|atom| atom.charge <= 0.0)
+        .count();
+    let ionic = charge != 0 || structure.atoms.iter().any(|atom| atom.charge.abs() >= 0.5);
+    let polarity_score = (charge.abs() as f64 * 8.0)
+        + hydrogen_bond_donor_count as f64 * 1.4
+        + hydrogen_bond_acceptor_count as f64 * 0.9
+        + hetero_atom_count as f64 * 0.45
+        + halogen_count as f64 * 0.15
+        - carbon_count as f64 * 0.18;
+    let estimated_log_p = carbon_count as f64 * 0.52 + halogen_count as f64 * 0.28
+        - hetero_atom_count as f64 * 0.42
+        - hydrogen_bond_donor_count as f64 * 0.9
+        - hydrogen_bond_acceptor_count as f64 * 0.45
+        - charge.abs() as f64 * 6.0;
+    let heavy_atom_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| !matches!(atom.element.as_str(), "H" | "R"))
+        .count();
+    let solid_forming_tendency = ((molar_mass_grams - 160.0) / 220.0
+        + heavy_atom_count.saturating_sub(12) as f64 * 0.04
+        + hydrogen_bond_donor_count as f64 * 0.08
+        + hydrogen_bond_acceptor_count as f64 * 0.04)
+        .clamp(0.0, 1.0);
+
+    DynamicPhaseEstimate {
+        polarity_score,
+        hydrogen_bond_donor_count,
+        hydrogen_bond_acceptor_count,
+        carbon_count,
+        hetero_atom_count,
+        ionic,
+        estimated_log_p,
+        solid_forming_tendency,
+    }
+}
+
+fn count_atoms(structure: &MolecularStructure, element: &str) -> usize {
+    structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == element)
+        .count()
 }
 
 #[cfg(test)]
@@ -1271,12 +1377,70 @@ mod tests {
         );
         assert_eq!(
             substance.phase_properties.aqueous_solubility_mol_per_bucket,
-            Some(0.05)
+            Some(0.005)
         );
         assert_eq!(
             substance.phase_properties.organic_solubility_mol_per_bucket,
             None
         );
+    }
+
+    #[test]
+    fn dynamic_phase_profile_distinguishes_hydrocarbon_alcohol_and_sugar_like_molecule() {
+        let octane = parse_frowns("CCCCCCCC").unwrap();
+        let octane_summary = octane.summary().unwrap();
+        let octane_estimate =
+            estimate_dynamic_phase_profile(0, octane_summary.molar_mass_grams, &octane);
+
+        let ethanol = parse_frowns("CCO").unwrap();
+        let ethanol_summary = ethanol.summary().unwrap();
+        let ethanol_estimate =
+            estimate_dynamic_phase_profile(0, ethanol_summary.molar_mass_grams, &ethanol);
+
+        let glycerol_like = parse_frowns("C(CO)(O)O").unwrap();
+        let glycerol_summary = glycerol_like.summary().unwrap();
+        let glycerol_estimate =
+            estimate_dynamic_phase_profile(0, glycerol_summary.molar_mass_grams, &glycerol_like);
+
+        assert!(octane_estimate.estimated_log_p > ethanol_estimate.estimated_log_p);
+        assert!(ethanol_estimate.polarity_score > octane_estimate.polarity_score);
+        assert!(glycerol_estimate.polarity_score > ethanol_estimate.polarity_score);
+        assert_eq!(glycerol_estimate.hydrogen_bond_donor_count, 3);
+        assert_eq!(glycerol_estimate.hydrogen_bond_acceptor_count, 3);
+    }
+
+    #[test]
+    fn dynamic_phase_properties_make_polar_neutral_molecule_aqueous() {
+        let structure = parse_frowns("C(CO)(O)O").unwrap();
+        let summary = structure.summary().unwrap();
+        let properties =
+            estimate_dynamic_phase_properties(summary.charge, summary.molar_mass_grams, &structure);
+
+        assert_eq!(
+            properties.preferred_liquid_phase,
+            LiquidPhasePreference::Aqueous
+        );
+        assert_eq!(properties.aqueous_solubility_mol_per_bucket, None);
+        assert!(properties
+            .organic_solubility_mol_per_bucket
+            .is_some_and(|value| value < 0.2));
+    }
+
+    #[test]
+    fn dynamic_phase_properties_allow_large_neutral_molecules_to_precipitate() {
+        let structure = parse_frowns("CCCCCCCCCCCCCCCCCCCCO").unwrap();
+        let summary = structure.summary().unwrap();
+        let properties =
+            estimate_dynamic_phase_properties(summary.charge, summary.molar_mass_grams, &structure);
+
+        assert_eq!(
+            properties.preferred_liquid_phase,
+            LiquidPhasePreference::Organic
+        );
+        assert!(properties.can_precipitate);
+        assert!(properties
+            .aqueous_solubility_mol_per_bucket
+            .is_some_and(|value| value < 0.1));
     }
 
     #[test]
