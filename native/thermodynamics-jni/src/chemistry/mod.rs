@@ -44,7 +44,7 @@ mod tests {
     use super::error::ChemistryError;
     use super::mixture::Mixture;
     use super::reaction::Reaction;
-    use super::registry::ChemistryRegistryBuilder;
+    use super::registry::{ChemistryRegistryBuilder, ReactionCandidateScratch};
     use super::simulation::{
         react_for_tick, react_for_tick_with_context, react_until_equilibrium, ReactionContext,
     };
@@ -365,6 +365,63 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(indexed_candidates, public_candidates);
+    }
+
+    #[test]
+    fn reaction_candidate_scratch_deduplicates_and_keeps_unindexed_reactions() {
+        let registry = ChemistryRegistryBuilder::new()
+            .substance(Substance::new(
+                "destroy:a",
+                0,
+                10.0,
+                10_000.0,
+                500.0,
+                100.0,
+                20_000.0,
+            ))
+            .substance(Substance::new(
+                "destroy:b",
+                0,
+                10.0,
+                10_000.0,
+                500.0,
+                100.0,
+                20_000.0,
+            ))
+            .reaction(
+                Reaction::builder("destroy:indexed_once")
+                    .reactant("destroy:a", 1, 1)
+                    .reactant("destroy:b", 1, 1)
+                    .product("destroy:a", 1)
+                    .product("destroy:b", 1)
+                    .pre_exponential_factor(1.0)
+                    .activation_energy_kj_per_mol(0.0)
+                    .build(),
+            )
+            .reaction(
+                Reaction::builder("destroy:unindexed_uv")
+                    .requires_uv()
+                    .pre_exponential_factor(1.0)
+                    .activation_energy_kj_per_mol(0.0)
+                    .build(),
+            )
+            .build()
+            .unwrap();
+        let a = registry.substance_index(&"destroy:a".into()).unwrap();
+        let b = registry.substance_index(&"destroy:b".into()).unwrap();
+        let mut scratch = ReactionCandidateScratch::new();
+
+        registry.collect_reaction_candidate_indices_for_substance_indices([a, b], &mut scratch);
+        let candidates = scratch
+            .candidates()
+            .iter()
+            .map(|index| registry.reaction_by_index(*index).unwrap().id.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            candidates,
+            vec!["destroy:unindexed_uv", "destroy:indexed_once"]
+        );
     }
 
     #[test]

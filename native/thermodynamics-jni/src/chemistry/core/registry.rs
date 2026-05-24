@@ -19,6 +19,36 @@ impl SubstanceIndex {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ReactionCandidateScratch {
+    marks: Vec<u32>,
+    generation: u32,
+    candidates: Vec<ReactionIndex>,
+}
+
+impl ReactionCandidateScratch {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn candidates(&self) -> &[ReactionIndex] {
+        &self.candidates
+    }
+
+    fn prepare(&mut self, reaction_count: usize) {
+        if self.marks.len() < reaction_count {
+            self.marks.resize(reaction_count, 0);
+        }
+        self.candidates.clear();
+        if self.generation == u32::MAX {
+            self.marks.fill(0);
+            self.generation = 1;
+        } else {
+            self.generation += 1;
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct IndexedStoichiometricTerm {
     pub substance: SubstanceIndex,
@@ -96,20 +126,30 @@ impl ChemistryRegistry {
     where
         I: IntoIterator<Item = SubstanceIndex>,
     {
-        let mut seen = vec![false; self.reactions_by_index.len()];
-        let mut result = Vec::new();
+        let mut scratch = ReactionCandidateScratch::new();
+        self.collect_reaction_candidate_indices_for_substance_indices(substances, &mut scratch);
+        scratch.candidates
+    }
+
+    pub(crate) fn collect_reaction_candidate_indices_for_substance_indices<I>(
+        &self,
+        substances: I,
+        scratch: &mut ReactionCandidateScratch,
+    ) where
+        I: IntoIterator<Item = SubstanceIndex>,
+    {
+        scratch.prepare(self.reactions_by_index.len());
         for reaction_index in &self.unindexed_reaction_indices {
-            mark_reaction_candidate(&mut seen, &mut result, *reaction_index);
+            mark_reaction_candidate(scratch, *reaction_index);
         }
         for substance_index in substances {
             if let Some(indexed_reactions) = self.reaction_index_by_substance.get(substance_index.0)
             {
                 for reaction_index in indexed_reactions {
-                    mark_reaction_candidate(&mut seen, &mut result, *reaction_index);
+                    mark_reaction_candidate(scratch, *reaction_index);
                 }
             }
         }
-        result
     }
 
     pub fn substances(&self) -> impl Iterator<Item = &Substance> {
@@ -578,15 +618,11 @@ fn insert_sorted_unique<T: Ord + Copy>(values: &mut Vec<T>, value: T) {
     }
 }
 
-fn mark_reaction_candidate(
-    seen: &mut [bool],
-    result: &mut Vec<ReactionIndex>,
-    reaction_index: ReactionIndex,
-) {
-    if let Some(slot) = seen.get_mut(reaction_index.0) {
-        if !*slot {
-            *slot = true;
-            result.push(reaction_index);
+fn mark_reaction_candidate(scratch: &mut ReactionCandidateScratch, reaction_index: ReactionIndex) {
+    if let Some(slot) = scratch.marks.get_mut(reaction_index.0) {
+        if *slot != scratch.generation {
+            *slot = scratch.generation;
+            scratch.candidates.push(reaction_index);
         }
     }
 }

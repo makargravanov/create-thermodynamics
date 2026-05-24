@@ -6,6 +6,7 @@ use super::substance::{SubstanceId, SubstanceTagId};
 
 pub const DEFAULT_TEMPERATURE_KELVIN: f64 = 298.0;
 pub const TRACE_CONCENTRATION_MOL_PER_BUCKET: f64 = 1.0 / 512.0 / 512.0;
+const THERMAL_STATE_EPSILON: f64 = 1.0e-12;
 
 #[derive(Debug, Clone)]
 pub struct Mixture {
@@ -20,6 +21,18 @@ struct MixtureComponent {
     substance_id: SubstanceId,
     concentration_mol_per_bucket: f64,
     gaseous_fraction: f64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct MixtureCheckpoint {
+    temperature_kelvin: f64,
+    components: Vec<ComponentCheckpoint>,
+}
+
+#[derive(Debug, Clone)]
+struct ComponentCheckpoint {
+    substance: SubstanceIndex,
+    previous: Option<MixtureComponent>,
 }
 
 impl Mixture {
@@ -197,15 +210,17 @@ impl Mixture {
         &mut self,
         registry: &ChemistryRegistry,
         deltas: &[(SubstanceIndex, f64)],
-    ) -> ChemistryResult<()> {
+    ) -> ChemistryResult<f64> {
         self.ensure_position_capacity(registry);
         let mut next = Vec::new();
+        let mut max_delta = 0.0_f64;
         for (substance, delta) in deltas {
             if !delta.is_finite() {
                 return Err(ChemistryError::InvalidMixtureState(
                     "concentration change must be finite".to_string(),
                 ));
             }
+            max_delta = max_delta.max(delta.abs());
             let current = self.concentration_of_index(*substance);
             let value = current + delta;
             if value < -TRACE_CONCENTRATION_MOL_PER_BUCKET {
@@ -231,7 +246,8 @@ impl Mixture {
                 self.insert_component(substance, substance_data.id.clone(), value, initial_gas);
             }
         }
-        self.validate(registry)
+        self.validate(registry)?;
+        Ok(max_delta)
     }
 
     pub fn heat(
@@ -340,6 +356,76 @@ impl Mixture {
             }
         }
         self.validate(registry)
+    }
+
+    pub(crate) fn checkpoint_for_reaction(
+        &self,
+        deltas: &[(SubstanceIndex, f64)],
+    ) -> MixtureCheckpoint {
+        let mut substances = self
+            .components
+            .iter()
+            .map(|component| component.substance)
+            .collect::<Vec<_>>();
+        for (substance, _) in deltas {
+            insert_sorted_unique(&mut substances, *substance);
+        }
+        MixtureCheckpoint {
+            temperature_kelvin: self.temperature_kelvin,
+            components: substances
+                .into_iter()
+                .map(|substance| ComponentCheckpoint {
+                    substance,
+                    previous: self
+                        .position_of_substance(substance)
+                        .map(|position| self.components[position].clone()),
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn restore_checkpoint(&mut self, checkpoint: MixtureCheckpoint) {
+        self.temperature_kelvin = checkpoint.temperature_kelvin;
+        for component in checkpoint.components {
+            match component.previous {
+                Some(previous) => {
+                    if let Some(position) = self.position_of_substance(component.substance) {
+                        self.components[position] = previous;
+                    } else {
+                        self.components.push(previous);
+                    }
+                }
+                None => self.remove_component(component.substance),
+            }
+        }
+        self.rebuild_positions();
+    }
+
+    pub(crate) fn changed_since_checkpoint(&self, checkpoint: &MixtureCheckpoint) -> bool {
+        if (self.temperature_kelvin - checkpoint.temperature_kelvin).abs() > THERMAL_STATE_EPSILON {
+            return true;
+        }
+        checkpoint.components.iter().any(|component| {
+            let current = self
+                .position_of_substance(component.substance)
+                .map(|position| &self.components[position]);
+            match (&component.previous, current) {
+                (Some(previous), Some(current)) => {
+                    (current.concentration_mol_per_bucket - previous.concentration_mol_per_bucket)
+                        .abs()
+                        > TRACE_CONCENTRATION_MOL_PER_BUCKET
+                        || (current.gaseous_fraction - previous.gaseous_fraction).abs()
+                            > THERMAL_STATE_EPSILON
+                }
+                (None, Some(current)) => {
+                    current.concentration_mol_per_bucket > TRACE_CONCENTRATION_MOL_PER_BUCKET
+                }
+                (Some(previous), None) => {
+                    previous.concentration_mol_per_bucket > TRACE_CONCENTRATION_MOL_PER_BUCKET
+                }
+                (None, None) => false,
+            }
+        })
     }
 
     pub fn volumetric_heat_capacity_j_per_bucket_kelvin(
@@ -639,6 +725,13 @@ impl Ord for OrderedF64 {
 
 fn ordered_f64(value: f64) -> OrderedF64 {
     OrderedF64(value)
+}
+
+fn insert_sorted_unique<T: Ord + Copy>(values: &mut Vec<T>, value: T) {
+    match values.binary_search(&value) {
+        Ok(_) => {}
+        Err(index) => values.insert(index, value),
+    }
 }
 
 #[cfg(test)]
