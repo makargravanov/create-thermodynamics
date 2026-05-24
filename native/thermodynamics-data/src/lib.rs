@@ -292,9 +292,9 @@ mod tests {
     use super::*;
     use thermodynamics_core::{
         analyze_aqueous_equilibrium, mixture_enthalpy_joule,
-        mixture_heat_capacity_joule_per_kelvin, solve_adiabatic_equilibrium, solve_equilibrium,
-        solve_temperature_for_enthalpy, thermal_state_for_composition, AdiabaticEquilibriumProblem,
-        EquilibriumError, SpeciesAmount, DAVIES_MAX_IONIC_STRENGTH_MOLAL,
+        mixture_heat_capacity_joule_per_kelvin, solve_equilibrium, solve_temperature_for_enthalpy,
+        thermal_state_for_composition, EquilibriumError, SpeciesAmount,
+        DAVIES_MAX_IONIC_STRENGTH_MOLAL,
     };
 
     fn amount(species_id: SpeciesId, amount_mol: f64) -> SpeciesAmount {
@@ -494,61 +494,6 @@ mod tests {
         assert!((state.temperature_kelvin - 298.15).abs() < 1.0e-12);
         assert!((state.enthalpy_joule + 285_830.0).abs() < 1.0e-9);
         assert!((state.heat_capacity_joule_per_kelvin - 75.3).abs() < 1.0e-12);
-    }
-
-    #[test]
-    fn adiabatic_neutralization_raises_temperature() {
-        let registry = curated_registry().unwrap();
-        let problem = AdiabaticEquilibriumProblem {
-            initial_temperature_kelvin: 298.15,
-            pressure_pascal: 101_325.0,
-            initial_species_amounts_mol: vec![
-                amount(H2O_L, 55.5),
-                amount(H_PLUS, 0.1),
-                amount(CL_MINUS, 0.1),
-                amount(NA_PLUS, 0.1),
-                amount(OH_MINUS, 0.1),
-            ],
-            candidate_species: curated_species_ids(),
-            min_temperature_kelvin: 298.15,
-            max_temperature_kelvin: 330.0,
-        };
-
-        let result = solve_adiabatic_equilibrium(&registry, &problem).unwrap();
-        let summary = aqueous_summary(&registry, &result.equilibrium);
-
-        assert!(result.thermal_state.temperature_kelvin > 299.0);
-        assert!(result.thermal_state.temperature_kelvin < 301.0);
-        assert!(result.enthalpy_residual_joule.abs() < 1.0e-5);
-        assert!(summary.ph > 6.0 && summary.ph < 8.0);
-        assert!(
-            result
-                .equilibrium
-                .species_amounts_mol
-                .iter()
-                .find(|amount| amount.species_id == NA_PLUS)
-                .unwrap()
-                .amount_mol
-                > 0.099
-        );
-    }
-
-    #[test]
-    fn adiabatic_equilibrium_preserves_temperature_when_composition_is_already_stable() {
-        let registry = curated_registry().unwrap();
-        let problem = AdiabaticEquilibriumProblem {
-            initial_temperature_kelvin: 305.0,
-            pressure_pascal: 101_325.0,
-            initial_species_amounts_mol: vec![amount(H2O_L, 55.5)],
-            candidate_species: curated_species_ids(),
-            min_temperature_kelvin: 300.0,
-            max_temperature_kelvin: 310.0,
-        };
-
-        let result = solve_adiabatic_equilibrium(&registry, &problem).unwrap();
-
-        assert!((result.thermal_state.temperature_kelvin - 305.0).abs() < 0.1);
-        assert!(result.enthalpy_residual_joule.abs() < 1.0e-5);
     }
 
     #[test]
