@@ -23,6 +23,8 @@ pub mod reactions;
 pub mod registry;
 #[path = "core/simulation.rs"]
 pub mod simulation;
+#[path = "core/solution.rs"]
+pub mod solution;
 #[path = "core/substance.rs"]
 pub mod substance;
 

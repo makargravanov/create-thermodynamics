@@ -6,6 +6,7 @@ use super::reaction::Reaction;
 use super::registry::{
     ChemistryRegistry, IndexedReaction, ReactionCandidateScratch, SubstanceIndex,
 };
+use super::solution::equilibrate_solution_equilibria;
 
 pub const TICKS_PER_SECOND: f64 = 20.0;
 pub const EQUILIBRIUM_EPSILON_MOL_PER_BUCKET: f64 = TRACE_CONCENTRATION_MOL_PER_BUCKET;
@@ -124,6 +125,7 @@ pub fn react_for_tick_with_context(
                 continue;
             }
             let rate = reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
+                registry,
                 mixture,
                 reaction,
                 indexed_reaction,
@@ -163,6 +165,11 @@ pub fn react_for_tick_with_context(
                     any_changed = true;
                 }
             }
+        }
+
+        let equilibrium_delta = equilibrate_solution_equilibria(registry, mixture)?;
+        if equilibrium_delta > EQUILIBRIUM_EPSILON_MOL_PER_BUCKET {
+            any_changed = true;
         }
 
         mixture.validate(registry)?;
@@ -244,8 +251,8 @@ pub fn reaction_rate_mol_per_bucket_per_tick_with_context(
             .phases;
         let concentration = phases
             .iter()
-            .map(|phase| mixture.concentration_in_phase(substance_id, *phase))
-            .sum::<f64>();
+            .map(|phase| mixture.activity_of(registry, substance_id, *phase))
+            .sum::<ChemistryResult<f64>>()?;
         if concentration <= 0.0 {
             return Ok(0.0);
         }
@@ -261,6 +268,7 @@ pub fn reaction_rate_mol_per_bucket_per_tick_with_context(
 }
 
 fn reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
+    registry: &ChemistryRegistry,
     mixture: &Mixture,
     reaction: &Reaction,
     indexed_reaction: &IndexedReaction,
@@ -272,7 +280,11 @@ fn reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
         rate *= context.uv_power;
     }
     for (substance, order, phases) in &indexed_reaction.orders {
-        let concentration = mixture.concentration_of_index_in_phases(*substance, phases);
+        let substance_id = &registry.substance_by_index(*substance)?.id;
+        let concentration = phases
+            .iter()
+            .map(|phase| mixture.activity_of(registry, substance_id, *phase))
+            .sum::<ChemistryResult<f64>>()?;
         if concentration <= 0.0 {
             return Ok(0.0);
         }

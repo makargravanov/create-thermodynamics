@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::error::{ChemistryError, ChemistryResult};
 use super::reaction::GAS_CONSTANT_J_PER_MOL_KELVIN;
 use super::registry::{ChemistryRegistry, GasSolubilityModel, SolventMiscibility, SubstanceIndex};
+use super::solution::{self, SolutionState};
 use super::substance::{
     LiquidPhasePreference, Substance, SubstanceAggregateState, SubstanceId, SubstanceTagId,
 };
@@ -195,6 +196,42 @@ impl Mixture {
             / BUCKET_VOLUME_CUBIC_METERS
     }
 
+    pub fn aqueous_ionic_strength(&self, registry: &ChemistryRegistry) -> ChemistryResult<f64> {
+        self.validate_registry_shape(registry)?;
+        let mut ionic_strength = 0.0;
+        let properties = registry.substance_properties();
+        for component in &self.components {
+            let charge = properties.charge[component.substance.as_usize()] as f64;
+            if charge != 0.0 {
+                ionic_strength +=
+                    0.5 * component.amount_in_phase(MixturePhase::Aqueous) * charge * charge;
+            }
+        }
+        if !ionic_strength.is_finite() || ionic_strength < 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "ionic strength must be non-negative and finite: {ionic_strength}"
+            )));
+        }
+        Ok(ionic_strength)
+    }
+
+    pub fn activity_of(
+        &self,
+        registry: &ChemistryRegistry,
+        substance_id: &SubstanceId,
+        phase: MixturePhase,
+    ) -> ChemistryResult<f64> {
+        solution::activity_of(registry, self, substance_id, phase)
+    }
+
+    pub fn ph(&self, registry: &ChemistryRegistry) -> ChemistryResult<Option<f64>> {
+        Ok(self.solution_state(registry)?.ph)
+    }
+
+    pub fn solution_state(&self, registry: &ChemistryRegistry) -> ChemistryResult<SolutionState> {
+        solution::solution_state(registry, self)
+    }
+
     pub fn transfer_gases_toward_solubility_equilibrium(
         &mut self,
         registry: &ChemistryRegistry,
@@ -210,7 +247,7 @@ impl Mixture {
         }
         self.validate_registry_shape(registry)?;
         let gas_pressure_pascal = self.gas_pressure_pascal();
-        let ionic_strength = self.ionic_strength(registry)?;
+        let ionic_strength = self.aqueous_ionic_strength(registry)?;
         let mut max_delta = 0.0_f64;
         let gas_substances = self
             .components
@@ -1398,17 +1435,11 @@ impl Mixture {
         Ok(clusters)
     }
 
-    fn ionic_strength(&self, registry: &ChemistryRegistry) -> ChemistryResult<f64> {
-        let mut ionic_strength = 0.0;
-        let properties = registry.substance_properties();
-        for component in &self.components {
-            let charge = properties.charge[component.substance.as_usize()] as f64;
-            if charge != 0.0 {
-                ionic_strength +=
-                    0.5 * component.amount_in_phase(MixturePhase::Aqueous) * charge * charge;
-            }
-        }
-        Ok(ionic_strength)
+    pub(crate) fn total_in_phase(&self, phase: MixturePhase) -> f64 {
+        self.components
+            .iter()
+            .map(|component| component.amount_in_phase(phase))
+            .sum()
     }
 }
 

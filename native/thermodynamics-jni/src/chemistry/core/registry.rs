@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::MixturePhase;
 use super::reaction::{Reaction, ReactionId, StoichiometricTerm};
+use super::solution::{AcidBaseSpec, EquilibriumSpec, IndexedEquilibrium, IndexedEquilibriumTerm};
 use super::substance::{Substance, SubstanceAggregateState, SubstanceId, SubstanceTagId};
 
 const MASS_TOLERANCE_GRAMS_PER_MOL: f64 = 1.0e-6;
@@ -109,6 +110,8 @@ pub struct ChemistryRegistry {
     substance_tags: BTreeSet<SubstanceTagId>,
     solvent_miscibility: BTreeMap<(SubstanceIndex, SubstanceIndex), SolventMiscibility>,
     gas_solubility: BTreeMap<SubstanceIndex, GasSolubilityModel>,
+    acid_base_specs: Vec<AcidBaseSpec>,
+    indexed_equilibria: Vec<IndexedEquilibrium>,
 }
 
 impl ChemistryRegistry {
@@ -246,6 +249,14 @@ impl ChemistryRegistry {
     pub(crate) fn gas_solubility(&self, substance: SubstanceIndex) -> Option<&GasSolubilityModel> {
         self.gas_solubility.get(&substance)
     }
+
+    pub fn acid_base_specs(&self) -> impl Iterator<Item = &AcidBaseSpec> {
+        self.acid_base_specs.iter()
+    }
+
+    pub(crate) fn indexed_equilibria(&self) -> &[IndexedEquilibrium] {
+        &self.indexed_equilibria
+    }
 }
 
 #[derive(Default)]
@@ -255,6 +266,8 @@ pub struct ChemistryRegistryBuilder {
     substance_tags: BTreeSet<SubstanceTagId>,
     solvent_miscibility: Vec<(SubstanceId, SubstanceId, SolventMiscibility)>,
     gas_solubility: Vec<(SubstanceId, GasSolubilityModel)>,
+    acid_base_specs: Vec<AcidBaseSpec>,
+    equilibria: Vec<EquilibriumSpec>,
 }
 
 impl ChemistryRegistryBuilder {
@@ -287,6 +300,16 @@ impl ChemistryRegistryBuilder {
                         model.clone(),
                     )
                 })
+                .collect(),
+            acid_base_specs: registry.acid_base_specs.clone(),
+            equilibria: registry
+                .indexed_equilibria
+                .iter()
+                .filter(|equilibrium| {
+                    !equilibrium.spec.id.ends_with(".acid_base_equilibrium")
+                        && !equilibrium.spec.id.ends_with(".neutralization_equilibrium")
+                })
+                .map(|equilibrium| equilibrium.spec.clone())
                 .collect(),
         }
     }
@@ -323,6 +346,16 @@ impl ChemistryRegistryBuilder {
         model: GasSolubilityModel,
     ) -> Self {
         self.gas_solubility.push((substance.into(), model));
+        self
+    }
+
+    pub fn acid_base_pair(mut self, spec: AcidBaseSpec) -> Self {
+        self.acid_base_specs.push(spec);
+        self
+    }
+
+    pub fn equilibrium(mut self, spec: EquilibriumSpec) -> Self {
+        self.equilibria.push(spec);
         self
     }
 
@@ -376,6 +409,17 @@ impl ChemistryRegistryBuilder {
             &substances_by_index,
             &substance_id_to_index,
         )?;
+        let acid_base_specs = validate_acid_base_specs(
+            &self.acid_base_specs,
+            &substances_by_index,
+            &substance_id_to_index,
+        )?;
+        let mut equilibria = self.equilibria;
+        for spec in &acid_base_specs {
+            equilibria.extend(spec.to_equilibria());
+        }
+        let indexed_equilibria =
+            build_indexed_equilibria(&equilibria, &substances_by_index, &substance_id_to_index)?;
         let registry = ChemistryRegistry {
             substances_by_index,
             substance_id_to_index,
@@ -388,6 +432,8 @@ impl ChemistryRegistryBuilder {
             substance_tags: self.substance_tags,
             solvent_miscibility,
             gas_solubility,
+            acid_base_specs,
+            indexed_equilibria,
         };
         registry.validate_substance_tags()?;
         registry.validate_reactions()?;
@@ -739,6 +785,202 @@ fn build_gas_solubility(
         }
     }
     Ok(result)
+}
+
+fn validate_acid_base_specs(
+    specs: &[AcidBaseSpec],
+    substances: &[Substance],
+    substance_id_to_index: &BTreeMap<SubstanceId, SubstanceIndex>,
+) -> ChemistryResult<Vec<AcidBaseSpec>> {
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::new();
+    for spec in specs {
+        if spec.id.trim().is_empty() {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: "<acid-base>".to_string(),
+                reason: "acid-base spec id must not be empty".to_string(),
+            });
+        }
+        if !spec.pka.is_finite() {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: spec.id.clone(),
+                reason: "pKa must be finite".to_string(),
+            });
+        }
+        if !seen.insert(spec.id.clone()) {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: spec.id.clone(),
+                reason: "duplicate acid-base spec".to_string(),
+            });
+        }
+        let acid = *substance_id_to_index.get(&spec.acid).ok_or_else(|| {
+            ChemistryError::UnknownSubstance {
+                reaction_id: spec.id.clone(),
+                substance_id: spec.acid.to_string(),
+            }
+        })?;
+        let base = *substance_id_to_index
+            .get(&spec.conjugate_base)
+            .ok_or_else(|| ChemistryError::UnknownSubstance {
+                reaction_id: spec.id.clone(),
+                substance_id: spec.conjugate_base.to_string(),
+            })?;
+        let proton = *substance_id_to_index.get(&spec.proton).ok_or_else(|| {
+            ChemistryError::UnknownSubstance {
+                reaction_id: spec.id.clone(),
+                substance_id: spec.proton.to_string(),
+            }
+        })?;
+        let acid_charge = substances[acid.0].charge;
+        let base_charge = substances[base.0].charge;
+        let proton_charge = substances[proton.0].charge;
+        if acid_charge != base_charge + proton_charge {
+            return Err(ChemistryError::ChargeNotConserved {
+                reaction_id: spec.id.clone(),
+                reactants: acid_charge,
+                products: base_charge + proton_charge,
+            });
+        }
+        result.push(spec.clone());
+    }
+    Ok(result)
+}
+
+fn build_indexed_equilibria(
+    specs: &[EquilibriumSpec],
+    substances: &[Substance],
+    substance_id_to_index: &BTreeMap<SubstanceId, SubstanceIndex>,
+) -> ChemistryResult<Vec<IndexedEquilibrium>> {
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::new();
+    for spec in specs {
+        validate_equilibrium_spec_shape(spec)?;
+        if !seen.insert(spec.id.clone()) {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: spec.id.clone(),
+                reason: "duplicate equilibrium spec".to_string(),
+            });
+        }
+        let reactants = index_equilibrium_terms(&spec.id, &spec.reactants, substance_id_to_index)?;
+        let products = index_equilibrium_terms(&spec.id, &spec.products, substance_id_to_index)?;
+        validate_equilibrium_conservation(spec, substances, &reactants, &products)?;
+        result.push(IndexedEquilibrium {
+            spec: spec.clone(),
+            reactants,
+            products,
+        });
+    }
+    Ok(result)
+}
+
+fn validate_equilibrium_spec_shape(spec: &EquilibriumSpec) -> ChemistryResult<()> {
+    if spec.id.trim().is_empty() {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: "<equilibrium>".to_string(),
+            reason: "equilibrium id must not be empty".to_string(),
+        });
+    }
+    if spec.reactants.is_empty() || spec.products.is_empty() {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: spec.id.clone(),
+            reason: "equilibrium must have reactants and products".to_string(),
+        });
+    }
+    if !spec.equilibrium_constant.is_finite() || spec.equilibrium_constant <= 0.0 {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: spec.id.clone(),
+            reason: "equilibrium constant must be positive and finite".to_string(),
+        });
+    }
+    if !spec.reference_temperature_kelvin.is_finite() || spec.reference_temperature_kelvin <= 0.0 {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: spec.id.clone(),
+            reason: "equilibrium reference temperature must be positive and finite".to_string(),
+        });
+    }
+    if !spec.enthalpy_change_kj_per_mol.is_finite() {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: spec.id.clone(),
+            reason: "equilibrium enthalpy change must be finite".to_string(),
+        });
+    }
+    for term in spec.reactants.iter().chain(spec.products.iter()) {
+        if term.coefficient == 0 {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: spec.id.clone(),
+                reason: "equilibrium coefficients must be greater than zero".to_string(),
+            });
+        }
+        if term.phase == MixturePhase::Gas || term.phase == MixturePhase::Solid {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: spec.id.clone(),
+                reason: "solution equilibria may only use liquid phases".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn index_equilibrium_terms(
+    equilibrium_id: &str,
+    terms: &[super::solution::EquilibriumTerm],
+    substance_id_to_index: &BTreeMap<SubstanceId, SubstanceIndex>,
+) -> ChemistryResult<Vec<IndexedEquilibriumTerm>> {
+    terms
+        .iter()
+        .map(|term| {
+            let substance = *substance_id_to_index
+                .get(&term.substance_id)
+                .ok_or_else(|| ChemistryError::UnknownSubstance {
+                    reaction_id: equilibrium_id.to_string(),
+                    substance_id: term.substance_id.to_string(),
+                })?;
+            Ok(IndexedEquilibriumTerm {
+                substance,
+                coefficient: term.coefficient,
+                phase: term.phase,
+            })
+        })
+        .collect()
+}
+
+fn validate_equilibrium_conservation(
+    spec: &EquilibriumSpec,
+    substances: &[Substance],
+    reactants: &[IndexedEquilibriumTerm],
+    products: &[IndexedEquilibriumTerm],
+) -> ChemistryResult<()> {
+    let reactant_charge = reactants
+        .iter()
+        .map(|term| substances[term.substance.0].charge * term.coefficient as i32)
+        .sum::<i32>();
+    let product_charge = products
+        .iter()
+        .map(|term| substances[term.substance.0].charge * term.coefficient as i32)
+        .sum::<i32>();
+    if reactant_charge != product_charge {
+        return Err(ChemistryError::ChargeNotConserved {
+            reaction_id: spec.id.clone(),
+            reactants: reactant_charge,
+            products: product_charge,
+        });
+    }
+    let reactant_mass = reactants
+        .iter()
+        .map(|term| substances[term.substance.0].molar_mass_grams * term.coefficient as f64)
+        .sum::<f64>();
+    let product_mass = products
+        .iter()
+        .map(|term| substances[term.substance.0].molar_mass_grams * term.coefficient as f64)
+        .sum::<f64>();
+    if (reactant_mass - product_mass).abs() > MASS_TOLERANCE_GRAMS_PER_MOL {
+        return Err(ChemistryError::MassNotConserved {
+            reaction_id: spec.id.clone(),
+            reactants: reactant_mass,
+            products: product_mass,
+        });
+    }
+    Ok(())
 }
 
 fn validate_gas_solubility_model(

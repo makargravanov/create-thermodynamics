@@ -40,6 +40,10 @@ pub enum ChemistryError {
         substance_id: String,
         reason: String,
     },
+    EquilibriumInvariantViolation {
+        equilibrium_id: String,
+        reason: String,
+    },
     InvalidMixtureState(String),
 }
 
@@ -103,6 +107,15 @@ impl Display for ChemistryError {
                 write!(
                     f,
                     "generation invariant failed in '{generator}' for '{substance_id}': {reason}"
+                )
+            }
+            ChemistryError::EquilibriumInvariantViolation {
+                equilibrium_id,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "equilibrium invariant failed in '{equilibrium_id}': {reason}"
                 )
             }
             ChemistryError::InvalidMixtureState(reason) => {

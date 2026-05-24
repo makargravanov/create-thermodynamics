@@ -1,8 +1,10 @@
 use super::error::{ChemistryError, ChemistryResult};
+use super::mixture::MixturePhase;
 use super::molecule::{
     parse_java_structure, parse_legacy_structure, MolecularStructure, MolecularSummary,
 };
 use super::registry::{ChemistryRegistryBuilder, GasSolubilityModel, SolventMiscibility};
+use super::solution::{AcidBaseSpec, EquilibriumSpec};
 use super::substance::{
     LiquidPhasePreference, Substance, SubstanceId, SubstancePhaseProperties, SubstanceTagId,
 };
@@ -80,6 +82,83 @@ fn register_phase_tables(builder: ChemistryRegistryBuilder) -> ChemistryRegistry
                 limit_mol_per_bucket: 0.1,
             },
         )
+        .equilibrium(EquilibriumSpec::new(
+            "destroy:water.autoionization",
+            [(SubstanceId::from("destroy:water"), 1, MixturePhase::Aqueous)],
+            [
+                (
+                    SubstanceId::from("destroy:proton"),
+                    1,
+                    MixturePhase::Aqueous,
+                ),
+                (
+                    SubstanceId::from("destroy:hydroxide"),
+                    1,
+                    MixturePhase::Aqueous,
+                ),
+            ],
+            1.0e-14,
+        ))
+        .acid_base_pair(AcidBaseSpec::new(
+            "destroy:acetic_acid",
+            "destroy:acetic_acid",
+            "destroy:acetate",
+            4.76,
+        ))
+        .acid_base_pair(AcidBaseSpec::new(
+            "destroy:ammonium",
+            "destroy:ammonium",
+            "destroy:ammonia",
+            9.25,
+        ))
+        .acid_base_pair(AcidBaseSpec::new(
+            "destroy:hydrochloric_acid",
+            "destroy:hydrochloric_acid",
+            "destroy:chloride",
+            -6.3,
+        ))
+        .acid_base_pair(AcidBaseSpec::new(
+            "destroy:hydrofluoric_acid",
+            "destroy:hydrofluoric_acid",
+            "destroy:fluoride",
+            3.17,
+        ))
+        .acid_base_pair(AcidBaseSpec::new(
+            "destroy:hydrogen_cyanide",
+            "destroy:hydrogen_cyanide",
+            "destroy:cyanide",
+            9.21,
+        ))
+        .acid_base_pair(AcidBaseSpec::new(
+            "destroy:hydrogen_iodide",
+            "destroy:hydrogen_iodide",
+            "destroy:iodide",
+            -10.0,
+        ))
+        .acid_base_pair(AcidBaseSpec::new(
+            "destroy:hydrogensulfate",
+            "destroy:hydrogensulfate",
+            "destroy:sulfate",
+            1.99,
+        ))
+        .acid_base_pair(AcidBaseSpec::new(
+            "destroy:hypochlorous_acid",
+            "destroy:hypochlorous_acid",
+            "destroy:hypochlorite",
+            7.53,
+        ))
+        .acid_base_pair(AcidBaseSpec::new(
+            "destroy:nitric_acid",
+            "destroy:nitric_acid",
+            "destroy:nitrate",
+            -1.4,
+        ))
+        .acid_base_pair(AcidBaseSpec::new(
+            "destroy:sulfuric_acid",
+            "destroy:sulfuric_acid",
+            "destroy:hydrogensulfate",
+            -3.0,
+        ))
 }
 
 impl RawSubstance {
