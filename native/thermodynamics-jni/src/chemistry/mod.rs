@@ -1,3 +1,5 @@
+#[path = "molecule/canonical.rs"]
+pub mod canonical;
 #[path = "data/catalog.rs"]
 pub mod catalog;
 #[path = "dynamic/mod.rs"]

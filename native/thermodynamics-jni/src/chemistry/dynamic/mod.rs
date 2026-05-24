@@ -89,6 +89,7 @@ pub struct DynamicChemistryRegistry {
     dynamic_reaction_index_by_substance: Vec<Vec<DynamicReactionIndex>>,
     dynamic_unindexed_reaction_indices: Vec<DynamicReactionIndex>,
     canonical_to_id: BTreeMap<String, SubstanceId>,
+    canonical_by_id: BTreeMap<SubstanceId, String>,
     processed_generation_keys: BTreeSet<GenerationKey>,
 }
 
@@ -120,6 +121,7 @@ impl DynamicChemistryRegistry {
             dynamic_reaction_index_by_substance: vec![Vec::new(); static_substance_count],
             dynamic_unindexed_reaction_indices: Vec::new(),
             canonical_to_id: BTreeMap::new(),
+            canonical_by_id: BTreeMap::new(),
             processed_generation_keys: BTreeSet::new(),
         };
         result.rebuild_canonical_index()?;
@@ -235,8 +237,7 @@ impl DynamicChemistryRegistry {
         }
         let substance = build_dynamic_substance(canonical.clone(), structure)?;
         let id = substance.id.clone();
-        self.add_dynamic_substance(substance)?;
-        self.canonical_to_id.insert(canonical, id.clone());
+        self.add_dynamic_substance_with_canonical(substance, Some(canonical))?;
         Ok(id)
     }
 
@@ -381,7 +382,7 @@ impl DynamicChemistryRegistry {
                 });
             }
 
-            let available_substances = self.substances().cloned().collect::<Vec<_>>();
+            let available_substances = self.substances().collect::<Vec<_>>();
             let generated = organic::generate_organic_reactions_for_substances(
                 &available_substances,
                 &unprocessed_seeds,
@@ -407,7 +408,9 @@ impl DynamicChemistryRegistry {
                     skipped_duplicates += 1;
                     continue;
                 }
-                self.canonical_to_id.insert(canonical, substance.id.clone());
+                self.canonical_to_id
+                    .insert(canonical.clone(), substance.id.clone());
+                self.canonical_by_id.insert(substance.id.clone(), canonical);
                 queue.insert(substance.id.clone());
                 scope.insert(substance.id.clone());
                 if queue.len() > MAX_DYNAMIC_QUEUE_ITEMS {
@@ -465,6 +468,7 @@ impl DynamicChemistryRegistry {
 
     fn rebuild_canonical_index(&mut self) -> ChemistryResult<()> {
         self.canonical_to_id.clear();
+        self.canonical_by_id.clear();
         let canonical_entries = self
             .substances()
             .filter_map(|substance| {
@@ -476,12 +480,23 @@ impl DynamicChemistryRegistry {
             .map(|(id, structure)| write_frowns(structure).map(|canonical| (canonical, id)))
             .collect::<ChemistryResult<Vec<_>>>()?;
         for (canonical, id) in canonical_entries {
-            self.canonical_to_id.entry(canonical).or_insert(id);
+            self.canonical_to_id
+                .entry(canonical.clone())
+                .or_insert_with(|| id.clone());
+            self.canonical_by_id.insert(id, canonical);
         }
         Ok(())
     }
 
     fn add_dynamic_substance(&mut self, substance: Substance) -> ChemistryResult<()> {
+        self.add_dynamic_substance_with_canonical(substance, None)
+    }
+
+    fn add_dynamic_substance_with_canonical(
+        &mut self,
+        substance: Substance,
+        canonical: Option<String>,
+    ) -> ChemistryResult<()> {
         substance.validate()?;
         if self.static_registry.substance(&substance.id).is_ok()
             || self
@@ -497,6 +512,17 @@ impl DynamicChemistryRegistry {
                     reason: format!("unknown substance tag '{tag}'"),
                 });
             }
+        }
+        let canonical = match (canonical, substance.molecular_structure.as_ref()) {
+            (Some(canonical), _) => Some(canonical),
+            (None, Some(structure)) => Some(write_frowns(structure)?),
+            (None, None) => None,
+        };
+        if let Some(canonical) = canonical {
+            self.canonical_to_id
+                .entry(canonical.clone())
+                .or_insert_with(|| substance.id.clone());
+            self.canonical_by_id.insert(substance.id.clone(), canonical);
         }
         let substance_index = self.dynamic_substances.len();
         self.dynamic_substance_id_to_index
@@ -859,6 +885,26 @@ mod tests {
         let second = registry.resolve_frowns("CCCCCCCC").unwrap();
         assert_eq!(first, second);
         assert!(first.as_str().starts_with("destroy:linear:"));
+    }
+
+    #[test]
+    fn canonical_codes_are_cached_for_static_and_dynamic_substances() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        assert_eq!(
+            registry.canonical_to_id["destroy:linear:C(=O)(C)(C)"].as_str(),
+            "destroy:acetone"
+        );
+        assert_eq!(
+            registry.canonical_by_id[&SubstanceId::from("destroy:acetone")],
+            "destroy:linear:C(=O)(C)(C)"
+        );
+
+        let dynamic = registry.resolve_frowns("CCCCCCCC").unwrap();
+        let cached = registry.canonical_by_id[&dynamic].clone();
+        let repeated = registry.resolve_frowns("CCCCCCCC").unwrap();
+
+        assert_eq!(dynamic, repeated);
+        assert_eq!(registry.canonical_to_id[&cached], dynamic);
     }
 
     #[test]
