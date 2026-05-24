@@ -2,7 +2,7 @@
 
 ## Внутренний граф
 
-Код: `molecule.rs`
+Код: `molecule/graph.rs`
 
 `MolecularStructure` хранит:
 
@@ -26,7 +26,7 @@
 
 ## FROWNS
 
-Код: `frowns.rs`
+Код: `molecule/frowns.rs`
 
 Главные функции:
 
@@ -56,6 +56,6 @@
 
 ## Функциональные группы
 
-Код: `functional_group.rs`
+Код: `molecule/functional_group.rs`
 
 Поиск функциональных групп работает по фактическому графу. Он не использует скрытые водороды.

@@ -185,8 +185,10 @@
   },
   "active": "f3ef191ded25ae4b",
   "lastOpenFiles": [
-    "chemistry/00-index.md",
+    "chemistry/07-code-map.md",
+    "chemistry/05-molecular-graph-and-frowns.md",
     "chemistry/01-entities.md",
+    "chemistry/00-index.md",
     "README.md",
     "PACKAGE-GUIDELINES.md",
     "MIGRATION-KOTLIN.md",

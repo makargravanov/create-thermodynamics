@@ -1,15 +1,27 @@
+#[path = "data/catalog.rs"]
 pub mod catalog;
+#[path = "dynamic/mod.rs"]
 pub mod dynamic;
 pub mod error;
+#[path = "molecule/frowns.rs"]
 pub mod frowns;
+#[path = "molecule/functional_group.rs"]
 pub mod functional_group;
+#[path = "core/mixture.rs"]
 pub mod mixture;
+#[path = "molecule/graph.rs"]
 pub mod molecule;
+#[path = "organic/mod.rs"]
 pub mod organic;
+#[path = "core/reaction.rs"]
 pub mod reaction;
+#[path = "data/reactions.rs"]
 pub mod reactions;
+#[path = "core/registry.rs"]
 pub mod registry;
+#[path = "core/simulation.rs"]
 pub mod simulation;
+#[path = "core/substance.rs"]
 pub mod substance;
 
 pub use error::{ChemistryError, ChemistryResult};

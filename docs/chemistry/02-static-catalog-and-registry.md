@@ -6,9 +6,9 @@
 
 Код:
 
-- `catalog.rs`
-- `destroy_reactions.generated.rs`
-- `reactions.rs`
+- `data/catalog.rs`
+- `data/destroy_reactions.generated.rs`
+- `data/reactions.rs`
 
 Каталог сам по себе не рассчитывает смесь. Он только наполняет построитель реестра.
 
@@ -16,7 +16,7 @@
 
 Реестр - это проверенная, готовая к расчету форма данных.
 
-Код: `registry.rs`
+Код: `core/registry.rs`
 
 При сборке реестр:
 
