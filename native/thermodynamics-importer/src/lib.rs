@@ -37,7 +37,6 @@ pub fn import_database(
 ) -> Result<ThermodynamicsDatabaseFile, ImportError> {
     let mut species = import_phreeqc_species(phreeqc_text)?;
     species.extend(import_cantera_gases(cantera_yaml)?);
-    normalize_supported_runtime_species(&mut species);
     species.sort_by(|left, right| left.symbol.cmp(&right.symbol));
     for (index, species_record) in species.iter_mut().enumerate() {
         species_record.id = (index + 1) as u16;
@@ -134,188 +133,6 @@ pub fn import_phreeqc_species(text: &str) -> Result<Vec<SpeciesRecord>, ImportEr
     Ok(records)
 }
 
-fn normalize_supported_runtime_species(species: &mut [SpeciesRecord]) {
-    for record in species {
-        if let Some(override_record) = supported_runtime_override(&record.symbol) {
-            record.activity_model = override_record.activity_model;
-            record.standard_gibbs_energy = override_record.standard_gibbs_energy;
-            record.standard_enthalpy_of_formation = override_record.standard_enthalpy_of_formation;
-            record.constant_pressure_heat_capacity =
-                override_record.constant_pressure_heat_capacity;
-            record.valid_temperature_range = override_record.valid_temperature_range;
-        }
-    }
-}
-
-fn supported_runtime_override(symbol: &str) -> Option<SpeciesRecord> {
-    match symbol {
-        "H2O" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Aqueous,
-            ActivityModelRecord::UnitActivity,
-            -237_130.0,
-            Some(-285_830.0),
-            Some(75.3),
-        )),
-        "H+" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Aqueous,
-            ActivityModelRecord::DaviesAqueous,
-            0.0,
-            Some(0.0),
-            Some(0.0),
-        )),
-        "OH-" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Aqueous,
-            ActivityModelRecord::DaviesAqueous,
-            -157_240.0,
-            Some(-230_000.0),
-            Some(-148.0),
-        )),
-        "Na+" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Aqueous,
-            ActivityModelRecord::DaviesAqueous,
-            -261_900.0,
-            Some(-240_100.0),
-            Some(46.0),
-        )),
-        "Cl-" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Aqueous,
-            ActivityModelRecord::DaviesAqueous,
-            -131_200.0,
-            Some(-167_200.0),
-            Some(-136.0),
-        )),
-        "Ca+2" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Aqueous,
-            ActivityModelRecord::DaviesAqueous,
-            -553_600.0,
-            Some(-542_800.0),
-            Some(-33.0),
-        )),
-        "CO3-2" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Aqueous,
-            ActivityModelRecord::DaviesAqueous,
-            -527_900.0,
-            Some(-677_100.0),
-            Some(-289.0),
-        )),
-        "HCO3-" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Aqueous,
-            ActivityModelRecord::DaviesAqueous,
-            -586_900.0,
-            Some(-692_000.0),
-            Some(-35.0),
-        )),
-        "CO2" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Aqueous,
-            ActivityModelRecord::IdealMolalityAqueous,
-            -386_000.0,
-            Some(-413_800.0),
-            Some(214.0),
-        )),
-        "CaCO3(s)" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Solid,
-            ActivityModelRecord::UnitActivity,
-            -1_128_800.0,
-            Some(-1_207_100.0),
-            Some(82.0),
-        )),
-        "H2O(g)" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Gas,
-            ActivityModelRecord::IdealGas,
-            -228_570.0,
-            Some(-241_820.0),
-            Some(33.6),
-        )),
-        "CO2(g)" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Gas,
-            ActivityModelRecord::IdealGas,
-            -394_360.0,
-            Some(-393_510.0),
-            Some(37.1),
-        )),
-        "O2" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Aqueous,
-            ActivityModelRecord::IdealMolalityAqueous,
-            16_400.0,
-            Some(-12_100.0),
-            Some(145.0),
-        )),
-        "O2(g)" => Some(runtime_species_override(
-            symbol,
-            PhaseRecord::Gas,
-            ActivityModelRecord::IdealGas,
-            0.0,
-            Some(0.0),
-            Some(29.4),
-        )),
-        _ => None,
-    }
-}
-
-fn runtime_species_override(
-    symbol: &str,
-    phase: PhaseRecord,
-    activity_model: ActivityModelRecord,
-    standard_gibbs_energy_joule_per_mol: f64,
-    standard_enthalpy_joule_per_mol: Option<f64>,
-    heat_capacity_joule_per_mol_kelvin: Option<f64>,
-) -> SpeciesRecord {
-    SpeciesRecord {
-        id: 0,
-        symbol: symbol.to_owned(),
-        composition: Vec::new(),
-        charge_number: 0,
-        phase,
-        activity_model,
-        standard_gibbs_energy: MolarEnergyRecord {
-            value_joule_per_mol: standard_gibbs_energy_joule_per_mol,
-            reference_temperature_kelvin: REFERENCE_TEMPERATURE_KELVIN,
-            source: runtime_override_source("standard Gibbs energy"),
-        },
-        standard_enthalpy_of_formation: standard_enthalpy_joule_per_mol.map(|value| {
-            MolarEnergyRecord {
-                value_joule_per_mol: value,
-                reference_temperature_kelvin: REFERENCE_TEMPERATURE_KELVIN,
-                source: runtime_override_source("standard enthalpy of formation"),
-            }
-        }),
-        constant_pressure_heat_capacity: heat_capacity_joule_per_mol_kelvin.map(|value| {
-            HeatCapacityRecord {
-                value_joule_per_mol_kelvin: value,
-                source: runtime_override_source("constant-pressure heat capacity"),
-            }
-        }),
-        valid_temperature_range: TemperatureRangeRecord {
-            min_kelvin: 273.15,
-            max_kelvin: 373.15,
-        },
-        tags: Vec::new(),
-    }
-}
-
-fn runtime_override_source(property: &str) -> DataSourceRecord {
-    DataSourceRecord {
-        citation: format!(
-            "Create Thermodynamics normalized supported-runtime {property} at 298.15 K"
-        ),
-        note: "Applied during database generation for the currently supported aqueous/gas equilibrium slice."
-            .to_owned(),
-    }
-}
-
 pub fn import_cantera_gases(text: &str) -> Result<Vec<SpeciesRecord>, ImportError> {
     let document = parse_cantera_subset(text)?;
     let mut records = Vec::new();
@@ -326,15 +143,13 @@ pub fn import_cantera_gases(text: &str) -> Result<Vec<SpeciesRecord>, ImportErro
         if species.thermo.model != "NASA7" {
             return Err(ImportError::UnsupportedCanteraThermo(species.name));
         }
-        let coefficients =
-            nasa7_coefficients_for_temperature(&species, REFERENCE_TEMPERATURE_KELVIN)
-                .ok_or(ImportError::MissingCanteraSpecies)?;
+        let coefficients = species
+            .data
+            .first()
+            .ok_or(ImportError::MissingCanteraSpecies)?;
         if coefficients.len() != 7 {
             return Err(ImportError::UnsupportedCanteraThermo(species.name));
         }
-        let (raw_min_temperature_kelvin, max_temperature_kelvin) =
-            nasa7_temperature_bounds(&species).ok_or(ImportError::MissingCanteraSpecies)?;
-        let min_temperature_kelvin = raw_min_temperature_kelvin.min(REFERENCE_TEMPERATURE_KELVIN);
         let cp = nasa7_heat_capacity(coefficients, REFERENCE_TEMPERATURE_KELVIN);
         let enthalpy = nasa7_enthalpy(coefficients, REFERENCE_TEMPERATURE_KELVIN);
         let gibbs = nasa7_gibbs(coefficients, REFERENCE_TEMPERATURE_KELVIN);
@@ -360,48 +175,13 @@ pub fn import_cantera_gases(text: &str) -> Result<Vec<SpeciesRecord>, ImportErro
                 source: cantera_source(),
             }),
             valid_temperature_range: TemperatureRangeRecord {
-                min_kelvin: min_temperature_kelvin,
-                max_kelvin: max_temperature_kelvin,
+                min_kelvin: species.thermo.temperature_ranges[0],
+                max_kelvin: *species.thermo.temperature_ranges.last().unwrap_or(&1000.0),
             },
             tags: vec!["gas".to_owned()],
         });
     }
     Ok(records)
-}
-
-fn nasa7_coefficients_for_temperature<'a>(
-    species: &'a CanteraSpecies,
-    temperature_kelvin: f64,
-) -> Option<&'a [f64]> {
-    if species.data.is_empty() || species.thermo.temperature_ranges.len() < 2 {
-        return None;
-    }
-
-    for (index, coefficients) in species.data.iter().enumerate() {
-        let lower = species.thermo.temperature_ranges.get(index)?;
-        let upper = species.thermo.temperature_ranges.get(index + 1)?;
-        if temperature_kelvin >= *lower && temperature_kelvin <= *upper {
-            return Some(coefficients.as_slice());
-        }
-    }
-
-    species.data.first().map(Vec::as_slice)
-}
-
-fn nasa7_temperature_bounds(species: &CanteraSpecies) -> Option<(f64, f64)> {
-    let mut values = species.thermo.temperature_ranges.iter().copied();
-    let first = values.next()?;
-    let mut min_value = first;
-    let mut max_value = first;
-    for value in values {
-        if value < min_value {
-            min_value = value;
-        }
-        if value > max_value {
-            max_value = value;
-        }
-    }
-    Some((min_value, max_value))
 }
 
 fn flush_phreeqc_record(

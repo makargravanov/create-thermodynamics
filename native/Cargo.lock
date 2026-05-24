@@ -133,7 +133,6 @@ name = "thermodynamics-data"
 version = "0.1.0"
 dependencies = [
  "thermodynamics-core",
- "thermodynamics-datafile",
 ]
 
 [[package]]
