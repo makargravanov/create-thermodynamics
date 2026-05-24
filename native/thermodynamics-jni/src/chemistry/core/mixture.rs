@@ -277,6 +277,7 @@ impl Mixture {
         registry: &ChemistryRegistry,
         initial_millibuckets: u32,
     ) -> ChemistryResult<u32> {
+        self.validate(registry)?;
         let mut liquid_buckets = 0.0;
         for (substance_id, concentration) in &self.concentrations_mol_per_bucket {
             let substance = registry.substance(substance_id)?;
@@ -285,10 +286,14 @@ impl Mixture {
                 / substance.liquid_density_grams_per_bucket;
         }
         let calculated = (liquid_buckets * 1000.0).round();
-        if calculated.is_finite() && calculated > 0.0 {
+        if calculated.is_finite() && calculated > 0.0 && calculated <= u32::MAX as f64 {
             Ok(calculated as u32)
-        } else {
+        } else if calculated.is_finite() && calculated <= 0.0 {
             Ok(initial_millibuckets)
+        } else {
+            Err(ChemistryError::InvalidMixtureState(format!(
+                "calculated volume must fit into u32 millibuckets: {calculated}"
+            )))
         }
     }
 
@@ -443,4 +448,43 @@ impl Ord for OrderedF64 {
 
 fn ordered_f64(value: f64) -> OrderedF64 {
     OrderedF64(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chemistry::registry::ChemistryRegistryBuilder;
+    use crate::chemistry::substance::Substance;
+
+    fn test_registry() -> ChemistryRegistry {
+        ChemistryRegistryBuilder::new()
+            .substance(Substance::new(
+                "destroy:water",
+                0,
+                18.0,
+                18_000.0,
+                373.0,
+                75.0,
+                40_650.0,
+            ))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn recalculate_volume_rejects_invalid_mixture_state() {
+        let registry = test_registry();
+        let water: SubstanceId = "destroy:water".into();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .concentrations_mol_per_bucket
+            .insert(water.clone(), 1.0);
+        mixture.gaseous_fractions.insert(water, 1.5);
+
+        let error = mixture
+            .recalculate_volume_millibuckets(&registry, 1000)
+            .unwrap_err();
+
+        assert!(matches!(error, ChemistryError::InvalidMixtureState(_)));
+    }
 }
