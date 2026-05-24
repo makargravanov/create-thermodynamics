@@ -107,6 +107,7 @@ fn estimate_phase_properties(
             aqueous_solubility_mol_per_bucket: None,
             organic_solubility_mol_per_bucket: Some(0.0),
             can_precipitate: false,
+            can_form_liquid_phase: true,
         };
     }
     if summary.charge != 0 {
@@ -115,6 +116,7 @@ fn estimate_phase_properties(
             aqueous_solubility_mol_per_bucket: Some(10.0),
             organic_solubility_mol_per_bucket: Some(0.0),
             can_precipitate: true,
+            can_form_liquid_phase: false,
         };
     }
     if tags.contains(&"solvent") {
@@ -126,6 +128,7 @@ fn estimate_phase_properties(
             aqueous_solubility_mol_per_bucket: None,
             organic_solubility_mol_per_bucket: Some(0.25),
             can_precipitate: false,
+            can_form_liquid_phase: true,
         };
     }
     SubstancePhaseProperties::organic_unlimited(0.05)

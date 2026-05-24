@@ -1161,6 +1161,7 @@ fn estimate_dynamic_phase_properties(
             aqueous_solubility_mol_per_bucket: Some(10.0),
             organic_solubility_mol_per_bucket: Some(0.0),
             can_precipitate: true,
+            can_form_liquid_phase: false,
         };
     }
 
@@ -1175,6 +1176,7 @@ fn estimate_dynamic_phase_properties(
             aqueous_solubility_mol_per_bucket: None,
             organic_solubility_mol_per_bucket: Some(organic_solubility),
             can_precipitate,
+            can_form_liquid_phase: false,
         }
     } else if estimate.estimated_log_p >= 1.0 {
         let aqueous_solubility = (0.08
@@ -1187,6 +1189,7 @@ fn estimate_dynamic_phase_properties(
             aqueous_solubility_mol_per_bucket: Some(aqueous_solubility),
             organic_solubility_mol_per_bucket: None,
             can_precipitate,
+            can_form_liquid_phase: false,
         }
     } else if estimate.carbon_count >= estimate.hetero_atom_count {
         SubstancePhaseProperties {
@@ -1196,6 +1199,7 @@ fn estimate_dynamic_phase_properties(
             ),
             organic_solubility_mol_per_bucket: None,
             can_precipitate,
+            can_form_liquid_phase: false,
         }
     } else {
         SubstancePhaseProperties {
@@ -1203,6 +1207,7 @@ fn estimate_dynamic_phase_properties(
             aqueous_solubility_mol_per_bucket: None,
             organic_solubility_mol_per_bucket: Some(0.2),
             can_precipitate,
+            can_form_liquid_phase: false,
         }
     }
 }
@@ -1383,6 +1388,7 @@ mod tests {
             substance.phase_properties.organic_solubility_mol_per_bucket,
             None
         );
+        assert!(!substance.phase_properties.can_form_liquid_phase);
     }
 
     #[test]

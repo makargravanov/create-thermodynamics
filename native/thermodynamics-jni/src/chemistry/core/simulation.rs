@@ -655,6 +655,7 @@ mod tests {
                     aqueous_solubility_mol_per_bucket: Some(0.1),
                     organic_solubility_mol_per_bucket: Some(0.0),
                     can_precipitate: true,
+                    can_form_liquid_phase: false,
                 }),
             )
             .substance(Substance::new(

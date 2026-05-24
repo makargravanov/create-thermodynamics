@@ -100,6 +100,7 @@ pub struct SubstancePhaseProperties {
     pub aqueous_solubility_mol_per_bucket: Option<f64>,
     pub organic_solubility_mol_per_bucket: Option<f64>,
     pub can_precipitate: bool,
+    pub can_form_liquid_phase: bool,
 }
 
 impl SubstancePhaseProperties {
@@ -109,6 +110,7 @@ impl SubstancePhaseProperties {
             aqueous_solubility_mol_per_bucket: None,
             organic_solubility_mol_per_bucket: Some(0.0),
             can_precipitate: false,
+            can_form_liquid_phase: true,
         }
     }
 
@@ -118,6 +120,17 @@ impl SubstancePhaseProperties {
             aqueous_solubility_mol_per_bucket: Some(aqueous_solubility_mol_per_bucket),
             organic_solubility_mol_per_bucket: None,
             can_precipitate: false,
+            can_form_liquid_phase: true,
+        }
+    }
+
+    pub fn organic_solute(aqueous_solubility_mol_per_bucket: f64) -> Self {
+        Self {
+            preferred_liquid_phase: LiquidPhasePreference::Organic,
+            aqueous_solubility_mol_per_bucket: Some(aqueous_solubility_mol_per_bucket),
+            organic_solubility_mol_per_bucket: None,
+            can_precipitate: false,
+            can_form_liquid_phase: false,
         }
     }
 
@@ -174,6 +187,7 @@ impl Substance {
                     aqueous_solubility_mol_per_bucket: Some(10.0),
                     organic_solubility_mol_per_bucket: Some(0.0),
                     can_precipitate: true,
+                    can_form_liquid_phase: false,
                 }
             },
         }
