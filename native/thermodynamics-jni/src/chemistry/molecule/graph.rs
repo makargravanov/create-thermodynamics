@@ -765,7 +765,7 @@ impl MolecularEditor {
         if !has_double_bond {
             return Ok(false);
         }
-        let first_substituent = self
+        let first_substituents = self
             .bonds
             .iter()
             .filter_map(|bond| {
@@ -777,8 +777,8 @@ impl MolecularEditor {
                     None
                 }
             })
-            .next();
-        let second_substituent = self
+            .collect::<Vec<_>>();
+        let second_substituents = self
             .bonds
             .iter()
             .filter_map(|bond| {
@@ -790,14 +790,21 @@ impl MolecularEditor {
                     None
                 }
             })
-            .next();
-        let (Some(first_substituent), Some(second_substituent)) =
-            (first_substituent, second_substituent)
-        else {
+            .collect::<Vec<_>>();
+        if first_substituents.len() != 2 || second_substituents.len() != 2 {
             return Ok(false);
-        };
+        }
+        if same_stereo_substituent_signature(
+            &self.atoms[first_substituents[0]],
+            &self.atoms[first_substituents[1]],
+        ) || same_stereo_substituent_signature(
+            &self.atoms[second_substituents[0]],
+            &self.atoms[second_substituents[1]],
+        ) {
+            return Ok(false);
+        }
         self.mark_stereo_mixture(
-            vec![first, second, first_substituent, second_substituent],
+            vec![first, second, first_substituents[0], second_substituents[0]],
             StereoMixtureKind::DoubleBond,
         )?;
         Ok(true)
@@ -1059,6 +1066,12 @@ fn stereochemistry_references_bond(stereo: &Stereochemistry, first: usize, secon
         }
         _ => false,
     }
+}
+
+fn same_stereo_substituent_signature(first: &MolecularAtom, second: &MolecularAtom) -> bool {
+    first.element == second.element
+        && (first.charge - second.charge).abs() <= 1.0e-9
+        && first.r_group_number == second.r_group_number
 }
 
 #[derive(Debug, Default)]

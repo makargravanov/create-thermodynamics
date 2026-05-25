@@ -4,7 +4,7 @@ use super::catalysis::{CatalystSurfaceId, CatalystSurfaceSpec};
 use super::complex::ComplexSpec;
 use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::MixturePhase;
-use super::reaction::{Reaction, ReactionId, StoichiometricTerm};
+use super::reaction::{ProductDistribution, Reaction, ReactionId, StoichiometricTerm};
 use super::redox::{
     validate_half_reaction_conservation, validate_half_reaction_shape, validate_redox_annotation,
     validate_redox_pair, RedoxHalfReaction, RedoxPair,
@@ -65,10 +65,17 @@ pub(crate) struct IndexedStoichiometricTerm {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct IndexedProductDistributionVariant {
+    pub fraction: f64,
+    pub products: Vec<IndexedStoichiometricTerm>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct IndexedReaction {
     pub reaction: ReactionIndex,
     pub reactants: Vec<IndexedStoichiometricTerm>,
     pub products: Vec<IndexedStoichiometricTerm>,
+    pub product_distribution: Option<Vec<IndexedProductDistributionVariant>>,
     pub orders: Vec<(SubstanceIndex, u32, Vec<MixturePhase>)>,
 }
 
@@ -567,7 +574,12 @@ impl ChemistryRegistry {
                     }
                 }
             }
-            for term in reaction.reactants.iter().chain(reaction.products.iter()) {
+            for term in reaction
+                .reactants
+                .iter()
+                .chain(reaction.products.iter())
+                .chain(distributed_product_terms(reaction))
+            {
                 if !self.substance_id_to_index.contains_key(&term.substance_id) {
                     return Err(ChemistryError::UnknownSubstance {
                         reaction_id: reaction.id.to_string(),
@@ -682,26 +694,14 @@ impl ChemistryRegistry {
                         .map(|charge| charge * requirement.moles_per_reaction.round() as i32)
                 })
                 .sum::<i32>();
-            let product_charge = reaction
-                .products
-                .iter()
-                .map(|term| {
-                    self.substance_index(&term.substance_id)
-                        .map(|index| {
-                            self.substance_properties.charge[index.0] * term.coefficient as i32
-                        })
-                        .ok_or_else(|| ChemistryError::UnknownSubstance {
-                            reaction_id: reaction.id.to_string(),
-                            substance_id: term.substance_id.to_string(),
-                        })
-                })
-                .sum::<ChemistryResult<i32>>()?
-                + external_product_charge;
-            if reactant_charge != product_charge && !reaction.allow_charge_imbalance {
+            let product_charge = product_charge(reaction, self)? + external_product_charge as f64;
+            if (reactant_charge as f64 - product_charge).abs() > 1.0e-9
+                && !reaction.allow_charge_imbalance
+            {
                 return Err(ChemistryError::ChargeNotConserved {
                     reaction_id: reaction.id.to_string(),
                     reactants: reactant_charge,
-                    products: product_charge,
+                    products: product_charge.round() as i32,
                 });
             }
 
@@ -732,15 +732,7 @@ impl ChemistryRegistry {
                         .map(|mass| mass * requirement.moles_per_reaction)
                 })
                 .sum::<f64>();
-            let product_mass = reaction
-                .products
-                .iter()
-                .map(|term| {
-                    self.substance(&term.substance_id)
-                        .map(|substance| substance.molar_mass_grams * term.coefficient as f64)
-                })
-                .sum::<ChemistryResult<f64>>()?
-                + external_product_mass;
+            let product_mass = product_mass(reaction, self)? + external_product_mass;
             if (reactant_mass - product_mass).abs() > MASS_TOLERANCE_GRAMS_PER_MOL
                 && !reaction.allow_mass_imbalance
             {
@@ -821,6 +813,87 @@ fn stoichiometric_map(terms: &[StoichiometricTerm]) -> BTreeMap<SubstanceId, u32
         *result.entry(term.substance_id.clone()).or_insert(0) += term.coefficient;
     }
     result
+}
+
+fn distributed_product_terms(reaction: &Reaction) -> impl Iterator<Item = &StoichiometricTerm> {
+    reaction
+        .product_distribution
+        .iter()
+        .flat_map(|distribution| distribution.variants.iter())
+        .flat_map(|variant| variant.products.iter())
+}
+
+fn product_charge(reaction: &Reaction, registry: &ChemistryRegistry) -> ChemistryResult<f64> {
+    if let Some(distribution) = &reaction.product_distribution {
+        return distribution
+            .variants
+            .iter()
+            .map(|variant| {
+                let charge = variant
+                    .products
+                    .iter()
+                    .map(|term| {
+                        registry
+                            .substance_index(&term.substance_id)
+                            .map(|index| {
+                                registry.substance_properties.charge[index.0] as f64
+                                    * term.coefficient as f64
+                            })
+                            .ok_or_else(|| ChemistryError::UnknownSubstance {
+                                reaction_id: reaction.id.to_string(),
+                                substance_id: term.substance_id.to_string(),
+                            })
+                    })
+                    .sum::<ChemistryResult<f64>>()?;
+                Ok(charge * variant.fraction)
+            })
+            .sum();
+    }
+    reaction
+        .products
+        .iter()
+        .map(|term| {
+            registry
+                .substance_index(&term.substance_id)
+                .map(|index| {
+                    registry.substance_properties.charge[index.0] as f64 * term.coefficient as f64
+                })
+                .ok_or_else(|| ChemistryError::UnknownSubstance {
+                    reaction_id: reaction.id.to_string(),
+                    substance_id: term.substance_id.to_string(),
+                })
+        })
+        .sum()
+}
+
+fn product_mass(reaction: &Reaction, registry: &ChemistryRegistry) -> ChemistryResult<f64> {
+    if let Some(distribution) = &reaction.product_distribution {
+        return distribution
+            .variants
+            .iter()
+            .map(|variant| {
+                let mass = variant
+                    .products
+                    .iter()
+                    .map(|term| {
+                        registry
+                            .substance(&term.substance_id)
+                            .map(|substance| substance.molar_mass_grams * term.coefficient as f64)
+                    })
+                    .sum::<ChemistryResult<f64>>()?;
+                Ok(mass * variant.fraction)
+            })
+            .sum();
+    }
+    reaction
+        .products
+        .iter()
+        .map(|term| {
+            registry
+                .substance(&term.substance_id)
+                .map(|substance| substance.molar_mass_grams * term.coefficient as f64)
+        })
+        .sum()
 }
 
 fn build_substance_properties_table(substances: &[Substance]) -> SubstancePropertiesTable {
@@ -1287,6 +1360,13 @@ fn build_indexed_reactions(
                 .iter()
                 .map(|term| indexed_product_term(reaction, term, substance_id_to_index))
                 .collect::<ChemistryResult<Vec<_>>>()?;
+            let product_distribution = reaction
+                .product_distribution
+                .as_ref()
+                .map(|distribution| {
+                    indexed_product_distribution(reaction, distribution, substance_id_to_index)
+                })
+                .transpose()?;
             let orders = reaction
                 .orders
                 .iter()
@@ -1314,7 +1394,29 @@ fn build_indexed_reactions(
                 reaction: reaction_index,
                 reactants,
                 products,
+                product_distribution,
                 orders,
+            })
+        })
+        .collect()
+}
+
+fn indexed_product_distribution(
+    reaction: &Reaction,
+    distribution: &ProductDistribution,
+    substance_id_to_index: &BTreeMap<SubstanceId, SubstanceIndex>,
+) -> ChemistryResult<Vec<IndexedProductDistributionVariant>> {
+    distribution
+        .variants
+        .iter()
+        .map(|variant| {
+            Ok(IndexedProductDistributionVariant {
+                fraction: variant.fraction,
+                products: variant
+                    .products
+                    .iter()
+                    .map(|term| indexed_product_term(reaction, term, substance_id_to_index))
+                    .collect::<ChemistryResult<Vec<_>>>()?,
             })
         })
         .collect()

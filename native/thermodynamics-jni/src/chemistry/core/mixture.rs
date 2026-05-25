@@ -482,7 +482,7 @@ impl Mixture {
         &mut self,
         registry: &ChemistryRegistry,
         reactants: &[(SubstanceIndex, u32, Vec<MixturePhase>)],
-        products: &[(SubstanceIndex, u32, MixturePhase)],
+        products: &[(SubstanceIndex, f64, MixturePhase)],
         moles_per_bucket: f64,
     ) -> ChemistryResult<f64> {
         if !moles_per_bucket.is_finite() || moles_per_bucket < 0.0 {
@@ -512,7 +512,12 @@ impl Mixture {
             }
         }
         for (substance, coefficient, phase) in products {
-            let amount = *coefficient as f64 * moles_per_bucket;
+            if !coefficient.is_finite() || *coefficient <= 0.0 {
+                return Err(ChemistryError::InvalidMixtureState(
+                    "product coefficient must be positive and finite".to_string(),
+                ));
+            }
+            let amount = *coefficient * moles_per_bucket;
             max_delta = max_delta.max(amount);
             let substance_data = registry.substance_by_index(*substance)?;
             if let Some(position) = self.position_of_substance(*substance) {

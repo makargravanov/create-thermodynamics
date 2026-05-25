@@ -548,7 +548,7 @@ fn apply_reaction_inner(
         .map(|term| {
             (
                 term.substance,
-                term.coefficient,
+                term.coefficient as f64,
                 term.phases
                     .first()
                     .copied()
@@ -556,6 +556,11 @@ fn apply_reaction_inner(
             )
         })
         .collect::<Vec<_>>();
+    let products = if let Some(distribution) = &indexed_reaction.product_distribution {
+        distributed_products(distribution)
+    } else {
+        products
+    };
     let max_concentration_delta = mixture.apply_reaction_phase_deltas_by_index(
         registry,
         &reactants,
@@ -704,7 +709,38 @@ fn concentration_deltas(
             (product.coefficient as f64) * moles_per_bucket,
         );
     }
+    if let Some(distribution) = &indexed_reaction.product_distribution {
+        for (substance, coefficient, _) in distributed_products(distribution) {
+            add_delta(&mut deltas, substance, coefficient * moles_per_bucket);
+        }
+    }
     deltas
+}
+
+fn distributed_products(
+    distribution: &[super::registry::IndexedProductDistributionVariant],
+) -> Vec<(SubstanceIndex, f64, MixturePhase)> {
+    let mut products = Vec::new();
+    for variant in distribution {
+        for term in &variant.products {
+            let phase = term
+                .phases
+                .first()
+                .copied()
+                .unwrap_or(MixturePhase::Aqueous);
+            let coefficient = term.coefficient as f64 * variant.fraction;
+            if let Some((_, existing, _)) =
+                products.iter_mut().find(|(substance, _, existing_phase)| {
+                    *substance == term.substance && *existing_phase == phase
+                })
+            {
+                *existing += coefficient;
+            } else {
+                products.push((term.substance, coefficient, phase));
+            }
+        }
+    }
+    products
 }
 
 fn apply_reaction_results(

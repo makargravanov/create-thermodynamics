@@ -457,7 +457,7 @@ fn apply_equilibrium_extent(
         .collect::<Vec<_>>();
     let products = products
         .iter()
-        .map(|term| (term.substance, term.coefficient, term.phase))
+        .map(|term| (term.substance, term.coefficient as f64, term.phase))
         .collect::<Vec<_>>();
     mixture.apply_reaction_phase_deltas_by_index(registry, &reactants, &products, extent)
 }

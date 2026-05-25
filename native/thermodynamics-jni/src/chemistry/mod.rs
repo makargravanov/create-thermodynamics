@@ -230,6 +230,24 @@ mod tests {
             .unwrap()
     }
 
+    fn distributed_product_registry() -> super::ChemistryRegistry {
+        ChemistryRegistryBuilder::new()
+            .substance(test_substance("a"))
+            .substance(test_substance("b"))
+            .substance(test_substance("c"))
+            .reaction(
+                Reaction::builder("split_stereo_products")
+                    .reactant("a", 1, 1)
+                    .product_distribution_variant(0.5, [("b", 1)])
+                    .product_distribution_variant(0.5, [("c", 1)])
+                    .pre_exponential_factor(1.0e12)
+                    .activation_energy_kj_per_mol(0.0)
+                    .build(),
+            )
+            .build()
+            .unwrap()
+    }
+
     #[test]
     fn heating_empty_mixture_keeps_valid_temperature() {
         let registry = test_registry();
@@ -239,6 +257,61 @@ mod tests {
 
         assert!(mixture.temperature_kelvin().is_finite());
         assert_eq!(mixture.temperature_kelvin(), 298.0);
+    }
+
+    #[test]
+    fn distributed_products_are_applied_as_concrete_substances() {
+        let registry = distributed_product_registry();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture.add_substance(&registry, "a", 1.0).unwrap();
+
+        react_for_tick(&registry, &mut mixture, 1).unwrap();
+
+        assert_eq!(mixture.concentration_of(&SubstanceId::from("a")), 0.0);
+        assert!((mixture.concentration_of(&SubstanceId::from("b")) - 0.5).abs() < 1.0e-9);
+        assert!((mixture.concentration_of(&SubstanceId::from("c")) - 0.5).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn distributed_product_fractions_must_sum_to_one() {
+        let result = ChemistryRegistryBuilder::new()
+            .substance(test_substance("a"))
+            .substance(test_substance("b"))
+            .substance(test_substance("c"))
+            .reaction(
+                Reaction::builder("bad_distribution")
+                    .reactant("a", 1, 1)
+                    .product_distribution_variant(0.5, [("b", 1)])
+                    .product_distribution_variant(0.25, [("c", 1)])
+                    .build(),
+            )
+            .build();
+
+        assert!(matches!(
+            result,
+            Err(ChemistryError::InvalidReaction { .. })
+        ));
+    }
+
+    #[test]
+    fn distributed_products_are_checked_for_mass() {
+        let result = ChemistryRegistryBuilder::new()
+            .substance(test_substance("a"))
+            .substance(Substance::new("b", 0, 8.0, 1_000.0, 373.0, 100.0, 20_000.0))
+            .substance(Substance::new("c", 0, 8.0, 1_000.0, 373.0, 100.0, 20_000.0))
+            .reaction(
+                Reaction::builder("bad_mass_distribution")
+                    .reactant("a", 1, 1)
+                    .product_distribution_variant(0.5, [("b", 1)])
+                    .product_distribution_variant(0.5, [("c", 1)])
+                    .build(),
+            )
+            .build();
+
+        assert!(matches!(
+            result,
+            Err(ChemistryError::MassNotConserved { .. })
+        ));
     }
 
     #[test]

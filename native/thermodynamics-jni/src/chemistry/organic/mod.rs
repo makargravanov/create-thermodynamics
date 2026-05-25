@@ -2,7 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::error::{ChemistryError, ChemistryResult};
 use super::functional_group::{FunctionalGroup, FunctionalGroupType};
-use super::molecule::{MolecularEditor, MolecularStructure};
+use super::molecule::{
+    MolecularEditor, MolecularStructure, StereoDescriptor, StereoMixtureKind, Stereochemistry,
+    TetrahedralStereo,
+};
 use super::reaction::Reaction;
 use super::registry::{ChemistryRegistry, ChemistryRegistryBuilder};
 use super::substance::{Substance, SubstanceId};
@@ -366,25 +369,33 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
             }
             FunctionalGroupType::Alkene => {
                 for spec in electrophilic_addition_specs(false) {
-                    let reaction = generate_electrophilic_addition(
+                    let reaction = match generate_electrophilic_addition(
                         substance,
                         structure,
                         group,
                         spec,
                         &mut resolver,
-                    )?;
+                    ) {
+                        Ok(reaction) => reaction,
+                        Err(error) if is_unknown_stereo_distribution(&error) => continue,
+                        Err(error) => return Err(error),
+                    };
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
             }
             FunctionalGroupType::Alkyne => {
                 for spec in electrophilic_addition_specs(true) {
-                    let reaction = generate_electrophilic_addition(
+                    let reaction = match generate_electrophilic_addition(
                         substance,
                         structure,
                         group,
                         spec,
                         &mut resolver,
-                    )?;
+                    ) {
+                        Ok(reaction) => reaction,
+                        Err(error) if is_unknown_stereo_distribution(&error) => continue,
+                        Err(error) => return Err(error),
+                    };
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
             }
@@ -404,6 +415,15 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
         substances: resolver.substances,
         reactions,
     })
+}
+
+fn is_unknown_stereo_distribution(error: &ChemistryError) -> bool {
+    matches!(
+        error,
+        ChemistryError::InvalidReaction { reason, .. }
+            if reason.contains("stereo distribution")
+                || reason.contains("stereo mixture has no quantitative distribution")
+    )
 }
 
 fn canonical_to_id_from_substances<'a>(
@@ -1559,12 +1579,24 @@ fn generate_electrophilic_addition(
         editor.mark_tetrahedral_stereo_mixture_if_valid(high_degree_carbon)?;
         editor.mark_tetrahedral_stereo_mixture_if_valid(low_degree_carbon)?;
     }
-    let product = resolver.resolve(editor.finish()?)?;
+    let product_structures = expand_stereo_product_distribution(editor.finish()?)?;
+    let mut products = Vec::new();
+    for product_structure in product_structures {
+        products.push(resolver.resolve(product_structure)?);
+    }
     let mut builder = Reaction::builder(generated_group_reaction_id(spec.prefix, substance, group))
         .reactant(substance.id.clone(), spec.nucleophile_ratio, 1)
         .reactant(spec.electrophile, 1, 1)
-        .product(product, spec.nucleophile_ratio)
         .activation_energy_kj_per_mol(spec.activation_energy);
+    if products.len() == 1 {
+        builder = builder.product(products.remove(0), spec.nucleophile_ratio);
+    } else {
+        let fraction = 1.0 / products.len() as f64;
+        for product in products {
+            builder =
+                builder.product_distribution_variant(fraction, [(product, spec.nucleophile_ratio)]);
+        }
+    }
     if let Some((catalyst, order)) = spec.catalyst {
         builder = builder.catalyst_order(catalyst, order);
     }
@@ -1575,6 +1607,85 @@ fn generate_electrophilic_addition(
         builder = builder.display_as_reversible();
     }
     Ok(builder.build())
+}
+
+fn expand_stereo_product_distribution(
+    structure: MolecularStructure,
+) -> ChemistryResult<Vec<MolecularStructure>> {
+    let Some(position) = structure
+        .stereochemistry
+        .iter()
+        .position(|stereo| matches!(stereo, Stereochemistry::Mixture { .. }))
+    else {
+        return Ok(vec![structure]);
+    };
+    let mut base = structure;
+    let mixture = base.stereochemistry.remove(position);
+    let variants = match mixture {
+        Stereochemistry::Mixture {
+            atoms,
+            kind: StereoMixtureKind::Tetrahedral,
+        } => {
+            if atoms.len() != 5 {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: "<generated-organic>".to_string(),
+                    reason:
+                        "tetrahedral stereo mixture must contain one center and four substituents"
+                            .to_string(),
+                });
+            }
+            let substituents = [atoms[1], atoms[2], atoms[3], atoms[4]];
+            vec![
+                Stereochemistry::Tetrahedral(TetrahedralStereo {
+                    center: atoms[0],
+                    substituents,
+                    descriptor: StereoDescriptor::Clockwise,
+                }),
+                Stereochemistry::Tetrahedral(TetrahedralStereo {
+                    center: atoms[0],
+                    substituents,
+                    descriptor: StereoDescriptor::CounterClockwise,
+                }),
+            ]
+        }
+        Stereochemistry::Mixture {
+            atoms,
+            kind: StereoMixtureKind::DoubleBond,
+        } => {
+            if atoms.len() != 4 {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: "<generated-organic>".to_string(),
+                    reason: "double-bond stereo mixture must contain bond atoms and substituents"
+                        .to_string(),
+                });
+            }
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: "<generated-organic>".to_string(),
+                reason: format!(
+                    "geometric stereo distribution for bond {}={} is unknown",
+                    atoms[0], atoms[1]
+                ),
+            });
+        }
+        Stereochemistry::Mixture {
+            kind: StereoMixtureKind::General,
+            ..
+        } => {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: "<generated-organic>".to_string(),
+                reason: "general stereo mixture has no quantitative distribution rule".to_string(),
+            });
+        }
+        _ => unreachable!("position selected a stereo mixture"),
+    };
+    let mut result = Vec::new();
+    for stereo in variants {
+        let mut variant = base.clone();
+        variant.stereochemistry.push(stereo);
+        variant.validate()?;
+        result.extend(expand_stereo_product_distribution(variant)?);
+    }
+    Ok(result)
 }
 
 fn add_hydroxyl(editor: &mut MolecularEditor, parent: usize) -> ChemistryResult<usize> {
@@ -1802,6 +1913,11 @@ mod tests {
     ];
 
     const ACTIVE_GENERATORS_WITHOUT_CATALOG_SUBSTRATE: &[&str] = &["aldehyde_oxidation"];
+    const ACTIVE_GENERATORS_WITH_UNKNOWN_STEREO_DISTRIBUTION: &[&str] = &[
+        "alkyne_chlorination",
+        "alkyne_chlorohydrination",
+        "alkyne_iodination",
+    ];
 
     fn generated_registry() -> ChemistryRegistry {
         static REGISTRY: OnceLock<ChemistryRegistry> = OnceLock::new();
@@ -1908,6 +2024,9 @@ mod tests {
         let registry = generated_registry();
         for prefix in ACTIVE_DESTROY_GENERIC_REACTIONS {
             if ACTIVE_GENERATORS_WITHOUT_CATALOG_SUBSTRATE.contains(prefix) {
+                continue;
+            }
+            if ACTIVE_GENERATORS_WITH_UNKNOWN_STEREO_DISTRIBUTION.contains(prefix) {
                 continue;
             }
             assert!(
@@ -2077,7 +2196,6 @@ mod tests {
             "alkene_hydrogenation/destroy_ethene/",
             "alkene_hydroiodination/destroy_ethene/",
             "alkene_iodination/destroy_ethene/",
-            "alkyne_chlorination/destroy_acetylene/",
             "alkyne_hydrogenation/destroy_acetylene/",
         ] {
             reaction_with_prefix(&registry, prefix);

@@ -421,7 +421,6 @@ pub const DESTROY_TAGS: &[&str] = &[
     "destroy:smelly",
     "destroy:smog",
     "destroy:solvent",
-    "destroy:stereomixture",
 ];
 
 const DESTROY_SUBSTANCES: &[RawSubstance] = &[

@@ -747,7 +747,18 @@ impl DynamicChemistryRegistry {
 
     fn validate_dynamic_reaction(&self, reaction: &Reaction) -> ChemistryResult<()> {
         reaction.validate_shape()?;
-        for term in reaction.reactants.iter().chain(reaction.products.iter()) {
+        for term in reaction
+            .reactants
+            .iter()
+            .chain(reaction.products.iter())
+            .chain(
+                reaction
+                    .product_distribution
+                    .iter()
+                    .flat_map(|distribution| distribution.variants.iter())
+                    .flat_map(|variant| variant.products.iter()),
+            )
+        {
             self.substance(&term.substance_id)
                 .map_err(|_| ChemistryError::UnknownSubstance {
                     reaction_id: reaction.id.to_string(),
@@ -779,19 +790,14 @@ impl DynamicChemistryRegistry {
             })
             .sum::<ChemistryResult<i32>>()?
             + external_reactant_charge;
-        let product_charge = reaction
-            .products
-            .iter()
-            .map(|term| {
-                self.substance(&term.substance_id)
-                    .map(|substance| substance.charge * term.coefficient as i32)
-            })
-            .sum::<ChemistryResult<i32>>()?;
-        if reactant_charge != product_charge && !reaction.allow_charge_imbalance {
+        let product_charge = self.dynamic_product_charge(reaction)?;
+        if (reactant_charge as f64 - product_charge).abs() > 1.0e-9
+            && !reaction.allow_charge_imbalance
+        {
             return Err(ChemistryError::ChargeNotConserved {
                 reaction_id: reaction.id.to_string(),
                 reactants: reactant_charge,
-                products: product_charge,
+                products: product_charge.round() as i32,
             });
         }
 
@@ -813,14 +819,7 @@ impl DynamicChemistryRegistry {
             })
             .sum::<ChemistryResult<f64>>()?
             + external_reactant_mass;
-        let product_mass = reaction
-            .products
-            .iter()
-            .map(|term| {
-                self.substance(&term.substance_id)
-                    .map(|substance| substance.molar_mass_grams * term.coefficient as f64)
-            })
-            .sum::<ChemistryResult<f64>>()?;
+        let product_mass = self.dynamic_product_mass(reaction)?;
         if (reactant_mass - product_mass).abs() > MASS_TOLERANCE_GRAMS_PER_MOL
             && !reaction.allow_mass_imbalance
         {
@@ -831,6 +830,63 @@ impl DynamicChemistryRegistry {
             });
         }
         Ok(())
+    }
+
+    fn dynamic_product_charge(&self, reaction: &Reaction) -> ChemistryResult<f64> {
+        if let Some(distribution) = &reaction.product_distribution {
+            return distribution
+                .variants
+                .iter()
+                .map(|variant| {
+                    let charge = variant
+                        .products
+                        .iter()
+                        .map(|term| {
+                            self.substance(&term.substance_id)
+                                .map(|substance| substance.charge as f64 * term.coefficient as f64)
+                        })
+                        .sum::<ChemistryResult<f64>>()?;
+                    Ok(charge * variant.fraction)
+                })
+                .sum();
+        }
+        reaction
+            .products
+            .iter()
+            .map(|term| {
+                self.substance(&term.substance_id)
+                    .map(|substance| substance.charge as f64 * term.coefficient as f64)
+            })
+            .sum()
+    }
+
+    fn dynamic_product_mass(&self, reaction: &Reaction) -> ChemistryResult<f64> {
+        if let Some(distribution) = &reaction.product_distribution {
+            return distribution
+                .variants
+                .iter()
+                .map(|variant| {
+                    let mass = variant
+                        .products
+                        .iter()
+                        .map(|term| {
+                            self.substance(&term.substance_id).map(|substance| {
+                                substance.molar_mass_grams * term.coefficient as f64
+                            })
+                        })
+                        .sum::<ChemistryResult<f64>>()?;
+                    Ok(mass * variant.fraction)
+                })
+                .sum();
+        }
+        reaction
+            .products
+            .iter()
+            .map(|term| {
+                self.substance(&term.substance_id)
+                    .map(|substance| substance.molar_mass_grams * term.coefficient as f64)
+            })
+            .sum()
     }
 
     fn validated_substance_indices(
@@ -1280,7 +1336,10 @@ fn build_dynamic_substance(
         .iter()
         .any(|stereo| matches!(stereo, Stereochemistry::Mixture { .. }))
     {
-        tags.push(SubstanceTagId::from("destroy:stereomixture"));
+        return Err(ChemistryError::InvalidSubstance {
+            substance_id: canonical_frowns,
+            reason: "stereo mixtures are not substances; generators must distribute products into concrete stereoisomers".to_string(),
+        });
     }
     Ok(Substance::new(
         SubstanceId::new(canonical_frowns.clone())?,
@@ -1523,19 +1582,15 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_stereo_mixture_gets_explicit_tag() {
+    fn dynamic_stereo_mixture_is_not_a_substance() {
         let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
-        let mixture = registry
+        let error = registry
             .resolve_frowns(
                 "destroy:graph:atoms=C.H.Cl.F.I;bonds=0-s-1,0-s-2,0-s-3,0-s-4;stereo=mix:tetra:0.1.2.3.4",
             )
-            .unwrap();
-        let substance = registry.substance(&mixture).unwrap();
+            .unwrap_err();
 
-        assert!(substance
-            .tags
-            .iter()
-            .any(|tag| tag.as_str() == "destroy:stereomixture"));
+        assert!(matches!(error, ChemistryError::InvalidSubstance { .. }));
     }
 
     #[test]

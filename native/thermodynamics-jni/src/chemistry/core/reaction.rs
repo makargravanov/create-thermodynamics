@@ -63,10 +63,22 @@ impl StoichiometricTerm {
 }
 
 #[derive(Debug, Clone)]
+pub struct ProductDistributionVariant {
+    pub fraction: f64,
+    pub products: Vec<StoichiometricTerm>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProductDistribution {
+    pub variants: Vec<ProductDistributionVariant>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Reaction {
     pub id: ReactionId,
     pub reactants: Vec<StoichiometricTerm>,
     pub products: Vec<StoichiometricTerm>,
+    pub product_distribution: Option<ProductDistribution>,
     pub orders: BTreeMap<SubstanceId, u32>,
     pub external_reactants: Vec<ExternalRequirement>,
     pub external_products: Vec<ExternalRequirement>,
@@ -146,6 +158,7 @@ impl Reaction {
                 id: id.into(),
                 reactants: Vec::new(),
                 products: Vec::new(),
+                product_distribution: None,
                 orders: BTreeMap::new(),
                 external_reactants: Vec::new(),
                 external_products: Vec::new(),
@@ -209,18 +222,69 @@ impl Reaction {
                     reason: "reaction must have at least one reactant".to_string(),
                 });
             }
-            if self.products.is_empty() {
+            if self.products.is_empty() && self.product_distribution.is_none() {
                 return Err(ChemistryError::InvalidReaction {
                     reaction_id: reaction_id.clone(),
                     reason: "reaction must have at least one product".to_string(),
                 });
             }
         }
-        for term in self.reactants.iter().chain(self.products.iter()) {
+        for term in self.reactants.iter().chain(self.products.iter()).chain(
+            self.product_distribution
+                .iter()
+                .flat_map(|distribution| distribution.variants.iter())
+                .flat_map(|variant| variant.products.iter()),
+        ) {
             if term.coefficient == 0 {
                 return Err(ChemistryError::InvalidReaction {
                     reaction_id: reaction_id.clone(),
                     reason: "stoichiometric coefficients must be greater than zero".to_string(),
+                });
+            }
+        }
+        if let Some(distribution) = &self.product_distribution {
+            if !self.products.is_empty() {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "distributed reactions must not also have direct products".to_string(),
+                });
+            }
+            if distribution.variants.is_empty() {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "product distribution must contain at least one variant".to_string(),
+                });
+            }
+            let mut total_fraction = 0.0;
+            for variant in &distribution.variants {
+                if !variant.fraction.is_finite() || variant.fraction <= 0.0 {
+                    return Err(ChemistryError::InvalidReaction {
+                        reaction_id: reaction_id.clone(),
+                        reason: "product distribution fractions must be positive and finite"
+                            .to_string(),
+                    });
+                }
+                if variant.products.is_empty() {
+                    return Err(ChemistryError::InvalidReaction {
+                        reaction_id: reaction_id.clone(),
+                        reason: "product distribution variants must contain products".to_string(),
+                    });
+                }
+                total_fraction += variant.fraction;
+            }
+            if (total_fraction - 1.0).abs() > 1.0e-9 {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: format!(
+                        "product distribution fractions must sum to 1.0, got {total_fraction}"
+                    ),
+                });
+            }
+            if self.reverse_reaction_id.is_some() {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "distributed products cannot be mirrored by a single reverse reaction"
+                        .to_string(),
                 });
             }
         }
@@ -361,6 +425,30 @@ impl ReactionBuilder {
         self.reaction
             .products
             .push(StoichiometricTerm::new(substance_id, coefficient));
+        self
+    }
+
+    pub fn product_distribution_variant<I, S>(mut self, fraction: f64, products: I) -> Self
+    where
+        I: IntoIterator<Item = (S, u32)>,
+        S: Into<SubstanceId>,
+    {
+        let variant = ProductDistributionVariant {
+            fraction,
+            products: products
+                .into_iter()
+                .map(|(substance_id, coefficient)| {
+                    StoichiometricTerm::new(substance_id, coefficient)
+                })
+                .collect(),
+        };
+        self.reaction
+            .product_distribution
+            .get_or_insert_with(|| ProductDistribution {
+                variants: Vec::new(),
+            })
+            .variants
+            .push(variant);
         self
     }
 
