@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use super::error::{ChemistryError, ChemistryResult};
 use super::frowns::{parse_frowns, write_frowns};
 use super::functional_group::{FunctionalGroup, FunctionalGroupType};
+use super::kinetics::EnergyModel;
 use super::molecule::{MolecularEditor, MolecularStructure, Stereochemistry};
 use super::organic::{self, GroupParticipant, OrganicGenerationSpace};
 use super::reaction::{Reaction, ReactionId};
@@ -153,6 +154,7 @@ pub struct DynamicChemistryRegistry {
     group_handles_by_substance: Vec<Vec<GroupHandle>>,
     processed_generation_masks: Vec<Vec<u64>>,
     dynamic_acid_base_specs: Vec<AcidBaseSpec>,
+    energy_model: EnergyModel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,6 +190,7 @@ impl DynamicChemistryRegistry {
             group_handles_by_substance: vec![Vec::new(); static_substance_count],
             processed_generation_masks: vec![Vec::new(); static_substance_count],
             dynamic_acid_base_specs: Vec::new(),
+            energy_model: EnergyModel::new(),
         };
         result.rebuild_canonical_index()?;
         result.rebuild_group_index();
@@ -196,6 +199,19 @@ impl DynamicChemistryRegistry {
 
     pub fn static_registry(&self) -> &ChemistryRegistry {
         &self.static_registry
+    }
+
+    pub fn energy_model(&self) -> &EnergyModel {
+        &self.energy_model
+    }
+
+    pub fn energy_model_mut(&mut self) -> &mut EnergyModel {
+        &mut self.energy_model
+    }
+
+    pub fn with_energy_model(mut self, energy_model: EnergyModel) -> Self {
+        self.energy_model = energy_model;
+        self
     }
 
     pub fn to_registry(&self) -> ChemistryResult<ChemistryRegistry> {
@@ -758,6 +774,12 @@ impl DynamicChemistryRegistry {
                     .flat_map(|distribution| distribution.variants.iter())
                     .flat_map(|variant| variant.products.iter()),
             )
+            .chain(
+                reaction
+                    .channels
+                    .iter()
+                    .flat_map(|channel| channel.products.iter()),
+            )
         {
             self.substance(&term.substance_id)
                 .map_err(|_| ChemistryError::UnknownSubstance {
@@ -833,6 +855,60 @@ impl DynamicChemistryRegistry {
     }
 
     fn dynamic_product_charge(&self, reaction: &Reaction) -> ChemistryResult<f64> {
+        if !reaction.channels.is_empty() {
+            let external_reactant_charge = reaction
+                .external_reactants
+                .iter()
+                .filter_map(|requirement| {
+                    requirement
+                        .charge
+                        .map(|charge| charge as f64 * requirement.moles_per_reaction)
+                })
+                .sum::<f64>();
+            let external_product_charge = reaction
+                .external_products
+                .iter()
+                .filter_map(|requirement| {
+                    requirement
+                        .charge
+                        .map(|charge| charge as f64 * requirement.moles_per_reaction)
+                })
+                .sum::<f64>();
+            let reactant_charge = reaction
+                .reactants
+                .iter()
+                .map(|term| {
+                    self.substance(&term.substance_id)
+                        .map(|substance| substance.charge as f64 * term.coefficient as f64)
+                })
+                .sum::<ChemistryResult<f64>>()?
+                + external_reactant_charge;
+            let mut first_channel_charge = None;
+            for channel in &reaction.channels {
+                let channel_charge = channel
+                    .products
+                    .iter()
+                    .map(|term| {
+                        self.substance(&term.substance_id)
+                            .map(|substance| substance.charge as f64 * term.coefficient as f64)
+                    })
+                    .sum::<ChemistryResult<f64>>()?
+                    + external_product_charge;
+                if first_channel_charge.is_none() {
+                    first_channel_charge = Some(channel_charge - external_product_charge);
+                }
+                if (reactant_charge - channel_charge).abs() > 1.0e-9
+                    && !reaction.allow_charge_imbalance
+                {
+                    return Err(ChemistryError::ChargeNotConserved {
+                        reaction_id: format!("{}:{}", reaction.id, channel.id),
+                        reactants: reactant_charge.round() as i32,
+                        products: channel_charge.round() as i32,
+                    });
+                }
+            }
+            return Ok(first_channel_charge.unwrap_or(0.0));
+        }
         if let Some(distribution) = &reaction.product_distribution {
             return distribution
                 .variants
@@ -861,6 +937,60 @@ impl DynamicChemistryRegistry {
     }
 
     fn dynamic_product_mass(&self, reaction: &Reaction) -> ChemistryResult<f64> {
+        if !reaction.channels.is_empty() {
+            let external_reactant_mass = reaction
+                .external_reactants
+                .iter()
+                .filter_map(|requirement| {
+                    requirement
+                        .molar_mass_grams
+                        .map(|mass| mass * requirement.moles_per_reaction)
+                })
+                .sum::<f64>();
+            let external_product_mass = reaction
+                .external_products
+                .iter()
+                .filter_map(|requirement| {
+                    requirement
+                        .molar_mass_grams
+                        .map(|mass| mass * requirement.moles_per_reaction)
+                })
+                .sum::<f64>();
+            let reactant_mass = reaction
+                .reactants
+                .iter()
+                .map(|term| {
+                    self.substance(&term.substance_id)
+                        .map(|substance| substance.molar_mass_grams * term.coefficient as f64)
+                })
+                .sum::<ChemistryResult<f64>>()?
+                + external_reactant_mass;
+            let mut first_channel_mass = None;
+            for channel in &reaction.channels {
+                let channel_mass = channel
+                    .products
+                    .iter()
+                    .map(|term| {
+                        self.substance(&term.substance_id)
+                            .map(|substance| substance.molar_mass_grams * term.coefficient as f64)
+                    })
+                    .sum::<ChemistryResult<f64>>()?
+                    + external_product_mass;
+                if first_channel_mass.is_none() {
+                    first_channel_mass = Some(channel_mass - external_product_mass);
+                }
+                if (reactant_mass - channel_mass).abs() > MASS_TOLERANCE_GRAMS_PER_MOL
+                    && !reaction.allow_mass_imbalance
+                {
+                    return Err(ChemistryError::MassNotConserved {
+                        reaction_id: format!("{}:{}", reaction.id, channel.id),
+                        reactants: reactant_mass,
+                        products: channel_mass,
+                    });
+                }
+            }
+            return Ok(first_channel_mass.unwrap_or(0.0));
+        }
         if let Some(distribution) = &reaction.product_distribution {
             return distribution
                 .variants

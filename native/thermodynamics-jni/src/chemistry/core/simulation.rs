@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use super::catalysis::{CatalystSurfaceId, CatalystSurfaceState, SurfaceStep};
 use super::error::{ChemistryError, ChemistryResult};
+use super::kinetics::{channel_rate_sum_per_second, LightBand};
 use super::mixture::{Mixture, MixturePhase, TRACE_CONCENTRATION_MOL_PER_BUCKET};
 use super::reaction::Reaction;
 use super::redox::RedoxEnvironment;
@@ -25,6 +26,7 @@ pub struct SimulationReport {
 #[derive(Debug, Clone)]
 pub struct ReactionContext {
     pub uv_power: f64,
+    pub light_power_by_band: BTreeMap<LightBand, f64>,
     pub external_reactants: BTreeMap<String, f64>,
     pub external_catalysts: BTreeMap<String, f64>,
     pub surfaces: BTreeMap<CatalystSurfaceId, CatalystSurfaceState>,
@@ -56,6 +58,7 @@ impl Default for ReactionContext {
     fn default() -> Self {
         Self {
             uv_power: 0.0,
+            light_power_by_band: BTreeMap::new(),
             external_reactants: BTreeMap::new(),
             external_catalysts: BTreeMap::new(),
             surfaces: BTreeMap::new(),
@@ -73,7 +76,46 @@ impl ReactionContext {
             ));
         }
         self.uv_power = uv_power;
+        if uv_power > 0.0 {
+            self.light_power_by_band
+                .insert(LightBand::Ultraviolet, uv_power);
+        } else {
+            self.light_power_by_band.remove(&LightBand::Ultraviolet);
+        }
         Ok(self)
+    }
+
+    pub fn with_light_power(mut self, band: LightBand, power: f64) -> ChemistryResult<Self> {
+        self.set_light_power(band, power)?;
+        Ok(self)
+    }
+
+    pub fn set_light_power(&mut self, band: LightBand, power: f64) -> ChemistryResult<()> {
+        if !power.is_finite() || power < 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "light power must be non-negative and finite".to_string(),
+            ));
+        }
+        if power <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            self.light_power_by_band.remove(&band);
+        } else {
+            self.light_power_by_band.insert(band, power);
+        }
+        if band == LightBand::Ultraviolet {
+            self.uv_power = power;
+        }
+        Ok(())
+    }
+
+    pub fn light_power(&self, band: LightBand) -> f64 {
+        if band == LightBand::Ultraviolet {
+            self.light_power_by_band
+                .get(&band)
+                .copied()
+                .unwrap_or(self.uv_power)
+        } else {
+            self.light_power_by_band.get(&band).copied().unwrap_or(0.0)
+        }
     }
 
     pub fn add_external_reactant(
@@ -288,8 +330,11 @@ pub fn reaction_rate_mol_per_bucket_per_tick_with_context(
     reaction: &Reaction,
     context: &ReactionContext,
 ) -> ChemistryResult<f64> {
-    let mut rate =
-        reaction.rate_constant_per_second(mixture.temperature_kelvin())? / TICKS_PER_SECOND;
+    let mut rate = if reaction.channels.is_empty() {
+        reaction.rate_constant_per_second(mixture.temperature_kelvin())?
+    } else {
+        channel_rate_sum_per_second(&reaction.id, &reaction.channels, mixture, context)?
+    } / TICKS_PER_SECOND;
     if !redox_environment_allows_reaction(registry, mixture, reaction)? {
         return Ok(0.0);
     }
@@ -330,8 +375,16 @@ fn reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
     indexed_reaction: &IndexedReaction,
     context: &ReactionContext,
 ) -> ChemistryResult<f64> {
-    let mut rate =
-        reaction.rate_constant_per_second(mixture.temperature_kelvin())? / TICKS_PER_SECOND;
+    let mut rate = if reaction.channels.is_empty() {
+        reaction.rate_constant_per_second(mixture.temperature_kelvin())?
+    } else {
+        let channel_refs = indexed_reaction
+            .channels
+            .iter()
+            .map(|channel| channel.channel.clone())
+            .collect::<Vec<_>>();
+        channel_rate_sum_per_second(&reaction.id, &channel_refs, mixture, context)?
+    } / TICKS_PER_SECOND;
     if !redox_environment_allows_reaction(registry, mixture, reaction)? {
         return Ok(0.0);
     }
@@ -395,7 +448,32 @@ fn context_allows_reaction(reaction: &Reaction, context: &ReactionContext) -> bo
             return false;
         }
     }
+    if !reaction.channels.is_empty()
+        && !reaction
+            .channels
+            .iter()
+            .any(|channel| channel_context_can_exist(channel, context))
+    {
+        return false;
+    }
     true
+}
+
+fn channel_context_can_exist(
+    channel: &super::kinetics::ReactionChannel,
+    context: &ReactionContext,
+) -> bool {
+    channel.condition_effects.iter().all(|effect| match effect {
+        super::kinetics::ChannelConditionEffect::Light {
+            band,
+            minimum_power,
+            ..
+        } => context.light_power(*band) >= *minimum_power,
+        super::kinetics::ChannelConditionEffect::Surface { surface_id, .. } => {
+            context.free_sites(surface_id) > TRACE_CONCENTRATION_MOL_PER_BUCKET
+        }
+        super::kinetics::ChannelConditionEffect::Phase { .. } => true,
+    })
 }
 
 fn redox_environment_allows_reaction(
@@ -506,7 +584,14 @@ fn apply_reaction(
             reason: "moles to apply must be non-negative and finite".to_string(),
         });
     }
-    let deltas = concentration_deltas(indexed_reaction, moles_per_bucket);
+    let deltas = concentration_deltas(
+        registry,
+        mixture,
+        context,
+        reaction,
+        indexed_reaction,
+        moles_per_bucket,
+    )?;
     validate_external_reactants(context, reaction, moles_per_bucket)?;
     let mixture_checkpoint = mixture.checkpoint_for_reaction(&deltas);
     let context_checkpoint = checkpoint_context(context, reaction);
@@ -556,7 +641,9 @@ fn apply_reaction_inner(
             )
         })
         .collect::<Vec<_>>();
-    let products = if let Some(distribution) = &indexed_reaction.product_distribution {
+    let products = if !indexed_reaction.channels.is_empty() {
+        channel_products(registry, mixture, context, reaction, indexed_reaction)?
+    } else if let Some(distribution) = &indexed_reaction.product_distribution {
         distributed_products(distribution)
     } else {
         products
@@ -691,9 +778,13 @@ fn add_surface_step_result(
 }
 
 fn concentration_deltas(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    context: &ReactionContext,
+    reaction: &Reaction,
     indexed_reaction: &IndexedReaction,
     moles_per_bucket: f64,
-) -> Vec<(SubstanceIndex, f64)> {
+) -> ChemistryResult<Vec<(SubstanceIndex, f64)>> {
     let mut deltas = Vec::new();
     for reactant in &indexed_reaction.reactants {
         add_delta(
@@ -709,12 +800,69 @@ fn concentration_deltas(
             (product.coefficient as f64) * moles_per_bucket,
         );
     }
-    if let Some(distribution) = &indexed_reaction.product_distribution {
+    if !indexed_reaction.channels.is_empty() {
+        for (substance, coefficient, _) in
+            channel_products(registry, mixture, context, reaction, indexed_reaction)?
+        {
+            add_delta(&mut deltas, substance, coefficient * moles_per_bucket);
+        }
+    } else if let Some(distribution) = &indexed_reaction.product_distribution {
         for (substance, coefficient, _) in distributed_products(distribution) {
             add_delta(&mut deltas, substance, coefficient * moles_per_bucket);
         }
     }
-    deltas
+    Ok(deltas)
+}
+
+fn channel_products(
+    _registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    context: &ReactionContext,
+    reaction: &Reaction,
+    indexed_reaction: &IndexedReaction,
+) -> ChemistryResult<Vec<(SubstanceIndex, f64, MixturePhase)>> {
+    let weights = indexed_reaction
+        .channels
+        .iter()
+        .map(|channel| {
+            Ok((
+                channel.channel.id.to_string(),
+                channel.channel.rate_weight(mixture, context)?,
+            ))
+        })
+        .collect::<ChemistryResult<Vec<_>>>()?;
+    let total = weights.iter().map(|(_, weight)| *weight).sum::<f64>();
+    if !total.is_finite() || total <= 0.0 {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: reaction.id.to_string(),
+            reason: "cannot apply channel reaction because no channel is available".to_string(),
+        });
+    }
+    let mut products = Vec::new();
+    for (channel, (_, weight)) in indexed_reaction.channels.iter().zip(weights.into_iter()) {
+        if weight <= 0.0 {
+            continue;
+        }
+        let fraction = weight / total;
+        for term in &channel.products {
+            let phase = term
+                .phases
+                .first()
+                .copied()
+                .unwrap_or(MixturePhase::Aqueous);
+            let coefficient = term.coefficient as f64 * fraction;
+            if let Some((_, existing, _)) =
+                products.iter_mut().find(|(substance, _, existing_phase)| {
+                    *substance == term.substance && *existing_phase == phase
+                })
+            {
+                *existing += coefficient;
+            } else {
+                products.push((term.substance, coefficient, phase));
+            }
+        }
+    }
+    Ok(products)
 }
 
 fn distributed_products(

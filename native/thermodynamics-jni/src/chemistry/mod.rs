@@ -13,6 +13,8 @@ pub mod error;
 pub mod frowns;
 #[path = "molecule/functional_group.rs"]
 pub mod functional_group;
+#[path = "core/kinetics.rs"]
+pub mod kinetics;
 #[path = "core/mixture.rs"]
 pub mod mixture;
 #[path = "molecule/graph.rs"]
@@ -54,8 +56,11 @@ mod tests {
     use super::complex::{ComplexLigand, ComplexSpec};
     use super::destroy_registry_builder;
     use super::error::ChemistryError;
+    use super::kinetics::{
+        ChannelConditionEffect, EnergyModel, IsomerEnergy, LightBand, ReactionChannel,
+    };
     use super::mixture::{Mixture, MixturePhase};
-    use super::reaction::Reaction;
+    use super::reaction::{Reaction, StoichiometricTerm};
     use super::registry::{ChemistryRegistryBuilder, ReactionCandidateScratch};
     use super::simulation::{
         react_for_tick, react_for_tick_with_context, react_until_equilibrium, ReactionContext,
@@ -248,6 +253,39 @@ mod tests {
             .unwrap()
     }
 
+    fn channel_product_registry(
+        first_activation: f64,
+        second_activation: f64,
+    ) -> super::ChemistryRegistry {
+        ChemistryRegistryBuilder::new()
+            .substance(test_substance("a"))
+            .substance(test_substance("b"))
+            .substance(test_substance("c"))
+            .reaction(
+                Reaction::builder("channel_products")
+                    .reactant("a", 1, 1)
+                    .channel(
+                        ReactionChannel::new(
+                            "channel:b",
+                            [StoichiometricTerm::new("b", 1)],
+                            first_activation,
+                        )
+                        .with_pre_exponential_factor(1.0e12),
+                    )
+                    .channel(
+                        ReactionChannel::new(
+                            "channel:c",
+                            [StoichiometricTerm::new("c", 1)],
+                            second_activation,
+                        )
+                        .with_pre_exponential_factor(1.0e12),
+                    )
+                    .build(),
+            )
+            .build()
+            .unwrap()
+    }
+
     #[test]
     fn heating_empty_mixture_keeps_valid_temperature() {
         let registry = test_registry();
@@ -312,6 +350,155 @@ mod tests {
             result,
             Err(ChemistryError::MassNotConserved { .. })
         ));
+    }
+
+    #[test]
+    fn equal_channel_barriers_give_equal_products() {
+        let registry = channel_product_registry(0.0, 0.0);
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture.add_substance(&registry, "a", 1.0).unwrap();
+
+        react_for_tick(&registry, &mut mixture, 1).unwrap();
+
+        assert!((mixture.concentration_of(&SubstanceId::from("b")) - 0.5).abs() < 1.0e-9);
+        assert!((mixture.concentration_of(&SubstanceId::from("c")) - 0.5).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn lower_transition_state_energy_gives_larger_kinetic_product() {
+        let registry = channel_product_registry(0.0, 5.0);
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture.add_substance(&registry, "a", 1.0).unwrap();
+
+        react_for_tick(&registry, &mut mixture, 1).unwrap();
+
+        assert!(mixture.concentration_of(&SubstanceId::from("b")) > 0.85);
+        assert!(mixture.concentration_of(&SubstanceId::from("c")) < 0.15);
+    }
+
+    #[test]
+    fn higher_temperature_reduces_channel_selectivity() {
+        let registry = channel_product_registry(0.0, 5.0);
+        let mut cold = Mixture::new(250.0).unwrap();
+        cold.add_substance(&registry, "a", 1.0).unwrap();
+        let mut hot = Mixture::new(800.0).unwrap();
+        hot.add_substance(&registry, "a", 1.0).unwrap();
+
+        react_for_tick(&registry, &mut cold, 1).unwrap();
+        react_for_tick(&registry, &mut hot, 1).unwrap();
+
+        assert!(
+            cold.concentration_of(&SubstanceId::from("b"))
+                > hot.concentration_of(&SubstanceId::from("b"))
+        );
+        assert!(hot.concentration_of(&SubstanceId::from("b")) < 0.75);
+    }
+
+    #[test]
+    fn photochemical_channel_requires_light() {
+        let registry = ChemistryRegistryBuilder::new()
+            .substance(test_substance("a"))
+            .substance(test_substance("b"))
+            .reaction(
+                Reaction::builder("photo_channel")
+                    .reactant("a", 1, 1)
+                    .channel(
+                        ReactionChannel::new("photo:b", [StoichiometricTerm::new("b", 1)], 0.0)
+                            .with_pre_exponential_factor(1.0e12)
+                            .with_condition_effect(ChannelConditionEffect::Light {
+                                band: LightBand::Ultraviolet,
+                                minimum_power: 0.1,
+                                multiplier: 1.0,
+                            }),
+                    )
+                    .build(),
+            )
+            .build()
+            .unwrap();
+        let mut dark = Mixture::new(298.0).unwrap();
+        dark.add_substance(&registry, "a", 1.0).unwrap();
+        let mut light = dark.clone();
+        let mut context = ReactionContext::default()
+            .with_light_power(LightBand::Ultraviolet, 1.0)
+            .unwrap();
+
+        assert!(!react_for_tick(&registry, &mut dark, 1).unwrap());
+        assert!(react_for_tick_with_context(&registry, &mut light, &mut context, 1).unwrap());
+
+        assert_eq!(dark.concentration_of(&SubstanceId::from("b")), 0.0);
+        assert!(light.concentration_of(&SubstanceId::from("b")) > 0.0);
+    }
+
+    #[test]
+    fn catalyst_surface_changes_channel_distribution() {
+        let registry = ChemistryRegistryBuilder::new()
+            .substance(test_substance("a"))
+            .substance(test_substance("b"))
+            .substance(test_substance("c"))
+            .catalyst_surface_spec(CatalystSurfaceSpec::chemical("surface:nickel", 58.69, 0))
+            .reaction(
+                Reaction::builder("surface_channels")
+                    .reactant("a", 1, 1)
+                    .channel(
+                        ReactionChannel::new(
+                            "surface:none",
+                            [StoichiometricTerm::new("b", 1)],
+                            0.0,
+                        )
+                        .with_pre_exponential_factor(1.0e12),
+                    )
+                    .channel(
+                        ReactionChannel::new(
+                            "surface:nickel",
+                            [StoichiometricTerm::new("c", 1)],
+                            0.0,
+                        )
+                        .with_pre_exponential_factor(1.0e12)
+                        .with_condition_effect(
+                            ChannelConditionEffect::Surface {
+                                surface_id: CatalystSurfaceId::from("surface:nickel"),
+                                multiplier: 9.0,
+                            },
+                        ),
+                    )
+                    .build(),
+            )
+            .build()
+            .unwrap();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture.add_substance(&registry, "a", 1.0).unwrap();
+        let mut context = ReactionContext::default();
+        context.add_surface("surface:nickel", 1.0).unwrap();
+
+        react_for_tick_with_context(&registry, &mut mixture, &mut context, 1).unwrap();
+
+        assert!((mixture.concentration_of(&SubstanceId::from("c")) - 0.9).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn energy_model_calculates_thermodynamic_isomer_distribution() {
+        let model = EnergyModel::new()
+            .with_isomer_energy(IsomerEnergy {
+                substance_id: "e".into(),
+                relative_gibbs_kj_per_mol: 0.0,
+                phase: None,
+                surface_id: None,
+            })
+            .unwrap()
+            .with_isomer_energy(IsomerEnergy {
+                substance_id: "z".into(),
+                relative_gibbs_kj_per_mol: 5.0,
+                phase: None,
+                surface_id: None,
+            })
+            .unwrap();
+
+        let distribution = model
+            .equilibrium_distribution(["e".into(), "z".into()], 298.0, None)
+            .unwrap();
+
+        assert!(distribution[&SubstanceId::from("e")] > 0.85);
+        assert!(distribution[&SubstanceId::from("z")] < 0.15);
     }
 
     #[test]

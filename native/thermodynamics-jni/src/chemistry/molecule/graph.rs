@@ -421,6 +421,15 @@ impl MolecularEditor {
         }
     }
 
+    pub fn structure(&self) -> MolecularStructure {
+        MolecularStructure {
+            source_code: self.source_code.clone(),
+            atoms: self.atoms.clone(),
+            bonds: self.bonds.clone(),
+            stereochemistry: self.stereochemistry.clone(),
+        }
+    }
+
     pub fn add_atom(
         &mut self,
         parent: usize,

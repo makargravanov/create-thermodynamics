@@ -128,6 +128,13 @@ impl Mixture {
             .unwrap_or(0.0)
     }
 
+    pub fn total_concentration_in_phase(&self, phase: MixturePhase) -> f64 {
+        self.components
+            .iter()
+            .map(|component| component.amount_in_phase(phase))
+            .sum()
+    }
+
     pub fn phase_amounts_of(&self, substance_id: &SubstanceId) -> Vec<PhaseAmount> {
         self.components
             .iter()

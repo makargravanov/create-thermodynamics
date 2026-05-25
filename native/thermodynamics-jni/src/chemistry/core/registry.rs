@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::catalysis::{CatalystSurfaceId, CatalystSurfaceSpec};
 use super::complex::ComplexSpec;
 use super::error::{ChemistryError, ChemistryResult};
+use super::kinetics::{ChannelConditionEffect, ReactionChannel};
 use super::mixture::MixturePhase;
 use super::reaction::{ProductDistribution, Reaction, ReactionId, StoichiometricTerm};
 use super::redox::{
@@ -71,11 +72,18 @@ pub(crate) struct IndexedProductDistributionVariant {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct IndexedReactionChannel {
+    pub channel: ReactionChannel,
+    pub products: Vec<IndexedStoichiometricTerm>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct IndexedReaction {
     pub reaction: ReactionIndex,
     pub reactants: Vec<IndexedStoichiometricTerm>,
     pub products: Vec<IndexedStoichiometricTerm>,
     pub product_distribution: Option<Vec<IndexedProductDistributionVariant>>,
+    pub channels: Vec<IndexedReactionChannel>,
     pub orders: Vec<(SubstanceIndex, u32, Vec<MixturePhase>)>,
 }
 
@@ -579,6 +587,7 @@ impl ChemistryRegistry {
                 .iter()
                 .chain(reaction.products.iter())
                 .chain(distributed_product_terms(reaction))
+                .chain(channel_product_terms(reaction))
             {
                 if !self.substance_id_to_index.contains_key(&term.substance_id) {
                     return Err(ChemistryError::UnknownSubstance {
@@ -635,6 +644,21 @@ impl ChemistryRegistry {
                         reaction_id: reaction.id.to_string(),
                         reason: format!("unknown catalyst surface '{}'", step.surface_id()),
                     });
+                }
+            }
+            for channel in &reaction.channels {
+                for effect in &channel.condition_effects {
+                    if let ChannelConditionEffect::Surface { surface_id, .. } = effect {
+                        if !self.catalyst_surface_specs.contains_key(surface_id) {
+                            return Err(ChemistryError::InvalidReaction {
+                                reaction_id: reaction.id.to_string(),
+                                reason: format!(
+                                    "reaction channel '{}' references unknown catalyst surface '{}'",
+                                    channel.id, surface_id
+                                ),
+                            });
+                        }
+                    }
                 }
             }
 
@@ -823,7 +847,83 @@ fn distributed_product_terms(reaction: &Reaction) -> impl Iterator<Item = &Stoic
         .flat_map(|variant| variant.products.iter())
 }
 
+fn channel_product_terms(reaction: &Reaction) -> impl Iterator<Item = &StoichiometricTerm> {
+    reaction
+        .channels
+        .iter()
+        .flat_map(|channel| channel.products.iter())
+}
+
 fn product_charge(reaction: &Reaction, registry: &ChemistryRegistry) -> ChemistryResult<f64> {
+    if !reaction.channels.is_empty() {
+        let external_reactant_charge = reaction
+            .external_reactants
+            .iter()
+            .filter_map(|requirement| {
+                requirement
+                    .charge
+                    .map(|charge| charge as f64 * requirement.moles_per_reaction)
+            })
+            .sum::<f64>();
+        let external_product_charge = reaction
+            .external_products
+            .iter()
+            .filter_map(|requirement| {
+                requirement
+                    .charge
+                    .map(|charge| charge as f64 * requirement.moles_per_reaction)
+            })
+            .sum::<f64>();
+        let reactant_charge = reaction
+            .reactants
+            .iter()
+            .map(|term| {
+                registry
+                    .substance_index(&term.substance_id)
+                    .map(|index| {
+                        registry.substance_properties.charge[index.0] as f64
+                            * term.coefficient as f64
+                    })
+                    .ok_or_else(|| ChemistryError::UnknownSubstance {
+                        reaction_id: reaction.id.to_string(),
+                        substance_id: term.substance_id.to_string(),
+                    })
+            })
+            .sum::<ChemistryResult<f64>>()?
+            + external_reactant_charge;
+        let mut first_channel_charge = None;
+        for channel in &reaction.channels {
+            let channel_charge = channel
+                .products
+                .iter()
+                .map(|term| {
+                    registry
+                        .substance_index(&term.substance_id)
+                        .map(|index| {
+                            registry.substance_properties.charge[index.0] as f64
+                                * term.coefficient as f64
+                        })
+                        .ok_or_else(|| ChemistryError::UnknownSubstance {
+                            reaction_id: reaction.id.to_string(),
+                            substance_id: term.substance_id.to_string(),
+                        })
+                })
+                .sum::<ChemistryResult<f64>>()?
+                + external_product_charge;
+            if first_channel_charge.is_none() {
+                first_channel_charge = Some(channel_charge - external_product_charge);
+            }
+            if (reactant_charge - channel_charge).abs() > 1.0e-9 && !reaction.allow_charge_imbalance
+            {
+                return Err(ChemistryError::ChargeNotConserved {
+                    reaction_id: format!("{}:{}", reaction.id, channel.id),
+                    reactants: reactant_charge.round() as i32,
+                    products: channel_charge.round() as i32,
+                });
+            }
+        }
+        return Ok(first_channel_charge.unwrap_or(0.0));
+    }
     if let Some(distribution) = &reaction.product_distribution {
         return distribution
             .variants
@@ -867,6 +967,62 @@ fn product_charge(reaction: &Reaction, registry: &ChemistryRegistry) -> Chemistr
 }
 
 fn product_mass(reaction: &Reaction, registry: &ChemistryRegistry) -> ChemistryResult<f64> {
+    if !reaction.channels.is_empty() {
+        let external_reactant_mass = reaction
+            .external_reactants
+            .iter()
+            .filter_map(|requirement| {
+                requirement
+                    .molar_mass_grams
+                    .map(|mass| mass * requirement.moles_per_reaction)
+            })
+            .sum::<f64>();
+        let external_product_mass = reaction
+            .external_products
+            .iter()
+            .filter_map(|requirement| {
+                requirement
+                    .molar_mass_grams
+                    .map(|mass| mass * requirement.moles_per_reaction)
+            })
+            .sum::<f64>();
+        let reactant_mass = reaction
+            .reactants
+            .iter()
+            .map(|term| {
+                registry
+                    .substance(&term.substance_id)
+                    .map(|substance| substance.molar_mass_grams * term.coefficient as f64)
+            })
+            .sum::<ChemistryResult<f64>>()?
+            + external_reactant_mass;
+        let mut first_channel_mass = None;
+        for channel in &reaction.channels {
+            let channel_mass = channel
+                .products
+                .iter()
+                .map(|term| {
+                    registry
+                        .substance(&term.substance_id)
+                        .map(|substance| substance.molar_mass_grams * term.coefficient as f64)
+                })
+                .sum::<ChemistryResult<f64>>()?
+                + external_product_mass;
+            if first_channel_mass.is_none() {
+                first_channel_mass = Some(channel_mass - external_product_mass);
+            }
+            if (reactant_mass - channel_mass).abs() > MASS_TOLERANCE_GRAMS_PER_MOL
+                && !reaction.allow_mass_imbalance
+            {
+                return Err(ChemistryError::MassNotConserved {
+                    reaction_id: format!("{}:{}", reaction.id, channel.id),
+                    reactants: reactant_mass,
+                    products: channel_mass,
+                });
+            }
+        }
+        return Ok(first_channel_mass.unwrap_or(0.0));
+    }
     if let Some(distribution) = &reaction.product_distribution {
         return distribution
             .variants
@@ -1367,6 +1523,20 @@ fn build_indexed_reactions(
                     indexed_product_distribution(reaction, distribution, substance_id_to_index)
                 })
                 .transpose()?;
+            let channels = reaction
+                .channels
+                .iter()
+                .map(|channel| {
+                    Ok(IndexedReactionChannel {
+                        channel: channel.clone(),
+                        products: channel
+                            .products
+                            .iter()
+                            .map(|term| indexed_product_term(reaction, term, substance_id_to_index))
+                            .collect::<ChemistryResult<Vec<_>>>()?,
+                    })
+                })
+                .collect::<ChemistryResult<Vec<_>>>()?;
             let orders = reaction
                 .orders
                 .iter()
@@ -1395,6 +1565,7 @@ fn build_indexed_reactions(
                 reactants,
                 products,
                 product_distribution,
+                channels,
                 orders,
             })
         })

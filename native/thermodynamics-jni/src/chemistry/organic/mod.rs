@@ -2,11 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::error::{ChemistryError, ChemistryResult};
 use super::functional_group::{FunctionalGroup, FunctionalGroupType};
+use super::kinetics::ReactionChannel;
 use super::molecule::{
     MolecularEditor, MolecularStructure, StereoDescriptor, StereoMixtureKind, Stereochemistry,
     TetrahedralStereo,
 };
-use super::reaction::Reaction;
+use super::reaction::{Reaction, StoichiometricTerm};
 use super::registry::{ChemistryRegistry, ChemistryRegistryBuilder};
 use super::substance::{Substance, SubstanceId};
 
@@ -1415,6 +1416,7 @@ struct ElectrophilicAdditionSpec {
     electrophile: &'static str,
     high_degree_group: AdditionGroup,
     low_degree_group: AdditionGroup,
+    alkyne_stereo_rule: Option<AlkyneStereoRule>,
     nucleophile_ratio: u32,
     activation_energy: f64,
     catalyst: Option<(&'static str, u32)>,
@@ -1429,6 +1431,11 @@ enum AdditionGroup {
     Borane,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum AlkyneStereoRule {
+    Anti,
+}
+
 fn electrophilic_addition_specs(alkyne: bool) -> Vec<ElectrophilicAdditionSpec> {
     let activation_energy = if alkyne { 10.0 } else { 25.0 };
     vec![
@@ -1441,6 +1448,7 @@ fn electrophilic_addition_specs(alkyne: bool) -> Vec<ElectrophilicAdditionSpec> 
             electrophile: "destroy:chlorine",
             high_degree_group: AdditionGroup::Atom("Cl"),
             low_degree_group: AdditionGroup::Atom("Cl"),
+            alkyne_stereo_rule: alkyne.then_some(AlkyneStereoRule::Anti),
             nucleophile_ratio: 1,
             activation_energy,
             catalyst: None,
@@ -1456,6 +1464,7 @@ fn electrophilic_addition_specs(alkyne: bool) -> Vec<ElectrophilicAdditionSpec> 
             electrophile: "destroy:hypochlorous_acid",
             high_degree_group: AdditionGroup::Hydroxyl,
             low_degree_group: AdditionGroup::Atom("Cl"),
+            alkyne_stereo_rule: alkyne.then_some(AlkyneStereoRule::Anti),
             nucleophile_ratio: 1,
             activation_energy,
             catalyst: None,
@@ -1471,6 +1480,7 @@ fn electrophilic_addition_specs(alkyne: bool) -> Vec<ElectrophilicAdditionSpec> 
             electrophile: "destroy:water",
             high_degree_group: AdditionGroup::Hydroxyl,
             low_degree_group: AdditionGroup::Atom("H"),
+            alkyne_stereo_rule: None,
             nucleophile_ratio: 1,
             activation_energy: 20.0,
             catalyst: Some(("destroy:proton", 2)),
@@ -1486,6 +1496,7 @@ fn electrophilic_addition_specs(alkyne: bool) -> Vec<ElectrophilicAdditionSpec> 
             electrophile: "destroy:diborane",
             high_degree_group: AdditionGroup::Atom("H"),
             low_degree_group: AdditionGroup::Borane,
+            alkyne_stereo_rule: None,
             nucleophile_ratio: 2,
             activation_energy,
             catalyst: None,
@@ -1501,6 +1512,7 @@ fn electrophilic_addition_specs(alkyne: bool) -> Vec<ElectrophilicAdditionSpec> 
             electrophile: "destroy:hydrochloric_acid",
             high_degree_group: AdditionGroup::Atom("Cl"),
             low_degree_group: AdditionGroup::Atom("H"),
+            alkyne_stereo_rule: None,
             nucleophile_ratio: 1,
             activation_energy,
             catalyst: None,
@@ -1516,6 +1528,7 @@ fn electrophilic_addition_specs(alkyne: bool) -> Vec<ElectrophilicAdditionSpec> 
             electrophile: "destroy:hydrogen",
             high_degree_group: AdditionGroup::Atom("H"),
             low_degree_group: AdditionGroup::Atom("H"),
+            alkyne_stereo_rule: None,
             nucleophile_ratio: 1,
             activation_energy,
             catalyst: None,
@@ -1531,6 +1544,7 @@ fn electrophilic_addition_specs(alkyne: bool) -> Vec<ElectrophilicAdditionSpec> 
             electrophile: "destroy:hydrogen_iodide",
             high_degree_group: AdditionGroup::Atom("I"),
             low_degree_group: AdditionGroup::Atom("H"),
+            alkyne_stereo_rule: None,
             nucleophile_ratio: 1,
             activation_energy,
             catalyst: None,
@@ -1546,6 +1560,7 @@ fn electrophilic_addition_specs(alkyne: bool) -> Vec<ElectrophilicAdditionSpec> 
             electrophile: "destroy:iodine",
             high_degree_group: AdditionGroup::Atom("I"),
             low_degree_group: AdditionGroup::Atom("I"),
+            alkyne_stereo_rule: alkyne.then_some(AlkyneStereoRule::Anti),
             nucleophile_ratio: 1,
             activation_energy,
             catalyst: None,
@@ -1574,7 +1589,12 @@ fn generate_electrophilic_addition(
     add_addition_group(&mut editor, high_degree_carbon, spec.high_degree_group)?;
     add_addition_group(&mut editor, low_degree_carbon, spec.low_degree_group)?;
     if is_alkyne {
-        editor.mark_double_bond_stereo_mixture_if_valid(high_degree_carbon, low_degree_carbon)?;
+        if let Some(rule) = spec.alkyne_stereo_rule {
+            apply_alkyne_stereo_rule(&mut editor, high_degree_carbon, low_degree_carbon, rule)?;
+        } else {
+            editor
+                .mark_double_bond_stereo_mixture_if_valid(high_degree_carbon, low_degree_carbon)?;
+        }
     } else {
         editor.mark_tetrahedral_stereo_mixture_if_valid(high_degree_carbon)?;
         editor.mark_tetrahedral_stereo_mixture_if_valid(low_degree_carbon)?;
@@ -1591,10 +1611,15 @@ fn generate_electrophilic_addition(
     if products.len() == 1 {
         builder = builder.product(products.remove(0), spec.nucleophile_ratio);
     } else {
-        let fraction = 1.0 / products.len() as f64;
-        for product in products {
-            builder =
-                builder.product_distribution_variant(fraction, [(product, spec.nucleophile_ratio)]);
+        for (index, product) in products.into_iter().enumerate() {
+            builder = builder.channel(
+                ReactionChannel::new(
+                    format!("{}:stereo:{}", spec.prefix, index + 1),
+                    [StoichiometricTerm::new(product, spec.nucleophile_ratio)],
+                    spec.activation_energy,
+                )
+                .with_pre_exponential_factor(10_000.0),
+            );
         }
     }
     if let Some((catalyst, order)) = spec.catalyst {
@@ -1607,6 +1632,91 @@ fn generate_electrophilic_addition(
         builder = builder.display_as_reversible();
     }
     Ok(builder.build())
+}
+
+fn apply_alkyne_stereo_rule(
+    editor: &mut MolecularEditor,
+    first: usize,
+    second: usize,
+    rule: AlkyneStereoRule,
+) -> ChemistryResult<bool> {
+    let structure = editor.structure();
+    let Some((first_substituent, second_substituent)) =
+        double_bond_stereo_substituents(&structure, first, second)
+    else {
+        return Ok(false);
+    };
+    match rule {
+        AlkyneStereoRule::Anti => editor.set_double_bond_stereo(
+            first,
+            second,
+            first_substituent,
+            second_substituent,
+            StereoDescriptor::Trans,
+        )?,
+    }
+    Ok(true)
+}
+
+fn double_bond_stereo_substituents(
+    structure: &MolecularStructure,
+    first: usize,
+    second: usize,
+) -> Option<(usize, usize)> {
+    let first_substituents = bonded_substituents_except(structure, first, second);
+    let second_substituents = bonded_substituents_except(structure, second, first);
+    if first_substituents.len() != 2 || second_substituents.len() != 2 {
+        return None;
+    }
+    let first_substituent = preferred_stereo_substituent(structure, &first_substituents)?;
+    let second_substituent = preferred_stereo_substituent(structure, &second_substituents)?;
+    Some((first_substituent, second_substituent))
+}
+
+fn bonded_substituents_except(
+    structure: &MolecularStructure,
+    atom: usize,
+    excluded: usize,
+) -> Vec<usize> {
+    structure
+        .bonds
+        .iter()
+        .filter_map(|bond| {
+            if bond.from == atom && bond.to != excluded {
+                Some(bond.to)
+            } else if bond.to == atom && bond.from != excluded {
+                Some(bond.from)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn preferred_stereo_substituent(
+    structure: &MolecularStructure,
+    substituents: &[usize],
+) -> Option<usize> {
+    substituents.iter().copied().max_by_key(|index| {
+        let atom = &structure.atoms[*index];
+        (atomic_stereo_priority(&atom.element), atom.r_group_number)
+    })
+}
+
+fn atomic_stereo_priority(element: &str) -> u16 {
+    match element {
+        "H" => 1,
+        "B" => 5,
+        "C" => 6,
+        "N" => 7,
+        "O" => 8,
+        "F" => 9,
+        "Cl" => 17,
+        "Br" => 35,
+        "I" => 53,
+        "R" => 200,
+        _ => 0,
+    }
 }
 
 fn expand_stereo_product_distribution(
@@ -1913,11 +2023,7 @@ mod tests {
     ];
 
     const ACTIVE_GENERATORS_WITHOUT_CATALOG_SUBSTRATE: &[&str] = &["aldehyde_oxidation"];
-    const ACTIVE_GENERATORS_WITH_UNKNOWN_STEREO_DISTRIBUTION: &[&str] = &[
-        "alkyne_chlorination",
-        "alkyne_chlorohydrination",
-        "alkyne_iodination",
-    ];
+    const ACTIVE_GENERATORS_WITH_UNKNOWN_STEREO_DISTRIBUTION: &[&str] = &[];
 
     fn generated_registry() -> ChemistryRegistry {
         static REGISTRY: OnceLock<ChemistryRegistry> = OnceLock::new();
