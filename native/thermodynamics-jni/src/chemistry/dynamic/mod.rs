@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use super::error::{ChemistryError, ChemistryResult};
 use super::frowns::{parse_frowns, write_frowns};
 use super::functional_group::{FunctionalGroup, FunctionalGroupType};
-use super::molecule::{MolecularEditor, MolecularStructure};
+use super::molecule::{MolecularEditor, MolecularStructure, Stereochemistry};
 use super::organic::{self, GroupParticipant, OrganicGenerationSpace};
 use super::reaction::{Reaction, ReactionId};
 use super::registry::{ChemistryRegistry, ChemistryRegistryBuilder, SubstanceIndex};
@@ -1271,11 +1271,17 @@ fn build_dynamic_substance(
         });
     }
     let summary = structure.summary()?;
-    let tags = if structure.atoms.iter().any(|atom| atom.element == "R") {
-        vec![SubstanceTagId::from("destroy:hypothetical")]
-    } else {
-        Vec::new()
-    };
+    let mut tags = Vec::new();
+    if structure.atoms.iter().any(|atom| atom.element == "R") {
+        tags.push(SubstanceTagId::from("destroy:hypothetical"));
+    }
+    if structure
+        .stereochemistry
+        .iter()
+        .any(|stereo| matches!(stereo, Stereochemistry::Mixture { .. }))
+    {
+        tags.push(SubstanceTagId::from("destroy:stereomixture"));
+    }
     Ok(Substance::new(
         SubstanceId::new(canonical_frowns.clone())?,
         summary.charge,
@@ -1491,6 +1497,45 @@ mod tests {
         let second = registry.resolve_frowns("CCCCCCCC").unwrap();
         assert_eq!(first, second);
         assert!(first.as_str().starts_with("destroy:linear:"));
+    }
+
+    #[test]
+    fn dynamic_substances_distinguish_stereoisomers() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let clockwise = registry
+            .resolve_frowns(
+                "destroy:graph:atoms=C.H.Cl.F.I;bonds=0-s-1,0-s-2,0-s-3,0-s-4;stereo=t:0:1.2.3.4:cw",
+            )
+            .unwrap();
+        let repeated = registry
+            .resolve_frowns(
+                "destroy:graph:atoms=C.H.Cl.F.I;bonds=0-s-1,0-s-2,0-s-3,0-s-4;stereo=t:0:1.2.3.4:cw",
+            )
+            .unwrap();
+        let counter_clockwise = registry
+            .resolve_frowns(
+                "destroy:graph:atoms=C.H.Cl.F.I;bonds=0-s-1,0-s-2,0-s-3,0-s-4;stereo=t:0:1.2.3.4:ccw",
+            )
+            .unwrap();
+
+        assert_eq!(clockwise, repeated);
+        assert_ne!(clockwise, counter_clockwise);
+    }
+
+    #[test]
+    fn dynamic_stereo_mixture_gets_explicit_tag() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let mixture = registry
+            .resolve_frowns(
+                "destroy:graph:atoms=C.H.Cl.F.I;bonds=0-s-1,0-s-2,0-s-3,0-s-4;stereo=mix:tetra:0.1.2.3.4",
+            )
+            .unwrap();
+        let substance = registry.substance(&mixture).unwrap();
+
+        assert!(substance
+            .tags
+            .iter()
+            .any(|tag| tag.as_str() == "destroy:stereomixture"));
     }
 
     #[test]

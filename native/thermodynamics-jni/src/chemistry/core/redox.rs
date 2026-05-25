@@ -665,6 +665,7 @@ mod tests {
                     order: 1.0,
                 },
             ],
+            stereochemistry: Vec::new(),
         }
     }
 
@@ -710,6 +711,7 @@ mod tests {
                     order: 1.0,
                 },
             ],
+            stereochemistry: Vec::new(),
         }
     }
 

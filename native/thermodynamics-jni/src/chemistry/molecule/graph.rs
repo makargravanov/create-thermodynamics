@@ -22,11 +22,55 @@ pub struct MolecularBond {
     pub order: f64,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum StereoDescriptor {
+    Clockwise,
+    CounterClockwise,
+    Cis,
+    Trans,
+    E,
+    Z,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum StereoMixtureKind {
+    Tetrahedral,
+    DoubleBond,
+    General,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TetrahedralStereo {
+    pub center: usize,
+    pub substituents: [usize; 4],
+    pub descriptor: StereoDescriptor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoubleBondStereo {
+    pub first: usize,
+    pub second: usize,
+    pub first_substituent: usize,
+    pub second_substituent: usize,
+    pub descriptor: StereoDescriptor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Stereochemistry {
+    Tetrahedral(TetrahedralStereo),
+    DoubleBond(DoubleBondStereo),
+    Mixture {
+        atoms: Vec<usize>,
+        kind: StereoMixtureKind,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MolecularStructure {
     pub source_code: String,
     pub atoms: Vec<MolecularAtom>,
     pub bonds: Vec<MolecularBond>,
+    pub stereochemistry: Vec<Stereochemistry>,
 }
 
 impl MolecularStructure {
@@ -112,6 +156,7 @@ impl MolecularStructure {
                 ));
             }
         }
+        self.validate_stereochemistry()?;
         Ok(())
     }
 
@@ -201,6 +246,155 @@ impl MolecularStructure {
         }
         seen.into_iter().all(|value| value)
     }
+
+    fn validate_stereochemistry(&self) -> ChemistryResult<()> {
+        for stereo in &self.stereochemistry {
+            match stereo {
+                Stereochemistry::Tetrahedral(tetrahedral) => {
+                    self.validate_tetrahedral_stereo(tetrahedral)?;
+                }
+                Stereochemistry::DoubleBond(double_bond) => {
+                    self.validate_double_bond_stereo(double_bond)?;
+                }
+                Stereochemistry::Mixture { atoms, .. } => {
+                    if atoms.is_empty() {
+                        return Err(invalid_structure(
+                            &self.source_code,
+                            "stereo mixture must reference at least one atom",
+                        ));
+                    }
+                    let mut unique = atoms.clone();
+                    unique.sort_unstable();
+                    unique.dedup();
+                    if unique.len() != atoms.len() {
+                        return Err(invalid_structure(
+                            &self.source_code,
+                            "stereo mixture references an atom more than once",
+                        ));
+                    }
+                    for atom in atoms {
+                        if *atom >= self.atoms.len() {
+                            return Err(invalid_structure(
+                                &self.source_code,
+                                "stereo mixture references an unknown atom",
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_tetrahedral_stereo(&self, stereo: &TetrahedralStereo) -> ChemistryResult<()> {
+        if stereo.center >= self.atoms.len() {
+            return Err(invalid_structure(
+                &self.source_code,
+                "tetrahedral stereo center does not exist",
+            ));
+        }
+        if !matches!(
+            stereo.descriptor,
+            StereoDescriptor::Clockwise | StereoDescriptor::CounterClockwise
+        ) {
+            return Err(invalid_structure(
+                &self.source_code,
+                "tetrahedral stereo must use clockwise or counter-clockwise descriptor",
+            ));
+        }
+        let mut substituents = stereo.substituents.to_vec();
+        substituents.sort_unstable();
+        substituents.dedup();
+        if substituents.len() != 4 || substituents.contains(&stereo.center) {
+            return Err(invalid_structure(
+                &self.source_code,
+                "tetrahedral stereo must reference four distinct substituents",
+            ));
+        }
+        let neighbors = self
+            .neighbors(stereo.center)
+            .into_iter()
+            .filter_map(|(neighbor, order)| bond_order_matches(order, 1.0).then_some(neighbor))
+            .collect::<Vec<_>>();
+        for substituent in stereo.substituents {
+            if substituent >= self.atoms.len() || !neighbors.contains(&substituent) {
+                return Err(invalid_structure(
+                    &self.source_code,
+                    "tetrahedral stereo substituent is not singly bonded to the center",
+                ));
+            }
+        }
+        if neighbors.len() != 4 {
+            return Err(invalid_structure(
+                &self.source_code,
+                "tetrahedral stereo center must have four single-bonded substituents",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_double_bond_stereo(&self, stereo: &DoubleBondStereo) -> ChemistryResult<()> {
+        if stereo.first >= self.atoms.len()
+            || stereo.second >= self.atoms.len()
+            || stereo.first_substituent >= self.atoms.len()
+            || stereo.second_substituent >= self.atoms.len()
+        {
+            return Err(invalid_structure(
+                &self.source_code,
+                "double-bond stereo references an unknown atom",
+            ));
+        }
+        if !matches!(
+            stereo.descriptor,
+            StereoDescriptor::Cis
+                | StereoDescriptor::Trans
+                | StereoDescriptor::E
+                | StereoDescriptor::Z
+        ) {
+            return Err(invalid_structure(
+                &self.source_code,
+                "double-bond stereo must use cis, trans, E or Z descriptor",
+            ));
+        }
+        if stereo.first == stereo.second
+            || stereo.first_substituent == stereo.second_substituent
+            || stereo.first_substituent == stereo.first
+            || stereo.first_substituent == stereo.second
+            || stereo.second_substituent == stereo.first
+            || stereo.second_substituent == stereo.second
+        {
+            return Err(invalid_structure(
+                &self.source_code,
+                "double-bond stereo atoms must be distinct",
+            ));
+        }
+        let has_double_bond = self.bonds.iter().any(|bond| {
+            ((bond.from == stereo.first && bond.to == stereo.second)
+                || (bond.from == stereo.second && bond.to == stereo.first))
+                && bond_order_matches(bond.order, 2.0)
+        });
+        if !has_double_bond {
+            return Err(invalid_structure(
+                &self.source_code,
+                "double-bond stereo must reference a double bond",
+            ));
+        }
+        if !self.are_bonded(stereo.first, stereo.first_substituent)
+            || !self.are_bonded(stereo.second, stereo.second_substituent)
+        {
+            return Err(invalid_structure(
+                &self.source_code,
+                "double-bond stereo substituents must be bonded to their side of the double bond",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn are_bonded(&self, first: usize, second: usize) -> bool {
+        self.bonds.iter().any(|bond| {
+            (bond.from == first && bond.to == second) || (bond.from == second && bond.to == first)
+        })
+    }
 }
 
 pub fn bond_order_matches(actual: f64, expected: f64) -> bool {
@@ -212,6 +406,7 @@ pub struct MolecularEditor {
     source_code: String,
     atoms: Vec<MolecularAtom>,
     bonds: Vec<MolecularBond>,
+    stereochemistry: Vec<Stereochemistry>,
     modified: bool,
 }
 
@@ -221,6 +416,7 @@ impl MolecularEditor {
             source_code: structure.source_code.clone(),
             atoms: structure.atoms.clone(),
             bonds: structure.bonds.clone(),
+            stereochemistry: structure.stereochemistry.clone(),
             modified: false,
         }
     }
@@ -256,6 +452,7 @@ impl MolecularEditor {
             to: index,
             order: bond_order,
         });
+        self.clear_stereo_at_atom(parent);
         self.modified = true;
         Ok(index)
     }
@@ -287,11 +484,17 @@ impl MolecularEditor {
                 to: bond.to + offset,
                 order: bond.order,
             }));
+        self.stereochemistry
+            .extend(group.stereochemistry.iter().filter_map(|stereo| {
+                remap_stereochemistry(stereo, &offset_mapping(offset, group.atoms.len()))
+            }));
         self.bonds.push(MolecularBond {
             from: parent,
             to: group_root + offset,
             order: bond_order,
         });
+        self.clear_stereo_at_atom(parent);
+        self.clear_stereo_at_atom(group_root + offset);
         self.modified = true;
         Ok(group_root + offset)
     }
@@ -303,6 +506,7 @@ impl MolecularEditor {
                 "removed atom does not exist",
             ));
         }
+        self.clear_stereo_at_atom(atom_index);
         self.atoms.remove(atom_index);
         self.bonds
             .retain(|bond| bond.from != atom_index && bond.to != atom_index);
@@ -314,6 +518,12 @@ impl MolecularEditor {
                 bond.to -= 1;
             }
         }
+        let mapping = removal_mapping(self.atoms.len() + 1, atom_index);
+        self.stereochemistry = self
+            .stereochemistry
+            .iter()
+            .filter_map(|stereo| remap_stereochemistry(stereo, &mapping))
+            .collect();
         self.modified = true;
         Ok(())
     }
@@ -376,6 +586,7 @@ impl MolecularEditor {
             charge,
             r_group_number: 0,
         };
+        self.clear_stereo_at_atom(atom_index);
         self.modified = true;
         Ok(())
     }
@@ -401,6 +612,9 @@ impl MolecularEditor {
             })
             .ok_or_else(|| invalid_structure(&self.source_code, "bond does not exist"))?;
         bond.order = order;
+        self.clear_stereo_at_bond(first, second);
+        self.clear_stereo_at_atom(first);
+        self.clear_stereo_at_atom(second);
         self.modified = true;
         Ok(())
     }
@@ -422,6 +636,9 @@ impl MolecularEditor {
             .ok_or_else(|| invalid_structure(&self.source_code, "bridged bond does not exist"))?;
         let order = self.bonds[position].order;
         self.bonds.remove(position);
+        self.clear_stereo_at_bond(first, second);
+        self.clear_stereo_at_atom(first);
+        self.clear_stereo_at_atom(second);
         element_mass(element)?;
         let bridge = self.atoms.len();
         self.atoms.push(MolecularAtom {
@@ -441,6 +658,169 @@ impl MolecularEditor {
         });
         self.modified = true;
         Ok(bridge)
+    }
+
+    pub fn set_tetrahedral_stereo(
+        &mut self,
+        center: usize,
+        substituents: [usize; 4],
+        descriptor: StereoDescriptor,
+    ) -> ChemistryResult<()> {
+        self.clear_stereo_at_atom(center);
+        self.stereochemistry
+            .push(Stereochemistry::Tetrahedral(TetrahedralStereo {
+                center,
+                substituents,
+                descriptor,
+            }));
+        self.revalidate_stereochemistry()?;
+        self.modified = true;
+        Ok(())
+    }
+
+    pub fn set_double_bond_stereo(
+        &mut self,
+        first: usize,
+        second: usize,
+        first_substituent: usize,
+        second_substituent: usize,
+        descriptor: StereoDescriptor,
+    ) -> ChemistryResult<()> {
+        self.clear_stereo_at_bond(first, second);
+        self.stereochemistry
+            .push(Stereochemistry::DoubleBond(DoubleBondStereo {
+                first,
+                second,
+                first_substituent,
+                second_substituent,
+                descriptor,
+            }));
+        self.revalidate_stereochemistry()?;
+        self.modified = true;
+        Ok(())
+    }
+
+    pub fn mark_stereo_mixture(
+        &mut self,
+        atoms: Vec<usize>,
+        kind: StereoMixtureKind,
+    ) -> ChemistryResult<()> {
+        self.stereochemistry
+            .push(Stereochemistry::Mixture { atoms, kind });
+        self.revalidate_stereochemistry()?;
+        self.modified = true;
+        Ok(())
+    }
+
+    pub fn mark_tetrahedral_stereo_mixture_if_valid(
+        &mut self,
+        center: usize,
+    ) -> ChemistryResult<bool> {
+        if center >= self.atoms.len() {
+            return Err(invalid_structure(
+                &self.source_code,
+                "tetrahedral stereo mixture center does not exist",
+            ));
+        }
+        let substituents = self
+            .bonds
+            .iter()
+            .filter_map(|bond| {
+                if !bond_order_matches(bond.order, 1.0) {
+                    return None;
+                }
+                if bond.from == center {
+                    Some(bond.to)
+                } else if bond.to == center {
+                    Some(bond.from)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        if substituents.len() != 4 {
+            return Ok(false);
+        }
+        let mut atoms = vec![center];
+        atoms.extend(substituents);
+        self.mark_stereo_mixture(atoms, StereoMixtureKind::Tetrahedral)?;
+        Ok(true)
+    }
+
+    pub fn mark_double_bond_stereo_mixture_if_valid(
+        &mut self,
+        first: usize,
+        second: usize,
+    ) -> ChemistryResult<bool> {
+        if first >= self.atoms.len() || second >= self.atoms.len() {
+            return Err(invalid_structure(
+                &self.source_code,
+                "double-bond stereo mixture atom does not exist",
+            ));
+        }
+        let has_double_bond = self.bonds.iter().any(|bond| {
+            ((bond.from == first && bond.to == second) || (bond.from == second && bond.to == first))
+                && bond_order_matches(bond.order, 2.0)
+        });
+        if !has_double_bond {
+            return Ok(false);
+        }
+        let first_substituent = self
+            .bonds
+            .iter()
+            .filter_map(|bond| {
+                if bond.from == first && bond.to != second {
+                    Some(bond.to)
+                } else if bond.to == first && bond.from != second {
+                    Some(bond.from)
+                } else {
+                    None
+                }
+            })
+            .next();
+        let second_substituent = self
+            .bonds
+            .iter()
+            .filter_map(|bond| {
+                if bond.from == second && bond.to != first {
+                    Some(bond.to)
+                } else if bond.to == second && bond.from != first {
+                    Some(bond.from)
+                } else {
+                    None
+                }
+            })
+            .next();
+        let (Some(first_substituent), Some(second_substituent)) =
+            (first_substituent, second_substituent)
+        else {
+            return Ok(false);
+        };
+        self.mark_stereo_mixture(
+            vec![first, second, first_substituent, second_substituent],
+            StereoMixtureKind::DoubleBond,
+        )?;
+        Ok(true)
+    }
+
+    pub fn clear_stereo_at_atom(&mut self, atom_index: usize) {
+        self.stereochemistry
+            .retain(|stereo| !stereochemistry_references_atom(stereo, atom_index));
+    }
+
+    pub fn clear_stereo_at_bond(&mut self, first: usize, second: usize) {
+        self.stereochemistry
+            .retain(|stereo| !stereochemistry_references_bond(stereo, first, second));
+    }
+
+    pub fn revalidate_stereochemistry(&self) -> ChemistryResult<()> {
+        let structure = MolecularStructure {
+            source_code: self.source_code.clone(),
+            atoms: self.atoms.clone(),
+            bonds: self.bonds.clone(),
+            stereochemistry: self.stereochemistry.clone(),
+        };
+        structure.validate()
     }
 
     pub fn split_at_bond(
@@ -526,6 +906,7 @@ impl MolecularEditor {
             },
             atoms: self.atoms,
             bonds: self.bonds,
+            stereochemistry: self.stereochemistry,
         };
         structure.validate()?;
         Ok(structure)
@@ -566,10 +947,16 @@ fn substructure(
             })
         })
         .collect::<Vec<_>>();
+    let stereochemistry = structure
+        .stereochemistry
+        .iter()
+        .filter_map(|stereo| remap_stereochemistry(stereo, &mapping))
+        .collect::<Vec<_>>();
     let result = MolecularStructure {
         source_code: structure.source_code.clone(),
         atoms,
         bonds,
+        stereochemistry,
     };
     result.validate()?;
     Ok(result)
@@ -583,11 +970,103 @@ fn substructure_mapping(atom_count: usize, atom_indexes: &[usize]) -> Vec<Option
     mapping
 }
 
+fn offset_mapping(offset: usize, atom_count: usize) -> Vec<Option<usize>> {
+    (0..atom_count).map(|index| Some(index + offset)).collect()
+}
+
+fn removal_mapping(original_atom_count: usize, removed_atom: usize) -> Vec<Option<usize>> {
+    (0..original_atom_count)
+        .map(|index| {
+            if index == removed_atom {
+                None
+            } else if index > removed_atom {
+                Some(index - 1)
+            } else {
+                Some(index)
+            }
+        })
+        .collect()
+}
+
+fn remap_stereochemistry(
+    stereo: &Stereochemistry,
+    mapping: &[Option<usize>],
+) -> Option<Stereochemistry> {
+    match stereo {
+        Stereochemistry::Tetrahedral(tetrahedral) => {
+            let center = mapping.get(tetrahedral.center).copied().flatten()?;
+            let mut substituents = [0usize; 4];
+            for (slot, substituent) in substituents
+                .iter_mut()
+                .zip(tetrahedral.substituents.iter().copied())
+            {
+                *slot = mapping.get(substituent).copied().flatten()?;
+            }
+            Some(Stereochemistry::Tetrahedral(TetrahedralStereo {
+                center,
+                substituents,
+                descriptor: tetrahedral.descriptor,
+            }))
+        }
+        Stereochemistry::DoubleBond(double_bond) => {
+            Some(Stereochemistry::DoubleBond(DoubleBondStereo {
+                first: mapping.get(double_bond.first).copied().flatten()?,
+                second: mapping.get(double_bond.second).copied().flatten()?,
+                first_substituent: mapping
+                    .get(double_bond.first_substituent)
+                    .copied()
+                    .flatten()?,
+                second_substituent: mapping
+                    .get(double_bond.second_substituent)
+                    .copied()
+                    .flatten()?,
+                descriptor: double_bond.descriptor,
+            }))
+        }
+        Stereochemistry::Mixture { atoms, kind } => {
+            let remapped = atoms
+                .iter()
+                .map(|atom| mapping.get(*atom).copied().flatten())
+                .collect::<Option<Vec<_>>>()?;
+            Some(Stereochemistry::Mixture {
+                atoms: remapped,
+                kind: *kind,
+            })
+        }
+    }
+}
+
+fn stereochemistry_references_atom(stereo: &Stereochemistry, atom_index: usize) -> bool {
+    match stereo {
+        Stereochemistry::Tetrahedral(tetrahedral) => {
+            tetrahedral.center == atom_index || tetrahedral.substituents.contains(&atom_index)
+        }
+        Stereochemistry::DoubleBond(double_bond) => {
+            double_bond.first == atom_index
+                || double_bond.second == atom_index
+                || double_bond.first_substituent == atom_index
+                || double_bond.second_substituent == atom_index
+        }
+        Stereochemistry::Mixture { atoms, .. } => atoms.contains(&atom_index),
+    }
+}
+
+fn stereochemistry_references_bond(stereo: &Stereochemistry, first: usize, second: usize) -> bool {
+    match stereo {
+        Stereochemistry::DoubleBond(double_bond) => {
+            (double_bond.first == first && double_bond.second == second)
+                || (double_bond.first == second && double_bond.second == first)
+        }
+        _ => false,
+    }
+}
+
 #[derive(Debug, Default)]
 struct StructureBuilder {
     source_code: String,
     atoms: Vec<MolecularAtom>,
     bonds: Vec<MolecularBond>,
+    stereochemistry: Vec<Stereochemistry>,
 }
 
 impl StructureBuilder {
@@ -596,6 +1075,7 @@ impl StructureBuilder {
             source_code: source_code.into(),
             atoms: Vec::new(),
             bonds: Vec::new(),
+            stereochemistry: Vec::new(),
         }
     }
 
@@ -648,6 +1128,7 @@ impl StructureBuilder {
             source_code: self.source_code,
             atoms: self.atoms,
             bonds: self.bonds,
+            stereochemistry: self.stereochemistry,
         };
         structure.validate()?;
         Ok(structure)
@@ -659,6 +1140,7 @@ impl StructureBuilder {
                 source_code: self.source_code.clone(),
                 atoms: self.atoms.clone(),
                 bonds: self.bonds.clone(),
+                stereochemistry: self.stereochemistry.clone(),
             };
             structure.bond_orders_by_atom()
         };
@@ -1359,5 +1841,105 @@ mod tests {
 
         let benzene = parse_legacy_structure("destroy:benzene:,,,,,").unwrap();
         assert!(MolecularEditor::split_at_bond(&benzene, 0, 1).is_err());
+    }
+
+    #[test]
+    fn editor_sets_and_clears_tetrahedral_stereo() {
+        let structure = parse_legacy_structure("destroy:linear:C(Cl)(F)I").unwrap();
+        let center = structure
+            .atoms
+            .iter()
+            .position(|atom| atom.element == "C")
+            .unwrap();
+        let substituents = structure
+            .neighbors(center)
+            .into_iter()
+            .map(|(neighbor, _)| neighbor)
+            .collect::<Vec<_>>();
+        let mut editor = MolecularEditor::new(&structure);
+        editor
+            .set_tetrahedral_stereo(
+                center,
+                [
+                    substituents[0],
+                    substituents[1],
+                    substituents[2],
+                    substituents[3],
+                ],
+                StereoDescriptor::Clockwise,
+            )
+            .unwrap();
+        assert_eq!(editor.finish().unwrap().stereochemistry.len(), 1);
+
+        let mut editor = MolecularEditor::new(&structure);
+        editor
+            .set_tetrahedral_stereo(
+                center,
+                [
+                    substituents[0],
+                    substituents[1],
+                    substituents[2],
+                    substituents[3],
+                ],
+                StereoDescriptor::Clockwise,
+            )
+            .unwrap();
+        editor.remove_atom(substituents[0]).unwrap();
+        assert!(editor.finish().unwrap().stereochemistry.is_empty());
+    }
+
+    #[test]
+    fn invalid_stereo_marker_does_not_validate() {
+        let structure = MolecularStructure {
+            source_code: "test:invalid-stereo".to_string(),
+            atoms: vec![
+                MolecularAtom {
+                    element: "C".to_string(),
+                    charge: 0.0,
+                    r_group_number: 0,
+                },
+                MolecularAtom {
+                    element: "C".to_string(),
+                    charge: 0.0,
+                    r_group_number: 0,
+                },
+                MolecularAtom {
+                    element: "H".to_string(),
+                    charge: 0.0,
+                    r_group_number: 0,
+                },
+                MolecularAtom {
+                    element: "H".to_string(),
+                    charge: 0.0,
+                    r_group_number: 0,
+                },
+            ],
+            bonds: vec![
+                MolecularBond {
+                    from: 0,
+                    to: 1,
+                    order: 1.0,
+                },
+                MolecularBond {
+                    from: 0,
+                    to: 2,
+                    order: 1.0,
+                },
+                MolecularBond {
+                    from: 1,
+                    to: 3,
+                    order: 1.0,
+                },
+            ],
+            stereochemistry: vec![Stereochemistry::DoubleBond(DoubleBondStereo {
+                first: 0,
+                second: 1,
+                first_substituent: 2,
+                second_substituent: 3,
+                descriptor: StereoDescriptor::Cis,
+            })],
+        };
+
+        assert!(structure.validate().is_err());
     }
 }

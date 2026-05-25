@@ -1553,6 +1553,12 @@ fn generate_electrophilic_addition(
     )?;
     add_addition_group(&mut editor, high_degree_carbon, spec.high_degree_group)?;
     add_addition_group(&mut editor, low_degree_carbon, spec.low_degree_group)?;
+    if is_alkyne {
+        editor.mark_double_bond_stereo_mixture_if_valid(high_degree_carbon, low_degree_carbon)?;
+    } else {
+        editor.mark_tetrahedral_stereo_mixture_if_valid(high_degree_carbon)?;
+        editor.mark_tetrahedral_stereo_mixture_if_valid(low_degree_carbon)?;
+    }
     let product = resolver.resolve(editor.finish()?)?;
     let mut builder = Reaction::builder(generated_group_reaction_id(spec.prefix, substance, group))
         .reactant(substance.id.clone(), spec.nucleophile_ratio, 1)

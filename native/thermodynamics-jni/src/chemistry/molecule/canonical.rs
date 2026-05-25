@@ -3,7 +3,10 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use super::error::{ChemistryError, ChemistryResult};
-use super::molecule::{bond_order_matches, MolecularAtom, MolecularStructure};
+use super::molecule::{
+    bond_order_matches, DoubleBondStereo, MolecularAtom, MolecularStructure, StereoDescriptor,
+    StereoMixtureKind, Stereochemistry, TetrahedralStereo,
+};
 
 const DESTROY_NAMESPACE: &str = "destroy";
 
@@ -122,7 +125,7 @@ impl CanonicalizationJob {
     pub fn new(structure: &MolecularStructure) -> ChemistryResult<Self> {
         structure.validate()?;
         let graph = CanonicalGraph::new(structure)?;
-        if !graph.has_cycle() {
+        if !graph.has_cycle() && graph.stereochemistry.is_empty() {
             let result = format!(
                 "{DESTROY_NAMESPACE}:linear:{}",
                 graph.canonical_tree_body()?
@@ -252,6 +255,7 @@ struct CanonicalGraph {
     vertices: Vec<CanonicalVertex>,
     edges: Vec<CanonicalEdge>,
     adjacency: Vec<Vec<(usize, String)>>,
+    stereochemistry: Vec<Stereochemistry>,
 }
 
 #[derive(Debug, Clone)]
@@ -318,12 +322,18 @@ impl CanonicalGraph {
         for neighbors in &mut adjacency {
             neighbors.sort();
         }
+        let stereochemistry = structure
+            .stereochemistry
+            .iter()
+            .filter_map(|stereo| remap_stereochemistry(stereo, &old_to_new))
+            .collect::<Vec<_>>();
 
         Ok(Self {
             source_code: structure.source_code.clone(),
             vertices,
             edges,
             adjacency,
+            stereochemistry,
         })
     }
 
@@ -435,7 +445,29 @@ impl CanonicalGraph {
             bonds.push(format!("{from}-{}-{to}", edge.order));
         }
         bonds.sort();
-        Ok(format!("atoms={atoms};bonds={}", bonds.join(",")))
+        let stereo = self.stereochemistry_body_for_order(&remap)?;
+        if stereo.is_empty() {
+            Ok(format!("atoms={atoms};bonds={}", bonds.join(",")))
+        } else {
+            Ok(format!(
+                "atoms={atoms};bonds={};stereo={}",
+                bonds.join(","),
+                stereo.join(",")
+            ))
+        }
+    }
+
+    fn stereochemistry_body_for_order(
+        &self,
+        remap: &[Option<usize>],
+    ) -> ChemistryResult<Vec<String>> {
+        let mut tokens = self
+            .stereochemistry
+            .iter()
+            .map(|stereo| canonical_stereo_token(stereo, remap, &self.source_code))
+            .collect::<ChemistryResult<Vec<_>>>()?;
+        tokens.sort();
+        Ok(tokens)
     }
 
     fn canonical_tree_body(&self) -> ChemistryResult<String> {
@@ -559,10 +591,220 @@ fn included_atoms(structure: &MolecularStructure) -> BTreeSet<usize> {
         .enumerate()
         .filter_map(|(index, atom)| (atom.element != "H" || atom.charge != 0.0).then_some(index))
         .collect::<BTreeSet<_>>();
+    for stereo in &structure.stereochemistry {
+        for atom in stereochemistry_atoms(stereo) {
+            included.insert(atom);
+        }
+    }
     if included.is_empty() {
         included.extend(0..structure.atoms.len());
     }
     included
+}
+
+fn stereochemistry_atoms(stereo: &Stereochemistry) -> Vec<usize> {
+    match stereo {
+        Stereochemistry::Tetrahedral(tetrahedral) => {
+            let mut atoms = vec![tetrahedral.center];
+            atoms.extend(tetrahedral.substituents);
+            atoms
+        }
+        Stereochemistry::DoubleBond(double_bond) => vec![
+            double_bond.first,
+            double_bond.second,
+            double_bond.first_substituent,
+            double_bond.second_substituent,
+        ],
+        Stereochemistry::Mixture { atoms, .. } => atoms.clone(),
+    }
+}
+
+fn remap_stereochemistry(
+    stereo: &Stereochemistry,
+    mapping: &[Option<usize>],
+) -> Option<Stereochemistry> {
+    match stereo {
+        Stereochemistry::Tetrahedral(tetrahedral) => {
+            let center = mapping.get(tetrahedral.center).copied().flatten()?;
+            let mut substituents = [0usize; 4];
+            for (slot, substituent) in substituents
+                .iter_mut()
+                .zip(tetrahedral.substituents.iter().copied())
+            {
+                *slot = mapping.get(substituent).copied().flatten()?;
+            }
+            Some(Stereochemistry::Tetrahedral(TetrahedralStereo {
+                center,
+                substituents,
+                descriptor: tetrahedral.descriptor,
+            }))
+        }
+        Stereochemistry::DoubleBond(double_bond) => {
+            Some(Stereochemistry::DoubleBond(DoubleBondStereo {
+                first: mapping.get(double_bond.first).copied().flatten()?,
+                second: mapping.get(double_bond.second).copied().flatten()?,
+                first_substituent: mapping
+                    .get(double_bond.first_substituent)
+                    .copied()
+                    .flatten()?,
+                second_substituent: mapping
+                    .get(double_bond.second_substituent)
+                    .copied()
+                    .flatten()?,
+                descriptor: double_bond.descriptor,
+            }))
+        }
+        Stereochemistry::Mixture { atoms, kind } => {
+            let atoms = atoms
+                .iter()
+                .map(|atom| mapping.get(*atom).copied().flatten())
+                .collect::<Option<Vec<_>>>()?;
+            Some(Stereochemistry::Mixture { atoms, kind: *kind })
+        }
+    }
+}
+
+fn canonical_stereo_token(
+    stereo: &Stereochemistry,
+    remap: &[Option<usize>],
+    source_code: &str,
+) -> ChemistryResult<String> {
+    match stereo {
+        Stereochemistry::Tetrahedral(tetrahedral) => {
+            let center = remapped_atom(remap, tetrahedral.center, source_code)?;
+            let ordered = tetrahedral
+                .substituents
+                .iter()
+                .map(|atom| remapped_atom(remap, *atom, source_code))
+                .collect::<ChemistryResult<Vec<_>>>()?;
+            let mut sorted = ordered.clone();
+            sorted.sort_unstable();
+            let descriptor = if permutation_is_odd(&ordered, &sorted)? {
+                opposite_tetrahedral_descriptor(tetrahedral.descriptor)?
+            } else {
+                tetrahedral.descriptor
+            };
+            Ok(format!(
+                "t:{center}:{}:{}",
+                sorted
+                    .into_iter()
+                    .map(|atom| atom.to_string())
+                    .collect::<Vec<_>>()
+                    .join("."),
+                stereo_descriptor_token(descriptor)
+            ))
+        }
+        Stereochemistry::DoubleBond(double_bond) => {
+            let first = remapped_atom(remap, double_bond.first, source_code)?;
+            let second = remapped_atom(remap, double_bond.second, source_code)?;
+            let first_substituent =
+                remapped_atom(remap, double_bond.first_substituent, source_code)?;
+            let second_substituent =
+                remapped_atom(remap, double_bond.second_substituent, source_code)?;
+            let (first, second, first_substituent, second_substituent) = if first <= second {
+                (first, second, first_substituent, second_substituent)
+            } else {
+                (second, first, second_substituent, first_substituent)
+            };
+            Ok(format!(
+                "db:{first}={second}:{first_substituent}-{second_substituent}:{}",
+                stereo_descriptor_token(double_bond.descriptor)
+            ))
+        }
+        Stereochemistry::Mixture { atoms, kind } => {
+            let mut atoms = atoms
+                .iter()
+                .map(|atom| remapped_atom(remap, *atom, source_code))
+                .collect::<ChemistryResult<Vec<_>>>()?;
+            atoms.sort_unstable();
+            Ok(format!(
+                "mix:{}:{}",
+                stereo_mixture_kind_token(*kind),
+                atoms
+                    .into_iter()
+                    .map(|atom| atom.to_string())
+                    .collect::<Vec<_>>()
+                    .join(".")
+            ))
+        }
+    }
+}
+
+fn remapped_atom(
+    remap: &[Option<usize>],
+    atom: usize,
+    source_code: &str,
+) -> ChemistryResult<usize> {
+    remap
+        .get(atom)
+        .copied()
+        .flatten()
+        .ok_or_else(|| ChemistryError::InvalidSubstance {
+            substance_id: source_code.to_string(),
+            reason: "stereochemistry references an atom outside canonical order".to_string(),
+        })
+}
+
+fn permutation_is_odd(ordered: &[usize], sorted: &[usize]) -> ChemistryResult<bool> {
+    if ordered.len() != sorted.len() {
+        return Err(ChemistryError::InvalidSubstance {
+            substance_id: "<stereochemistry>".to_string(),
+            reason: "stereo permutation has inconsistent length".to_string(),
+        });
+    }
+    let mut positions = ordered
+        .iter()
+        .map(|atom| {
+            sorted
+                .iter()
+                .position(|candidate| candidate == atom)
+                .ok_or_else(|| ChemistryError::InvalidSubstance {
+                    substance_id: "<stereochemistry>".to_string(),
+                    reason: "stereo permutation contains an unknown atom".to_string(),
+                })
+        })
+        .collect::<ChemistryResult<Vec<_>>>()?;
+    let mut swaps = 0usize;
+    for index in 0..positions.len() {
+        while positions[index] != index {
+            let target = positions[index];
+            positions.swap(index, target);
+            swaps += 1;
+        }
+    }
+    Ok(swaps % 2 == 1)
+}
+
+fn opposite_tetrahedral_descriptor(
+    descriptor: StereoDescriptor,
+) -> ChemistryResult<StereoDescriptor> {
+    match descriptor {
+        StereoDescriptor::Clockwise => Ok(StereoDescriptor::CounterClockwise),
+        StereoDescriptor::CounterClockwise => Ok(StereoDescriptor::Clockwise),
+        _ => Err(ChemistryError::InvalidSubstance {
+            substance_id: "<stereochemistry>".to_string(),
+            reason: "tetrahedral stereo has a non-tetrahedral descriptor".to_string(),
+        }),
+    }
+}
+
+fn stereo_descriptor_token(descriptor: StereoDescriptor) -> &'static str {
+    match descriptor {
+        StereoDescriptor::Clockwise => "cw",
+        StereoDescriptor::CounterClockwise => "ccw",
+        StereoDescriptor::Cis => "cis",
+        StereoDescriptor::Trans => "trans",
+        StereoDescriptor::E => "e",
+        StereoDescriptor::Z => "z",
+    }
+}
+
+fn stereo_mixture_kind_token(kind: StereoMixtureKind) -> &'static str {
+    match kind {
+        StereoMixtureKind::Tetrahedral => "tetra",
+        StereoMixtureKind::DoubleBond => "db",
+        StereoMixtureKind::General => "general",
+    }
 }
 
 fn atom_token(atom: &MolecularAtom) -> String {
@@ -654,6 +896,7 @@ mod tests {
             source_code: "test:large-cycle".to_string(),
             atoms,
             bonds,
+            stereochemistry: Vec::new(),
         };
 
         let code = canonical_structure_code(&structure).unwrap();
@@ -681,6 +924,7 @@ mod tests {
                 to: 1,
                 order: 1.0,
             }],
+            stereochemistry: Vec::new(),
         };
         let r_group = MolecularStructure {
             source_code: "test:r-group".to_string(),
@@ -701,6 +945,7 @@ mod tests {
                 to: 1,
                 order: 1.0,
             }],
+            stereochemistry: Vec::new(),
         };
 
         assert_ne!(

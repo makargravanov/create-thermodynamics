@@ -1,5 +1,8 @@
 use super::error::{ChemistryError, ChemistryResult};
-use super::molecule::{parse_legacy_structure, MolecularAtom, MolecularBond, MolecularStructure};
+use super::molecule::{
+    parse_legacy_structure, DoubleBondStereo, MolecularAtom, MolecularBond, MolecularStructure,
+    StereoDescriptor, StereoMixtureKind, Stereochemistry, TetrahedralStereo,
+};
 
 const DESTROY_NAMESPACE: &str = "destroy";
 
@@ -9,7 +12,8 @@ pub fn parse_frowns(input: &str) -> ChemistryResult<MolecularStructure> {
         return Err(invalid_frowns(input, "FROWNS code must not be empty"));
     }
     validate_branch_balance(trimmed)?;
-    let full_code = if trimmed.split(':').count() == 3 {
+    let explicit_parts = trimmed.splitn(3, ':').collect::<Vec<_>>();
+    let full_code = if explicit_parts.len() == 3 {
         trimmed.to_string()
     } else if trimmed.contains(':') {
         return Err(invalid_frowns(
@@ -36,12 +40,17 @@ pub fn canonical_structure_code(structure: &MolecularStructure) -> ChemistryResu
 }
 
 fn parse_graph_structure(source_code: &str, body: &str) -> ChemistryResult<MolecularStructure> {
-    let (atoms_part, bonds_part) = body
+    let (atoms_part, rest) = body
         .split_once(";bonds=")
         .ok_or_else(|| invalid_frowns(source_code, "graph FROWNS must contain bonds section"))?;
     let atoms_part = atoms_part
         .strip_prefix("atoms=")
         .ok_or_else(|| invalid_frowns(source_code, "graph FROWNS must contain atoms section"))?;
+    let (bonds_part, stereo_part) = if let Some((bonds, stereo)) = rest.split_once(";stereo=") {
+        (bonds, Some(stereo))
+    } else {
+        (rest, None)
+    };
     let atoms = if atoms_part.is_empty() {
         Vec::new()
     } else {
@@ -68,6 +77,7 @@ fn parse_graph_structure(source_code: &str, body: &str) -> ChemistryResult<Molec
         source_code: source_code.to_string(),
         atoms,
         bonds,
+        stereochemistry: parse_graph_stereochemistry(source_code, stereo_part)?,
     };
     structure.validate()?;
     Ok(structure)
@@ -142,6 +152,102 @@ fn parse_graph_bond_order(token: &str) -> Option<f64> {
         "3" => Some(3.0),
         "1.5" => Some(1.5),
         _ => None,
+    }
+}
+
+fn parse_graph_stereochemistry(
+    source_code: &str,
+    stereo_part: Option<&str>,
+) -> ChemistryResult<Vec<Stereochemistry>> {
+    let Some(stereo_part) = stereo_part else {
+        return Ok(Vec::new());
+    };
+    if stereo_part.is_empty() {
+        return Ok(Vec::new());
+    }
+    stereo_part
+        .split(',')
+        .map(|token| parse_graph_stereo_token(source_code, token))
+        .collect()
+}
+
+fn parse_graph_stereo_token(source_code: &str, token: &str) -> ChemistryResult<Stereochemistry> {
+    let parts = token.split(':').collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["t", center, substituents, descriptor] => {
+            let substituents = parse_atom_list(substituents)?;
+            if substituents.len() != 4 {
+                return Err(invalid_frowns(
+                    source_code,
+                    "tetrahedral stereo must contain four substituents",
+                ));
+            }
+            Ok(Stereochemistry::Tetrahedral(TetrahedralStereo {
+                center: parse_atom_index(center)?,
+                substituents: [
+                    substituents[0],
+                    substituents[1],
+                    substituents[2],
+                    substituents[3],
+                ],
+                descriptor: parse_stereo_descriptor(descriptor)?,
+            }))
+        }
+        ["db", bond, substituents, descriptor] => {
+            let (first, second) = bond
+                .split_once('=')
+                .ok_or_else(|| invalid_frowns(source_code, "double-bond stereo has bad bond"))?;
+            let (first_substituent, second_substituent) =
+                substituents.split_once('-').ok_or_else(|| {
+                    invalid_frowns(source_code, "double-bond stereo has bad substituents")
+                })?;
+            Ok(Stereochemistry::DoubleBond(DoubleBondStereo {
+                first: parse_atom_index(first)?,
+                second: parse_atom_index(second)?,
+                first_substituent: parse_atom_index(first_substituent)?,
+                second_substituent: parse_atom_index(second_substituent)?,
+                descriptor: parse_stereo_descriptor(descriptor)?,
+            }))
+        }
+        ["mix", kind, atoms] => Ok(Stereochemistry::Mixture {
+            kind: parse_stereo_mixture_kind(kind)?,
+            atoms: parse_atom_list(atoms)?,
+        }),
+        _ => Err(invalid_frowns(source_code, "invalid stereo token")),
+    }
+}
+
+fn parse_atom_list(value: &str) -> ChemistryResult<Vec<usize>> {
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    value.split('.').map(parse_atom_index).collect()
+}
+
+fn parse_atom_index(value: &str) -> ChemistryResult<usize> {
+    value
+        .parse::<usize>()
+        .map_err(|_| invalid_frowns(value, "invalid stereo atom index"))
+}
+
+fn parse_stereo_descriptor(value: &str) -> ChemistryResult<StereoDescriptor> {
+    match value {
+        "cw" => Ok(StereoDescriptor::Clockwise),
+        "ccw" => Ok(StereoDescriptor::CounterClockwise),
+        "cis" => Ok(StereoDescriptor::Cis),
+        "trans" => Ok(StereoDescriptor::Trans),
+        "e" => Ok(StereoDescriptor::E),
+        "z" => Ok(StereoDescriptor::Z),
+        _ => Err(invalid_frowns(value, "unknown stereo descriptor")),
+    }
+}
+
+fn parse_stereo_mixture_kind(value: &str) -> ChemistryResult<StereoMixtureKind> {
+    match value {
+        "tetra" => Ok(StereoMixtureKind::Tetrahedral),
+        "db" => Ok(StereoMixtureKind::DoubleBond),
+        "general" => Ok(StereoMixtureKind::General),
+        _ => Err(invalid_frowns(value, "unknown stereo mixture kind")),
     }
 }
 
@@ -232,6 +338,49 @@ mod tests {
             write_frowns(&first).unwrap(),
             write_frowns(&second).unwrap()
         );
+    }
+
+    #[test]
+    fn graph_code_preserves_tetrahedral_stereo() {
+        let clockwise = parse_frowns(
+            "destroy:graph:atoms=C.H.Cl.F.I;bonds=0-s-1,0-s-2,0-s-3,0-s-4;stereo=t:0:1.2.3.4:cw",
+        )
+        .unwrap();
+        let counter_clockwise = parse_frowns(
+            "destroy:graph:atoms=C.H.Cl.F.I;bonds=0-s-1,0-s-2,0-s-3,0-s-4;stereo=t:0:1.2.3.4:ccw",
+        )
+        .unwrap();
+
+        assert_ne!(
+            write_frowns(&clockwise).unwrap(),
+            write_frowns(&counter_clockwise).unwrap()
+        );
+    }
+
+    #[test]
+    fn graph_code_preserves_double_bond_stereo() {
+        let cis = parse_frowns(
+            "destroy:graph:atoms=C.C.H.Cl.H.I;bonds=0-2-1,0-s-2,0-s-3,1-s-4,1-s-5;stereo=db:0=1:2-4:cis",
+        )
+        .unwrap();
+        let trans = parse_frowns(
+            "destroy:graph:atoms=C.C.H.Cl.H.I;bonds=0-2-1,0-s-2,0-s-3,1-s-4,1-s-5;stereo=db:0=1:2-4:trans",
+        )
+        .unwrap();
+
+        assert_ne!(write_frowns(&cis).unwrap(), write_frowns(&trans).unwrap());
+    }
+
+    #[test]
+    fn rejects_invalid_stereo_references() {
+        assert!(parse_frowns(
+            "destroy:graph:atoms=C.H.Cl.F;bonds=0-s-1,0-s-2,0-s-3;stereo=t:0:1.2.3.9:cw"
+        )
+        .is_err());
+        assert!(parse_frowns(
+            "destroy:graph:atoms=C.C.H.H;bonds=0-s-1,0-s-2,1-s-3;stereo=db:0=1:2-3:cis"
+        )
+        .is_err());
     }
 
     #[test]
