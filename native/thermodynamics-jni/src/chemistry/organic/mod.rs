@@ -1436,6 +1436,14 @@ enum AlkyneStereoRule {
     Anti,
 }
 
+#[derive(Debug, Clone)]
+struct StereoProductVariant {
+    structure: MolecularStructure,
+    channel_suffix: String,
+    activation_delta_kj_per_mol: f64,
+    pre_exponential_factor_multiplier: f64,
+}
+
 fn electrophilic_addition_specs(alkyne: bool) -> Vec<ElectrophilicAdditionSpec> {
     let activation_energy = if alkyne { 10.0 } else { 25.0 };
     vec![
@@ -1599,26 +1607,31 @@ fn generate_electrophilic_addition(
         editor.mark_tetrahedral_stereo_mixture_if_valid(high_degree_carbon)?;
         editor.mark_tetrahedral_stereo_mixture_if_valid(low_degree_carbon)?;
     }
-    let product_structures = expand_stereo_product_distribution(editor.finish()?)?;
+    let product_variants = expand_stereo_product_distribution(editor.finish()?)?;
     let mut products = Vec::new();
-    for product_structure in product_structures {
-        products.push(resolver.resolve(product_structure)?);
+    for variant in product_variants {
+        products.push((
+            resolver.resolve(variant.structure)?,
+            variant.channel_suffix,
+            variant.activation_delta_kj_per_mol,
+            variant.pre_exponential_factor_multiplier,
+        ));
     }
     let mut builder = Reaction::builder(generated_group_reaction_id(spec.prefix, substance, group))
         .reactant(substance.id.clone(), spec.nucleophile_ratio, 1)
         .reactant(spec.electrophile, 1, 1)
         .activation_energy_kj_per_mol(spec.activation_energy);
     if products.len() == 1 {
-        builder = builder.product(products.remove(0), spec.nucleophile_ratio);
+        builder = builder.product(products.remove(0).0, spec.nucleophile_ratio);
     } else {
-        for (index, product) in products.into_iter().enumerate() {
+        for (product, suffix, activation_delta, pre_exponential_multiplier) in products {
             builder = builder.channel(
                 ReactionChannel::new(
-                    format!("{}:stereo:{}", spec.prefix, index + 1),
+                    format!("{}:stereo:{}", spec.prefix, suffix),
                     [StoichiometricTerm::new(product, spec.nucleophile_ratio)],
-                    spec.activation_energy,
+                    spec.activation_energy + activation_delta,
                 )
-                .with_pre_exponential_factor(10_000.0),
+                .with_pre_exponential_factor(10_000.0 * pre_exponential_multiplier),
             );
         }
     }
@@ -1721,13 +1734,32 @@ fn atomic_stereo_priority(element: &str) -> u16 {
 
 fn expand_stereo_product_distribution(
     structure: MolecularStructure,
-) -> ChemistryResult<Vec<MolecularStructure>> {
+) -> ChemistryResult<Vec<StereoProductVariant>> {
+    expand_stereo_product_distribution_with_parameters(
+        structure,
+        "single".to_string(),
+        0.0,
+        1.0,
+    )
+}
+
+fn expand_stereo_product_distribution_with_parameters(
+    structure: MolecularStructure,
+    suffix: String,
+    activation_delta_kj_per_mol: f64,
+    pre_exponential_factor_multiplier: f64,
+) -> ChemistryResult<Vec<StereoProductVariant>> {
     let Some(position) = structure
         .stereochemistry
         .iter()
         .position(|stereo| matches!(stereo, Stereochemistry::Mixture { .. }))
     else {
-        return Ok(vec![structure]);
+        return Ok(vec![StereoProductVariant {
+            structure,
+            channel_suffix: suffix,
+            activation_delta_kj_per_mol,
+            pre_exponential_factor_multiplier,
+        }]);
     };
     let mut base = structure;
     let mixture = base.stereochemistry.remove(position);
@@ -1746,16 +1778,26 @@ fn expand_stereo_product_distribution(
             }
             let substituents = [atoms[1], atoms[2], atoms[3], atoms[4]];
             vec![
-                Stereochemistry::Tetrahedral(TetrahedralStereo {
-                    center: atoms[0],
-                    substituents,
-                    descriptor: StereoDescriptor::Clockwise,
-                }),
-                Stereochemistry::Tetrahedral(TetrahedralStereo {
-                    center: atoms[0],
-                    substituents,
-                    descriptor: StereoDescriptor::CounterClockwise,
-                }),
+                (
+                    Stereochemistry::Tetrahedral(TetrahedralStereo {
+                        center: atoms[0],
+                        substituents,
+                        descriptor: StereoDescriptor::Clockwise,
+                    }),
+                    "tetra_cw".to_string(),
+                    0.0,
+                    1.0,
+                ),
+                (
+                    Stereochemistry::Tetrahedral(TetrahedralStereo {
+                        center: atoms[0],
+                        substituents,
+                        descriptor: StereoDescriptor::CounterClockwise,
+                    }),
+                    "tetra_ccw".to_string(),
+                    0.0,
+                    1.0,
+                ),
             ]
         }
         Stereochemistry::Mixture {
@@ -1769,13 +1811,35 @@ fn expand_stereo_product_distribution(
                         .to_string(),
                 });
             }
-            return Err(ChemistryError::InvalidReaction {
-                reaction_id: "<generated-organic>".to_string(),
-                reason: format!(
-                    "geometric stereo distribution for bond {}={} is unknown",
-                    atoms[0], atoms[1]
+            let steric_penalty = geometric_z_steric_penalty_kj_per_mol(
+                &base, atoms[0], atoms[1], atoms[2], atoms[3],
+            );
+            vec![
+                (
+                    Stereochemistry::DoubleBond(super::molecule::DoubleBondStereo {
+                        first: atoms[0],
+                        second: atoms[1],
+                        first_substituent: atoms[2],
+                        second_substituent: atoms[3],
+                        descriptor: StereoDescriptor::E,
+                    }),
+                    "db_e".to_string(),
+                    0.0,
+                    1.0,
                 ),
-            });
+                (
+                    Stereochemistry::DoubleBond(super::molecule::DoubleBondStereo {
+                        first: atoms[0],
+                        second: atoms[1],
+                        first_substituent: atoms[2],
+                        second_substituent: atoms[3],
+                        descriptor: StereoDescriptor::Z,
+                    }),
+                    "db_z".to_string(),
+                    steric_penalty,
+                    z_pre_exponential_multiplier(steric_penalty),
+                ),
+            ]
         }
         Stereochemistry::Mixture {
             kind: StereoMixtureKind::General,
@@ -1789,13 +1853,70 @@ fn expand_stereo_product_distribution(
         _ => unreachable!("position selected a stereo mixture"),
     };
     let mut result = Vec::new();
-    for stereo in variants {
+    for (stereo, variant_suffix, variant_activation_delta, variant_pre_exponential_multiplier) in
+        variants
+    {
         let mut variant = base.clone();
         variant.stereochemistry.push(stereo);
         variant.validate()?;
-        result.extend(expand_stereo_product_distribution(variant)?);
+        result.extend(expand_stereo_product_distribution_with_parameters(
+            variant,
+            format!("{suffix}_{variant_suffix}"),
+            activation_delta_kj_per_mol + variant_activation_delta,
+            pre_exponential_factor_multiplier * variant_pre_exponential_multiplier,
+        )?);
     }
     Ok(result)
+}
+
+fn geometric_z_steric_penalty_kj_per_mol(
+    structure: &MolecularStructure,
+    first: usize,
+    second: usize,
+    first_substituent: usize,
+    second_substituent: usize,
+) -> f64 {
+    let first_bulk = substituent_steric_bulk(structure, first_substituent, first);
+    let second_bulk = substituent_steric_bulk(structure, second_substituent, second);
+    (1.5 + 0.35 * (first_bulk + second_bulk)).clamp(1.5, 8.0)
+}
+
+fn z_pre_exponential_multiplier(steric_penalty_kj_per_mol: f64) -> f64 {
+    (1.0 - steric_penalty_kj_per_mol / 20.0).clamp(0.55, 0.95)
+}
+
+fn substituent_steric_bulk(
+    structure: &MolecularStructure,
+    substituent: usize,
+    blocked_atom: usize,
+) -> f64 {
+    let mut visited = BTreeSet::new();
+    substituent_steric_bulk_inner(structure, substituent, blocked_atom, &mut visited)
+}
+
+fn substituent_steric_bulk_inner(
+    structure: &MolecularStructure,
+    atom_index: usize,
+    blocked_atom: usize,
+    visited: &mut BTreeSet<usize>,
+) -> f64 {
+    if atom_index == blocked_atom || !visited.insert(atom_index) {
+        return 0.0;
+    }
+    let atom = &structure.atoms[atom_index];
+    let mut bulk = match atom.element.as_str() {
+        "H" => 0.2,
+        "B" | "C" | "N" | "O" | "F" => 1.0,
+        "Cl" => 1.8,
+        "Br" => 2.1,
+        "I" => 2.4,
+        "R" => 1.5,
+        _ => 1.0,
+    };
+    for neighbor in bonded_substituents_except(structure, atom_index, blocked_atom) {
+        bulk += 0.35 * substituent_steric_bulk_inner(structure, neighbor, atom_index, visited);
+    }
+    bulk
 }
 
 fn add_hydroxyl(editor: &mut MolecularEditor, parent: usize) -> ChemistryResult<usize> {
@@ -2308,6 +2429,39 @@ mod tests {
         }
         let hydrogenation = reaction_with_prefix(&registry, "alkene_hydrogenation/destroy_ethene/");
         assert!(!hydrogenation.external_catalysts.is_empty());
+    }
+
+    #[test]
+    fn geometric_stereo_products_use_kinetic_channels() {
+        let structure = super::super::frowns::parse_frowns(
+            "destroy:graph:atoms=C.C.H.Cl.H.I;bonds=0-2-1,0-s-2,0-s-3,1-s-4,1-s-5;stereo=mix:db:0.1.3.5",
+        )
+        .unwrap();
+        let variants = expand_stereo_product_distribution(structure).unwrap();
+        let e_variant = variants
+            .iter()
+            .find(|variant| variant.channel_suffix.contains("db_e"))
+            .unwrap();
+        let z_variant = variants
+            .iter()
+            .find(|variant| variant.channel_suffix.contains("db_z"))
+            .unwrap();
+
+        assert!(z_variant.activation_delta_kj_per_mol > e_variant.activation_delta_kj_per_mol);
+        assert!(
+            z_variant.pre_exponential_factor_multiplier
+                < e_variant.pre_exponential_factor_multiplier
+        );
+        assert!(e_variant
+            .structure
+            .stereochemistry
+            .iter()
+            .any(|stereo| matches!(stereo, Stereochemistry::DoubleBond(double_bond) if double_bond.descriptor == StereoDescriptor::E)));
+        assert!(z_variant
+            .structure
+            .stereochemistry
+            .iter()
+            .any(|stereo| matches!(stereo, Stereochemistry::DoubleBond(double_bond) if double_bond.descriptor == StereoDescriptor::Z)));
     }
 
     #[test]
