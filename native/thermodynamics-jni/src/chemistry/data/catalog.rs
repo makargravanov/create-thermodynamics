@@ -1,3 +1,5 @@
+use super::catalysis::CatalystSurfaceSpec;
+use super::complex::{ComplexLigand, ComplexSpec};
 use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::MixturePhase;
 use super::molecule::{
@@ -45,6 +47,114 @@ pub fn destroy_substances_registry_builder() -> ChemistryResult<ChemistryRegistr
 
 fn register_phase_tables(builder: ChemistryRegistryBuilder) -> ChemistryRegistryBuilder {
     builder
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical(
+            "forge:dusts/nickel",
+            58.6934,
+            0,
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical(
+            "forge:dusts/palladium",
+            106.42,
+            0,
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical(
+            "forge:dusts/platinum",
+            195.084,
+            0,
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical(
+            "forge:dusts/rhodium",
+            102.9055,
+            0,
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical("forge:dusts/iron", 55.845, 0))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical(
+            "forge:dusts/copper",
+            63.546,
+            0,
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical("forge:dusts/zinc", 65.38, 0))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical(
+            "addSimpleItemTagCatalyst(AllTags.forgeItemTag(\"dusts/nickel\"), 1f)",
+            58.6934,
+            0,
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical(
+            "addSimpleItemTagCatalyst(AllTags.forgeItemTag(\"dusts/palladium\"), 1f)",
+            106.42,
+            0,
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical(
+            "addSimpleItemTagCatalyst(AllTags.forgeItemTag(\"dusts/platinum\"), 1f)",
+            195.084,
+            0,
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical(
+            "addSimpleItemTagCatalyst(AllTags.forgeItemTag(\"dusts/platinum\"), 3f)",
+            195.084,
+            0,
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical(
+            "addSimpleItemTagCatalyst(AllTags.forgeItemTag(\"dusts/iron\"), 1f)",
+            55.845,
+            0,
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical(
+            "addSimpleItemTagCatalyst(AllTags.forgeItemTag(\"dusts/copper\"), 1f)",
+            63.546,
+            0,
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical(
+            "addSimpleItemTagCatalyst(AllTags.forgeItemTag(\"dusts/zinc\"), 1f)",
+            65.38,
+            0,
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::chemical(
+            "addSimpleItemTagCatalyst(AllTags.forgeItemTag(\"dusts/rhodium\"), 1f)",
+            102.9055,
+            0,
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::unchecked(
+            "addSimpleItemCatalyst(DestroyItems.ZEOLITE::get, 1f)",
+            "zeolite item surface has no explicit chemical formula in the Rust model",
+        ))
+        .catalyst_surface_spec(CatalystSurfaceSpec::unchecked(
+            "addSimpleItemCatalyst(DestroyItems.SILICA::get, 1f)",
+            "silica item surface has no explicit chemical formula in the Rust model",
+        ))
+        .complex_spec(
+            ComplexSpec::new(
+                "destroy:copper_ii_tetraammine",
+                "destroy:copper_ii",
+                [ComplexLigand::new("destroy:ammonia", 4)],
+                2,
+                1.0e13,
+            )
+            .with_translation_key("copper_ii_tetraammine")
+            .with_color_argb(0x804A90E2),
+        )
+        .complex_spec(
+            ComplexSpec::new(
+                "destroy:nickel_tetraammine",
+                "destroy:nickel_ion",
+                [ComplexLigand::new("destroy:ammonia", 4)],
+                2,
+                1.0e8,
+            )
+            .with_translation_key("nickel_tetraammine")
+            .with_color_argb(0x8062B25D),
+        )
+        .complex_spec(
+            ComplexSpec::new(
+                "destroy:ferric_hexacyanide",
+                "destroy:iron_iii",
+                [ComplexLigand::new("destroy:cyanide", 6)],
+                -3,
+                1.0e31,
+            )
+            .with_translation_key("ferric_hexacyanide")
+            .with_color_argb(0x80364D9B),
+        )
         .gas_solubility(
             "destroy:oxygen",
             GasSolubilityModel::Henry {
@@ -2330,7 +2440,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(DESTROY_SUBSTANCE_COUNT, 152);
-        assert_eq!(registry.substance_count(), 152);
+        assert_eq!(registry.substance_count(), 155);
     }
 
     #[test]

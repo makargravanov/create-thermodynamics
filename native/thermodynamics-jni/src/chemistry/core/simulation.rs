@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use super::catalysis::{CatalystSurfaceId, CatalystSurfaceState, SurfaceStep};
 use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::{Mixture, MixturePhase, TRACE_CONCENTRATION_MOL_PER_BUCKET};
 use super::reaction::Reaction;
@@ -17,6 +18,8 @@ pub struct SimulationReport {
     pub ticks: u32,
     pub reached_equilibrium: bool,
     pub reaction_results: BTreeMap<String, f64>,
+    pub surfaces: BTreeMap<CatalystSurfaceId, CatalystSurfaceState>,
+    pub surface_steps: BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -24,7 +27,9 @@ pub struct ReactionContext {
     pub uv_power: f64,
     pub external_reactants: BTreeMap<String, f64>,
     pub external_catalysts: BTreeMap<String, f64>,
+    pub surfaces: BTreeMap<CatalystSurfaceId, CatalystSurfaceState>,
     pub reaction_results: BTreeMap<String, f64>,
+    pub surface_steps: BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -42,7 +47,9 @@ impl ReactionApplication {
 #[derive(Debug, Clone)]
 struct ContextCheckpoint {
     external_reactants: Vec<(String, Option<f64>)>,
+    surfaces: Vec<(CatalystSurfaceId, Option<CatalystSurfaceState>)>,
     reaction_results: Vec<(String, Option<f64>)>,
+    surface_steps: Vec<(String, Option<f64>)>,
 }
 
 impl Default for ReactionContext {
@@ -51,7 +58,9 @@ impl Default for ReactionContext {
             uv_power: 0.0,
             external_reactants: BTreeMap::new(),
             external_catalysts: BTreeMap::new(),
+            surfaces: BTreeMap::new(),
             reaction_results: BTreeMap::new(),
+            surface_steps: BTreeMap::new(),
         }
     }
 }
@@ -80,7 +89,45 @@ impl ReactionContext {
         description: impl Into<String>,
         moles_per_bucket: f64,
     ) -> ChemistryResult<()> {
-        add_external(&mut self.external_catalysts, description, moles_per_bucket)
+        let description = description.into();
+        add_external(
+            &mut self.external_catalysts,
+            description.clone(),
+            moles_per_bucket,
+        )?;
+        self.add_surface(description, moles_per_bucket)
+    }
+
+    pub fn add_surface(
+        &mut self,
+        surface_id: impl Into<CatalystSurfaceId>,
+        sites_mol_per_bucket: f64,
+    ) -> ChemistryResult<()> {
+        let surface_id = surface_id.into();
+        let state = CatalystSurfaceState::new(sites_mol_per_bucket)?;
+        self.surfaces.insert(surface_id, state);
+        Ok(())
+    }
+
+    pub fn free_sites(&self, surface_id: &CatalystSurfaceId) -> f64 {
+        self.surfaces
+            .get(surface_id)
+            .map(CatalystSurfaceState::free_sites)
+            .unwrap_or(0.0)
+    }
+
+    pub fn occupied_sites(&self, surface_id: &CatalystSurfaceId) -> f64 {
+        self.surfaces
+            .get(surface_id)
+            .map(CatalystSurfaceState::occupied_sites)
+            .unwrap_or(0.0)
+    }
+
+    pub fn poisoned_sites(&self, surface_id: &CatalystSurfaceId) -> f64 {
+        self.surfaces
+            .get(surface_id)
+            .map(CatalystSurfaceState::poisoned_sites)
+            .unwrap_or(0.0)
     }
 }
 
@@ -208,6 +255,8 @@ pub fn react_until_equilibrium_with_context(
                 ticks: tick + 1,
                 reached_equilibrium: true,
                 reaction_results: context.reaction_results.clone(),
+                surfaces: context.surfaces.clone(),
+                surface_steps: context.surface_steps.clone(),
             });
         }
     }
@@ -215,6 +264,8 @@ pub fn react_until_equilibrium_with_context(
         ticks: max_ticks,
         reached_equilibrium: false,
         reaction_results: context.reaction_results.clone(),
+        surfaces: context.surfaces.clone(),
+        surface_steps: context.surface_steps.clone(),
     })
 }
 
@@ -245,6 +296,7 @@ pub fn reaction_rate_mol_per_bucket_per_tick_with_context(
     if reaction.requires_uv {
         rate *= context.uv_power;
     }
+    rate *= surface_rate_factor(reaction, context)?;
     for (substance_id, order) in &reaction.orders {
         registry.substance(substance_id)?;
         let phases = reaction
@@ -286,6 +338,7 @@ fn reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
     if reaction.requires_uv {
         rate *= context.uv_power;
     }
+    rate *= surface_rate_factor(reaction, context)?;
     for (substance, order, phases) in &indexed_reaction.orders {
         let substance_id = &registry.substance_by_index(*substance)?.id;
         let concentration = phases
@@ -311,13 +364,23 @@ fn context_allows_reaction(reaction: &Reaction, context: &ReactionContext) -> bo
         return false;
     }
     for catalyst in &reaction.external_catalysts {
-        if context
-            .external_catalysts
-            .get(&catalyst.description)
-            .copied()
-            .unwrap_or(0.0)
-            < catalyst.moles_per_reaction
+        let surface_id = CatalystSurfaceId::from(catalyst.description.clone());
+        if context.free_sites(&surface_id) <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            return false;
+        }
+    }
+    for requirement in &reaction.surface_requirements {
+        let Some(surface) = context.surfaces.get(&requirement.surface_id) else {
+            return false;
+        };
+        if !requirement
+            .phases
+            .iter()
+            .any(|phase| surface.accessible_phases.contains(phase))
         {
+            return false;
+        }
+        if surface.free_sites() <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
             return false;
         }
     }
@@ -355,6 +418,48 @@ fn redox_environment_allows_reaction(
     })
 }
 
+fn surface_rate_factor(reaction: &Reaction, context: &ReactionContext) -> ChemistryResult<f64> {
+    let mut factor = 1.0;
+    for requirement in &reaction.surface_requirements {
+        let Some(surface) = context.surfaces.get(&requirement.surface_id) else {
+            return Ok(0.0);
+        };
+        surface.validate()?;
+        if !requirement
+            .phases
+            .iter()
+            .any(|phase| surface.accessible_phases.contains(phase))
+        {
+            return Ok(0.0);
+        }
+        if requirement.sites_per_reaction <= 0.0 {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: reaction.id.to_string(),
+                reason: "surface requirement sites must be positive".to_string(),
+            });
+        }
+        if surface.free_sites() <= 0.0 || surface.total_sites_mol_per_bucket <= 0.0 {
+            return Ok(0.0);
+        }
+        factor *= (surface.free_sites() / surface.total_sites_mol_per_bucket).clamp(0.0, 1.0);
+    }
+    Ok(factor)
+}
+
+fn limit_by_surfaces(context: &ReactionContext, reaction: &Reaction, requested_moles: f64) -> f64 {
+    reaction
+        .surface_requirements
+        .iter()
+        .fold(requested_moles, |current, requirement| {
+            let available = context
+                .surfaces
+                .get(&requirement.surface_id)
+                .map(|surface| surface.free_sites() / requirement.sites_per_reaction)
+                .unwrap_or(0.0);
+            current.min(available)
+        })
+}
+
 fn limit_by_reactants_and_context(
     mixture: &Mixture,
     context: &ReactionContext,
@@ -384,6 +489,7 @@ fn limit_by_reactants_and_context(
                 / reactant.moles_per_reaction;
             current.min(available)
         })
+        .min(limit_by_surfaces(context, reaction, requested_moles))
 }
 
 fn apply_reaction(
@@ -457,6 +563,7 @@ fn apply_reaction_inner(
         moles_per_bucket,
     )?;
     apply_external_reactants(context, reaction, moles_per_bucket)?;
+    apply_surface_steps(context, reaction, moles_per_bucket)?;
     apply_reaction_results(context, reaction, moles_per_bucket);
     mixture.heat(
         registry,
@@ -466,6 +573,116 @@ fn apply_reaction_inner(
         max_concentration_delta,
         thermal_changed: reaction.enthalpy_change_kj_per_mol != 0.0 && moles_per_bucket > 0.0,
     })
+}
+
+fn apply_surface_steps(
+    context: &mut ReactionContext,
+    reaction: &Reaction,
+    moles_per_bucket: f64,
+) -> ChemistryResult<()> {
+    for step in &reaction.surface_steps {
+        let surface_id = step.surface_id().clone();
+        let event = {
+            let surface = context.surfaces.get_mut(&surface_id).ok_or_else(|| {
+                ChemistryError::InvalidMixtureState(format!(
+                    "missing catalyst surface '{surface_id}'"
+                ))
+            })?;
+            let event = match step {
+                SurfaceStep::Adsorb {
+                    site_id,
+                    sites_per_reaction,
+                    ..
+                } => {
+                    let amount = sites_per_reaction * moles_per_bucket;
+                    if surface.free_sites() + TRACE_CONCENTRATION_MOL_PER_BUCKET < amount {
+                        return Err(ChemistryError::InvalidMixtureState(format!(
+                            "surface '{surface_id}' does not have enough free sites to adsorb"
+                        )));
+                    }
+                    *surface.occupied_sites.entry(site_id.clone()).or_insert(0.0) += amount;
+                    ("adsorb", amount)
+                }
+                SurfaceStep::Desorb {
+                    site_id,
+                    sites_per_reaction,
+                    ..
+                } => {
+                    let amount = sites_per_reaction * moles_per_bucket;
+                    let occupied = surface.occupied_site(site_id);
+                    if occupied + TRACE_CONCENTRATION_MOL_PER_BUCKET < amount {
+                        return Err(ChemistryError::InvalidMixtureState(format!(
+                            "surface '{surface_id}' does not have enough occupied sites to desorb"
+                        )));
+                    }
+                    let next = occupied - amount;
+                    if next <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                        surface.occupied_sites.remove(site_id);
+                    } else {
+                        surface.occupied_sites.insert(site_id.clone(), next);
+                    }
+                    ("desorb", amount)
+                }
+                SurfaceStep::Poison {
+                    site_id,
+                    sites_per_reaction,
+                    ..
+                } => {
+                    let amount = sites_per_reaction * moles_per_bucket;
+                    let occupied = surface.occupied_site(site_id);
+                    if occupied >= amount {
+                        let next = occupied - amount;
+                        if next <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                            surface.occupied_sites.remove(site_id);
+                        } else {
+                            surface.occupied_sites.insert(site_id.clone(), next);
+                        }
+                    } else {
+                        let missing = amount - occupied;
+                        if surface.free_sites() + TRACE_CONCENTRATION_MOL_PER_BUCKET < missing {
+                            return Err(ChemistryError::InvalidMixtureState(format!(
+                                "surface '{surface_id}' does not have enough sites to poison"
+                            )));
+                        }
+                        surface.occupied_sites.remove(site_id);
+                    }
+                    surface.poisoned_sites_mol_per_bucket += amount;
+                    ("poison", amount)
+                }
+                SurfaceStep::Restore {
+                    sites_per_reaction, ..
+                } => {
+                    let amount = sites_per_reaction * moles_per_bucket;
+                    if surface.poisoned_sites_mol_per_bucket + TRACE_CONCENTRATION_MOL_PER_BUCKET
+                        < amount
+                    {
+                        return Err(ChemistryError::InvalidMixtureState(format!(
+                            "surface '{surface_id}' does not have enough poisoned sites to restore"
+                        )));
+                    }
+                    surface.poisoned_sites_mol_per_bucket =
+                        (surface.poisoned_sites_mol_per_bucket - amount).max(0.0);
+                    ("restore", amount)
+                }
+            };
+            surface.validate()?;
+            event
+        };
+        add_surface_step_result(context, reaction, event.0, event.1);
+    }
+    Ok(())
+}
+
+fn add_surface_step_result(
+    context: &mut ReactionContext,
+    reaction: &Reaction,
+    step_name: &str,
+    amount: f64,
+) {
+    *context
+        .surface_steps
+        .entry(format!("{}:{step_name}", reaction.id))
+        .or_insert(0.0) += amount;
 }
 
 fn concentration_deltas(
@@ -586,6 +803,22 @@ fn checkpoint_context(context: &ReactionContext, reaction: &Reaction) -> Context
                 )
             })
             .collect(),
+        surfaces: reaction
+            .surface_requirements
+            .iter()
+            .map(|requirement| {
+                (
+                    requirement.surface_id.clone(),
+                    context.surfaces.get(&requirement.surface_id).cloned(),
+                )
+            })
+            .chain(reaction.surface_steps.iter().map(|step| {
+                (
+                    step.surface_id().clone(),
+                    context.surfaces.get(step.surface_id()).cloned(),
+                )
+            }))
+            .collect(),
         reaction_results: reaction
             .reaction_results
             .iter()
@@ -594,6 +827,14 @@ fn checkpoint_context(context: &ReactionContext, reaction: &Reaction) -> Context
                     result.description.clone(),
                     context.reaction_results.get(&result.description).copied(),
                 )
+            })
+            .collect(),
+        surface_steps: reaction
+            .surface_steps
+            .iter()
+            .map(|step| {
+                let key = format!("{}:{}", reaction.id, surface_step_name(step));
+                (key.clone(), context.surface_steps.get(&key).copied())
             })
             .collect(),
     }
@@ -610,6 +851,16 @@ fn restore_context(context: &mut ReactionContext, checkpoint: ContextCheckpoint)
             }
         }
     }
+    for (surface_id, previous) in checkpoint.surfaces {
+        match previous {
+            Some(value) => {
+                context.surfaces.insert(surface_id, value);
+            }
+            None => {
+                context.surfaces.remove(&surface_id);
+            }
+        }
+    }
     for (description, previous) in checkpoint.reaction_results {
         match previous {
             Some(value) => {
@@ -619,6 +870,25 @@ fn restore_context(context: &mut ReactionContext, checkpoint: ContextCheckpoint)
                 context.reaction_results.remove(&description);
             }
         }
+    }
+    for (description, previous) in checkpoint.surface_steps {
+        match previous {
+            Some(value) => {
+                context.surface_steps.insert(description, value);
+            }
+            None => {
+                context.surface_steps.remove(&description);
+            }
+        }
+    }
+}
+
+fn surface_step_name(step: &SurfaceStep) -> &'static str {
+    match step {
+        SurfaceStep::Adsorb { .. } => "adsorb",
+        SurfaceStep::Desorb { .. } => "desorb",
+        SurfaceStep::Poison { .. } => "poison",
+        SurfaceStep::Restore { .. } => "restore",
     }
 }
 

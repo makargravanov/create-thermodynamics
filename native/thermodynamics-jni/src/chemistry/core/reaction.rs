@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
+use super::catalysis::{CatalystSurfaceId, SurfaceRequirement, SurfaceSiteId, SurfaceStep};
 use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::MixturePhase;
 use super::redox::{RedoxAnnotation, ELECTRON_EXTERNAL_ID};
@@ -84,6 +85,8 @@ pub struct Reaction {
     pub redox: Option<RedoxAnnotation>,
     pub phase_access: BTreeMap<SubstanceId, ReactionPhaseAccess>,
     pub product_phases: BTreeMap<SubstanceId, MixturePhase>,
+    pub surface_requirements: Vec<SurfaceRequirement>,
+    pub surface_steps: Vec<SurfaceStep>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +164,8 @@ impl Reaction {
                 redox: None,
                 phase_access: BTreeMap::new(),
                 product_phases: BTreeMap::new(),
+                surface_requirements: Vec::new(),
+                surface_steps: Vec::new(),
             },
         }
     }
@@ -184,12 +189,15 @@ impl Reaction {
             || !self.external_products.is_empty()
             || !self.external_catalysts.is_empty()
             || !self.reaction_results.is_empty()
+            || !self.surface_requirements.is_empty()
+            || !self.surface_steps.is_empty()
     }
 
     pub fn requires_context_to_proceed(&self) -> bool {
         self.requires_uv
             || !self.external_reactants.is_empty()
             || !self.external_catalysts.is_empty()
+            || !self.surface_requirements.is_empty()
     }
 
     pub fn validate_shape(&self) -> ChemistryResult<()> {
@@ -280,6 +288,12 @@ impl Reaction {
                     reason: "reaction results must have a description".to_string(),
                 });
             }
+        }
+        for requirement in &self.surface_requirements {
+            requirement.validate(&reaction_id)?;
+        }
+        for step in &self.surface_steps {
+            step.validate(&reaction_id)?;
         }
         if !self.pre_exponential_factor.is_finite() || self.pre_exponential_factor <= 0.0 {
             return Err(ChemistryError::InvalidReaction {
@@ -375,11 +389,14 @@ impl ReactionBuilder {
             unchecked_mass_reason: Some(format!(
                 "legacy external catalyst '{description}' has no chemical formula in the model"
             )),
-            description,
+            description: description.clone(),
             moles_per_reaction: moles,
             molar_mass_grams: None,
             charge: None,
         });
+        self.reaction
+            .surface_requirements
+            .push(SurfaceRequirement::new(description.clone(), moles));
         self
     }
 
@@ -432,13 +449,17 @@ impl ReactionBuilder {
         molar_mass_grams: f64,
         charge: i32,
     ) -> Self {
+        let description = description.into();
         self.reaction.external_catalysts.push(ExternalRequirement {
-            description: description.into(),
+            description: description.clone(),
             moles_per_reaction: moles,
             molar_mass_grams: Some(molar_mass_grams),
             charge: Some(charge),
             unchecked_mass_reason: None,
         });
+        self.reaction
+            .surface_requirements
+            .push(SurfaceRequirement::new(description, moles));
         self
     }
 
@@ -527,6 +548,83 @@ impl ReactionBuilder {
         self.reaction
             .product_phases
             .insert(substance_id.into(), phase);
+        self
+    }
+
+    pub fn surface_requirement(
+        mut self,
+        surface_id: impl Into<CatalystSurfaceId>,
+        sites_per_reaction: f64,
+    ) -> Self {
+        self.reaction
+            .surface_requirements
+            .push(SurfaceRequirement::new(surface_id, sites_per_reaction));
+        self
+    }
+
+    pub fn surface_requirement_with_phases(
+        mut self,
+        surface_id: impl Into<CatalystSurfaceId>,
+        sites_per_reaction: f64,
+        phases: impl IntoIterator<Item = MixturePhase>,
+    ) -> Self {
+        self.reaction
+            .surface_requirements
+            .push(SurfaceRequirement::new(surface_id, sites_per_reaction).with_phases(phases));
+        self
+    }
+
+    pub fn surface_adsorption(
+        mut self,
+        surface_id: impl Into<CatalystSurfaceId>,
+        site_id: impl Into<SurfaceSiteId>,
+        sites_per_reaction: f64,
+    ) -> Self {
+        self.reaction.surface_steps.push(SurfaceStep::Adsorb {
+            surface_id: surface_id.into(),
+            site_id: site_id.into(),
+            sites_per_reaction,
+        });
+        self
+    }
+
+    pub fn surface_desorption(
+        mut self,
+        surface_id: impl Into<CatalystSurfaceId>,
+        site_id: impl Into<SurfaceSiteId>,
+        sites_per_reaction: f64,
+    ) -> Self {
+        self.reaction.surface_steps.push(SurfaceStep::Desorb {
+            surface_id: surface_id.into(),
+            site_id: site_id.into(),
+            sites_per_reaction,
+        });
+        self
+    }
+
+    pub fn surface_poisoning(
+        mut self,
+        surface_id: impl Into<CatalystSurfaceId>,
+        site_id: impl Into<SurfaceSiteId>,
+        sites_per_reaction: f64,
+    ) -> Self {
+        self.reaction.surface_steps.push(SurfaceStep::Poison {
+            surface_id: surface_id.into(),
+            site_id: site_id.into(),
+            sites_per_reaction,
+        });
+        self
+    }
+
+    pub fn surface_recovery(
+        mut self,
+        surface_id: impl Into<CatalystSurfaceId>,
+        sites_per_reaction: f64,
+    ) -> Self {
+        self.reaction.surface_steps.push(SurfaceStep::Restore {
+            surface_id: surface_id.into(),
+            sites_per_reaction,
+        });
         self
     }
 

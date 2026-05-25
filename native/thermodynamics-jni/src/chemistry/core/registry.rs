@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::catalysis::{CatalystSurfaceId, CatalystSurfaceSpec};
+use super::complex::ComplexSpec;
 use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::MixturePhase;
 use super::reaction::{Reaction, ReactionId, StoichiometricTerm};
@@ -117,6 +119,8 @@ pub struct ChemistryRegistry {
     acid_base_specs: Vec<AcidBaseSpec>,
     indexed_equilibria: Vec<IndexedEquilibrium>,
     redox_half_reactions: BTreeMap<String, RedoxHalfReaction>,
+    catalyst_surface_specs: BTreeMap<CatalystSurfaceId, CatalystSurfaceSpec>,
+    complex_specs: Vec<ComplexSpec>,
 }
 
 impl ChemistryRegistry {
@@ -266,6 +270,18 @@ impl ChemistryRegistry {
     pub fn redox_half_reactions(&self) -> impl Iterator<Item = &RedoxHalfReaction> {
         self.redox_half_reactions.values()
     }
+
+    pub fn catalyst_surface_spec(&self, id: &CatalystSurfaceId) -> Option<&CatalystSurfaceSpec> {
+        self.catalyst_surface_specs.get(id)
+    }
+
+    pub fn catalyst_surface_specs(&self) -> impl Iterator<Item = &CatalystSurfaceSpec> {
+        self.catalyst_surface_specs.values()
+    }
+
+    pub fn complex_specs(&self) -> impl Iterator<Item = &ComplexSpec> {
+        self.complex_specs.iter()
+    }
 }
 
 #[derive(Default)]
@@ -279,6 +295,8 @@ pub struct ChemistryRegistryBuilder {
     equilibria: Vec<EquilibriumSpec>,
     redox_half_reactions: Vec<RedoxHalfReaction>,
     redox_pairs: Vec<RedoxPair>,
+    catalyst_surface_specs: Vec<CatalystSurfaceSpec>,
+    complex_specs: Vec<ComplexSpec>,
 }
 
 impl ChemistryRegistryBuilder {
@@ -287,6 +305,11 @@ impl ChemistryRegistryBuilder {
     }
 
     pub fn from_registry(registry: &ChemistryRegistry) -> Self {
+        let complex_equilibrium_ids = registry
+            .complex_specs
+            .iter()
+            .map(|spec| format!("{}.formation", spec.id))
+            .collect::<BTreeSet<_>>();
         Self {
             substances: registry.substances_by_index.clone(),
             reactions: registry.reactions_by_index.clone(),
@@ -319,11 +342,14 @@ impl ChemistryRegistryBuilder {
                 .filter(|equilibrium| {
                     !equilibrium.spec.id.ends_with(".acid_base_equilibrium")
                         && !equilibrium.spec.id.ends_with(".neutralization_equilibrium")
+                        && !complex_equilibrium_ids.contains(&equilibrium.spec.id)
                 })
                 .map(|equilibrium| equilibrium.spec.clone())
                 .collect(),
             redox_half_reactions: registry.redox_half_reactions.values().cloned().collect(),
             redox_pairs: Vec::new(),
+            catalyst_surface_specs: registry.catalyst_surface_specs.values().cloned().collect(),
+            complex_specs: registry.complex_specs.clone(),
         }
     }
 
@@ -382,6 +408,16 @@ impl ChemistryRegistryBuilder {
         self
     }
 
+    pub fn catalyst_surface_spec(mut self, spec: CatalystSurfaceSpec) -> Self {
+        self.catalyst_surface_specs.push(spec);
+        self
+    }
+
+    pub fn complex_spec(mut self, spec: ComplexSpec) -> Self {
+        self.complex_specs.push(spec);
+        self
+    }
+
     pub fn build(self) -> ChemistryResult<ChemistryRegistry> {
         let mut redox_half_reactions = BTreeMap::new();
         for half in self.redox_half_reactions {
@@ -397,8 +433,20 @@ impl ChemistryRegistryBuilder {
             validate_redox_pair(&pair, &redox_half_reactions)?;
             reactions.push(pair.reaction);
         }
+        let mut substances = self.substances;
+        let mut equilibria = self.equilibria;
+        let complex_specs = build_complex_specs(&self.complex_specs, &substances)?;
+        for (spec, substance) in &complex_specs {
+            if let Some(substance) = substance {
+                substances.push(substance.clone());
+            }
+            equilibria.push(spec.to_equilibrium());
+        }
+
+        let catalyst_surface_specs = build_catalyst_surface_specs(&self.catalyst_surface_specs)?;
+
         let mut substance_map = BTreeMap::new();
-        for substance in self.substances {
+        for substance in substances {
             substance.validate()?;
             let id = substance.id.clone();
             if substance_map.insert(id.clone(), substance).is_some() {
@@ -451,7 +499,6 @@ impl ChemistryRegistryBuilder {
             &substances_by_index,
             &substance_id_to_index,
         )?;
-        let mut equilibria = self.equilibria;
         for spec in &acid_base_specs {
             equilibria.extend(spec.to_equilibria());
         }
@@ -472,6 +519,8 @@ impl ChemistryRegistryBuilder {
             acid_base_specs,
             indexed_equilibria,
             redox_half_reactions,
+            catalyst_surface_specs,
+            complex_specs: complex_specs.into_iter().map(|(spec, _)| spec).collect(),
         };
         registry.validate_redox_half_reactions()?;
         registry.validate_substance_tags()?;
@@ -543,6 +592,36 @@ impl ChemistryRegistry {
                     return Err(ChemistryError::UnknownSubstance {
                         reaction_id: reaction.id.to_string(),
                         substance_id: substance_id.to_string(),
+                    });
+                }
+            }
+            for requirement in &reaction.surface_requirements {
+                let Some(surface_spec) = self.catalyst_surface_specs.get(&requirement.surface_id)
+                else {
+                    return Err(ChemistryError::InvalidReaction {
+                        reaction_id: reaction.id.to_string(),
+                        reason: format!("unknown catalyst surface '{}'", requirement.surface_id),
+                    });
+                };
+                if !requirement
+                    .phases
+                    .iter()
+                    .any(|phase| surface_spec.accessible_phases.contains(phase))
+                {
+                    return Err(ChemistryError::InvalidReaction {
+                        reaction_id: reaction.id.to_string(),
+                        reason: format!(
+                            "surface '{}' is not accessible from any required phase",
+                            requirement.surface_id
+                        ),
+                    });
+                }
+            }
+            for step in &reaction.surface_steps {
+                if !self.catalyst_surface_specs.contains_key(step.surface_id()) {
+                    return Err(ChemistryError::InvalidReaction {
+                        reaction_id: reaction.id.to_string(),
+                        reason: format!("unknown catalyst surface '{}'", step.surface_id()),
                     });
                 }
             }
@@ -783,6 +862,80 @@ fn build_substance_properties_table(substances: &[Substance]) -> SubstanceProper
             .map(|substance| substance.latent_heat_j_per_mol)
             .collect(),
     }
+}
+
+fn build_complex_specs(
+    specs: &[ComplexSpec],
+    base_substances: &[Substance],
+) -> ChemistryResult<Vec<(ComplexSpec, Option<Substance>)>> {
+    let mut substances_by_id = base_substances
+        .iter()
+        .map(|substance| (substance.id.clone(), substance.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::new();
+    for spec in specs {
+        spec.validate_shape()?;
+        if !seen.insert(spec.id.clone()) {
+            return Err(ChemistryError::DuplicateSubstance(spec.id.to_string()));
+        }
+        let central = substances_by_id.get(&spec.central_ion).ok_or_else(|| {
+            ChemistryError::UnknownSubstance {
+                reaction_id: format!("{}.formation", spec.id),
+                substance_id: spec.central_ion.to_string(),
+            }
+        })?;
+        let mut charge = central.charge;
+        let mut mass = central.molar_mass_grams;
+        for ligand in &spec.ligands {
+            let ligand_substance = substances_by_id.get(&ligand.substance_id).ok_or_else(|| {
+                ChemistryError::UnknownSubstance {
+                    reaction_id: format!("{}.formation", spec.id),
+                    substance_id: ligand.substance_id.to_string(),
+                }
+            })?;
+            charge += ligand_substance.charge * ligand.count as i32;
+            mass += ligand_substance.molar_mass_grams * ligand.count as f64;
+        }
+        if let Some(existing) = substances_by_id.get(&spec.id) {
+            if existing.charge != spec.charge {
+                return Err(ChemistryError::ChargeNotConserved {
+                    reaction_id: format!("{}.formation", spec.id),
+                    reactants: charge,
+                    products: existing.charge,
+                });
+            }
+            if (existing.molar_mass_grams - mass).abs() > MASS_TOLERANCE_GRAMS_PER_MOL {
+                return Err(ChemistryError::MassNotConserved {
+                    reaction_id: format!("{}.formation", spec.id),
+                    reactants: mass,
+                    products: existing.molar_mass_grams,
+                });
+            }
+            result.push((spec.clone(), None));
+        } else {
+            let substance = spec.to_substance(mass, charge)?;
+            substances_by_id.insert(spec.id.clone(), substance.clone());
+            result.push((spec.clone(), Some(substance)));
+        }
+    }
+    Ok(result)
+}
+
+fn build_catalyst_surface_specs(
+    specs: &[CatalystSurfaceSpec],
+) -> ChemistryResult<BTreeMap<CatalystSurfaceId, CatalystSurfaceSpec>> {
+    let mut result = BTreeMap::new();
+    for spec in specs {
+        spec.validate()?;
+        if result.insert(spec.id.clone(), spec.clone()).is_some() {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: spec.id.to_string(),
+                reason: "duplicate catalyst surface spec".to_string(),
+            });
+        }
+    }
+    Ok(result)
 }
 
 fn build_solvent_miscibility(

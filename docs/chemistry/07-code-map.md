@@ -19,6 +19,8 @@
 
 - `core/substance.rs`: вещество и теги.
 - `core/reaction.rs`: реакция, условия, построитель.
+- `core/complex.rs`: комплексообразование и описание комплексных веществ.
+- `core/catalysis.rs`: поверхности катализаторов, активные центры и поверхностные шаги.
 - `core/registry.rs`: проверенный реестр, индексы реакции.
 - `core/mixture.rs`: смесь, нагрев, кипение, смешивание.
 - `core/simulation.rs`: расчет реакции за тик и до равновесия.
@@ -43,6 +45,7 @@
 3. Проверить `context_allows_reaction`.
 4. Проверить скорость в `reaction_rate_mol_per_bucket_per_tick_with_context`.
 5. Проверить ограничение реагентами в `limit_by_reactants_and_context`.
+6. Если реакция поверхностная, проверить `ReactionContext::surfaces`.
 
 Если не создается динамическая реакция:
 

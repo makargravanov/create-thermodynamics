@@ -2,6 +2,10 @@
 pub mod canonical;
 #[path = "data/catalog.rs"]
 pub mod catalog;
+#[path = "core/catalysis.rs"]
+pub mod catalysis;
+#[path = "core/complex.rs"]
+pub mod complex;
 #[path = "dynamic/mod.rs"]
 pub mod dynamic;
 pub mod error;
@@ -46,6 +50,8 @@ pub fn destroy_registry_with_generated_reactions_builder(
 
 #[cfg(test)]
 mod tests {
+    use super::catalysis::{CatalystSurfaceId, CatalystSurfaceSpec};
+    use super::complex::{ComplexLigand, ComplexSpec};
     use super::destroy_registry_builder;
     use super::error::ChemistryError;
     use super::mixture::{Mixture, MixturePhase};
@@ -208,6 +214,20 @@ mod tests {
             )
             .build()
             .expect("test registry must be valid")
+    }
+
+    fn test_substance(id: &'static str) -> Substance {
+        Substance::new(id, 0, 10.0, 1_000.0, 373.0, 100.0, 20_000.0)
+    }
+
+    fn surface_test_registry(reaction: Reaction) -> super::ChemistryRegistry {
+        ChemistryRegistryBuilder::new()
+            .substance(test_substance("a"))
+            .substance(test_substance("b"))
+            .reaction(reaction)
+            .catalyst_surface_spec(CatalystSurfaceSpec::chemical("surface:nickel", 58.69, 0))
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -523,6 +543,7 @@ mod tests {
                     .activation_energy_kj_per_mol(0.0)
                     .build(),
             )
+            .catalyst_surface_spec(CatalystSurfaceSpec::chemical("external:nickel", 58.69, 0))
             .build()
             .unwrap();
         let mut mixture = Mixture::new(298.0).unwrap();
@@ -549,6 +570,134 @@ mod tests {
         );
         assert_eq!(context.external_catalysts["external:nickel"], 1.0);
         assert!(context.reaction_results["external:water_result"] > 0.0);
+    }
+
+    #[test]
+    fn complex_equilibrium_binds_free_metal_and_ligands() {
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:copper_ii", 0.01)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:ammonia", 0.10)
+            .unwrap();
+        mixture
+            .move_between_phases(
+                &registry,
+                "destroy:ammonia",
+                MixturePhase::Gas,
+                MixturePhase::Aqueous,
+                0.10,
+            )
+            .unwrap();
+
+        react_for_tick(&registry, &mut mixture, 1).unwrap();
+
+        assert!(
+            mixture.concentration_of(&"destroy:copper_ii_tetraammine".into()) > 0.0,
+            "complex formation must create a real complex substance"
+        );
+        assert!(
+            mixture.concentration_of(&"destroy:copper_ii".into()) < 0.01,
+            "complex formation must reduce the free metal concentration"
+        );
+    }
+
+    #[test]
+    fn invalid_complex_charge_fails_registry_build() {
+        let error = ChemistryRegistryBuilder::new()
+            .substance(Substance::new(
+                "metal",
+                2,
+                10.0,
+                1_000.0,
+                f64::MAX,
+                100.0,
+                20_000.0,
+            ))
+            .substance(Substance::new(
+                "ligand", 0, 5.0, 1_000.0, 373.0, 100.0, 20_000.0,
+            ))
+            .complex_spec(ComplexSpec::new(
+                "metal_ligand",
+                "metal",
+                [ComplexLigand::new("ligand", 2)],
+                1,
+                1.0e3,
+            ))
+            .build()
+            .unwrap_err();
+
+        assert!(matches!(error, ChemistryError::ChargeNotConserved { .. }));
+    }
+
+    #[test]
+    fn surface_catalyst_is_required_and_limited_by_free_sites() {
+        let registry = surface_test_registry(
+            Reaction::builder("surface:isomerization")
+                .reactant("a", 1, 1)
+                .product("b", 1)
+                .surface_requirement("surface:nickel", 1.0)
+                .surface_adsorption("surface:nickel", "adsorbed", 1.0)
+                .pre_exponential_factor(1.0e12)
+                .activation_energy_kj_per_mol(0.0)
+                .build(),
+        );
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture.add_substance(&registry, "a", 1.0).unwrap();
+
+        react_for_tick(&registry, &mut mixture, 1).unwrap();
+        assert_eq!(mixture.concentration_of(&"b".into()), 0.0);
+
+        let mut context = ReactionContext::default();
+        context.add_surface("surface:nickel", 0.25).unwrap();
+        react_for_tick_with_context(&registry, &mut mixture, &mut context, 1).unwrap();
+
+        assert!(mixture.concentration_of(&"b".into()) > 0.0);
+        assert!(mixture.concentration_of(&"b".into()) <= 0.25 + 1.0e-9);
+        assert!(context.occupied_sites(&CatalystSurfaceId::from("surface:nickel")) > 0.0);
+    }
+
+    #[test]
+    fn poisoning_and_recovery_change_surface_state_explicitly() {
+        let registry = ChemistryRegistryBuilder::new()
+            .substance(test_substance("a"))
+            .substance(test_substance("b"))
+            .reaction(
+                Reaction::builder("surface:poison")
+                    .reactant("a", 1, 1)
+                    .product("b", 1)
+                    .surface_requirement("surface:nickel", 1.0)
+                    .surface_poisoning("surface:nickel", "adsorbed", 1.0)
+                    .pre_exponential_factor(1.0e12)
+                    .activation_energy_kj_per_mol(0.0)
+                    .build(),
+            )
+            .reaction(
+                Reaction::builder("surface:recover")
+                    .reactant("b", 1, 1)
+                    .product("a", 1)
+                    .surface_recovery("surface:nickel", 1.0)
+                    .pre_exponential_factor(1.0e12)
+                    .activation_energy_kj_per_mol(0.0)
+                    .build(),
+            )
+            .catalyst_surface_spec(CatalystSurfaceSpec::chemical("surface:nickel", 58.69, 0))
+            .build()
+            .unwrap();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture.add_substance(&registry, "a", 0.5).unwrap();
+        let mut context = ReactionContext::default();
+        context.add_surface("surface:nickel", 0.25).unwrap();
+
+        react_for_tick_with_context(&registry, &mut mixture, &mut context, 1).unwrap();
+        let surface_id = CatalystSurfaceId::from("surface:nickel");
+        assert!(context.poisoned_sites(&surface_id) > 0.0);
+        let poisoned = context.poisoned_sites(&surface_id);
+
+        react_for_tick_with_context(&registry, &mut mixture, &mut context, 1).unwrap();
+        assert!(context.poisoned_sites(&surface_id) < poisoned);
     }
 
     #[test]
