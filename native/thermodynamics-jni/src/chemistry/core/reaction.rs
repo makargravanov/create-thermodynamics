@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
 use super::catalysis::{CatalystSurfaceId, SurfaceRequirement, SurfaceSiteId, SurfaceStep};
+use super::condition::ReactionCondition;
 use super::error::{ChemistryError, ChemistryResult};
 use super::kinetics::ReactionChannel;
 use super::mixture::MixturePhase;
@@ -101,6 +102,7 @@ pub struct Reaction {
     pub product_phases: BTreeMap<SubstanceId, MixturePhase>,
     pub surface_requirements: Vec<SurfaceRequirement>,
     pub surface_steps: Vec<SurfaceStep>,
+    pub conditions: Vec<ReactionCondition>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +184,7 @@ impl Reaction {
                 product_phases: BTreeMap::new(),
                 surface_requirements: Vec::new(),
                 surface_steps: Vec::new(),
+                conditions: Vec::new(),
             },
         }
     }
@@ -399,6 +402,9 @@ impl Reaction {
         for step in &self.surface_steps {
             step.validate(&reaction_id)?;
         }
+        for condition in &self.conditions {
+            condition.validate(&reaction_id)?;
+        }
         if !self.pre_exponential_factor.is_finite() || self.pre_exponential_factor <= 0.0 {
             return Err(ChemistryError::InvalidReaction {
                 reaction_id: reaction_id.clone(),
@@ -494,6 +500,11 @@ impl ReactionBuilder {
 
     pub fn channel(mut self, channel: ReactionChannel) -> Self {
         self.reaction.channels.push(channel);
+        self
+    }
+
+    pub fn condition(mut self, condition: ReactionCondition) -> Self {
+        self.reaction.conditions.push(condition);
         self
     }
 

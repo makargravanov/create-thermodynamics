@@ -6,6 +6,8 @@ pub mod catalog;
 pub mod catalysis;
 #[path = "core/complex.rs"]
 pub mod complex;
+#[path = "core/condition.rs"]
+pub mod condition;
 #[path = "dynamic/mod.rs"]
 pub mod dynamic;
 pub mod error;
@@ -25,6 +27,8 @@ pub mod organic;
 pub mod reaction;
 #[path = "data/reactions.rs"]
 pub mod reactions;
+#[path = "molecule/reactive_site.rs"]
+pub mod reactive_site;
 #[path = "core/redox.rs"]
 pub mod redox;
 #[path = "core/registry.rs"]
@@ -35,6 +39,7 @@ pub mod simulation;
 pub mod solution;
 #[path = "core/substance.rs"]
 pub mod substance;
+pub mod synthesis;
 
 pub use error::{ChemistryError, ChemistryResult};
 pub use reactions::{DESTROY_EXPLICIT_REACTION_COUNT, DESTROY_REGISTERED_REACTION_COUNT};

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::condition::{AcidityCondition, ReactionCondition};
 use super::error::{ChemistryError, ChemistryResult};
 use super::functional_group::{FunctionalGroup, FunctionalGroupType};
 use super::kinetics::ReactionChannel;
@@ -488,6 +489,18 @@ fn generate_pair_reactions_for_seed(
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
+            for carbonyl in space.participants_of(&FunctionalGroupType::Carbonyl) {
+                let reaction = generate_acetal_formation(
+                    carbonyl.substance,
+                    carbonyl.structure,
+                    carbonyl.group()?,
+                    seed.substance,
+                    seed.structure,
+                    seed.group()?,
+                    resolver,
+                )?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
         }
         FunctionalGroupType::AcylChloride => {
             for alcohol in space.participants_of(&FunctionalGroupType::Alcohol) {
@@ -523,6 +536,46 @@ fn generate_pair_reactions_for_seed(
                     halide.substance,
                     halide.structure,
                     halide.group()?,
+                    seed.substance,
+                    seed.structure,
+                    seed.group()?,
+                    resolver,
+                )?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+        }
+        FunctionalGroupType::Carbonyl => {
+            for alcohol in space.participants_of(&FunctionalGroupType::Alcohol) {
+                let reaction = generate_acetal_formation(
+                    seed.substance,
+                    seed.structure,
+                    seed.group()?,
+                    alcohol.substance,
+                    alcohol.structure,
+                    alcohol.group()?,
+                    resolver,
+                )?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+            for amine in space.participants_of(&FunctionalGroupType::PrimaryAmine) {
+                let reaction = generate_imine_formation(
+                    seed.substance,
+                    seed.structure,
+                    seed.group()?,
+                    amine.substance,
+                    amine.structure,
+                    amine.group()?,
+                    resolver,
+                )?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+        }
+        FunctionalGroupType::PrimaryAmine => {
+            for carbonyl in space.participants_of(&FunctionalGroupType::Carbonyl) {
+                let reaction = generate_imine_formation(
+                    carbonyl.substance,
+                    carbonyl.structure,
+                    carbonyl.group()?,
                     seed.substance,
                     seed.structure,
                     seed.group()?,
@@ -712,6 +765,158 @@ fn generate_carboxylic_acid_esterification(
     .product(product, 1)
     .product("destroy:water", 1)
     .build())
+}
+
+fn generate_acetal_formation(
+    carbonyl: &Substance,
+    carbonyl_structure: &MolecularStructure,
+    carbonyl_group: &FunctionalGroup,
+    alcohol: &Substance,
+    alcohol_structure: &MolecularStructure,
+    alcohol_group: &FunctionalGroup,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let carbonyl_carbon = carbonyl_group.atoms[0];
+    let carbonyl_oxygen = carbonyl_group.atoms[1];
+    let (alcohol_fragment, alcohol_oxygen) =
+        deprotonated_alcohol_fragment(alcohol_structure, alcohol_group, "acetal formation")?;
+
+    let mut carbonyl_editor = MolecularEditor::new(carbonyl_structure);
+    let carbonyl_mapping = carbonyl_editor.remove_atoms(&[carbonyl_oxygen])?;
+    let carbonyl_carbon = mapped_atom(&carbonyl_mapping, carbonyl_carbon, "carbonyl carbon")?;
+    let mut product_editor = MolecularEditor::new(&carbonyl_editor.finish()?);
+    product_editor.add_group(carbonyl_carbon, &alcohol_fragment, alcohol_oxygen, 1.0)?;
+    product_editor.add_group(carbonyl_carbon, &alcohol_fragment, alcohol_oxygen, 1.0)?;
+    product_editor.mark_tetrahedral_stereo_mixture_if_valid(carbonyl_carbon)?;
+    let product_variants = expand_stereo_product_distribution(product_editor.finish()?)?;
+
+    let mut builder = Reaction::builder(generated_pair_group_reaction_id(
+        "acetal_formation",
+        carbonyl,
+        carbonyl_group,
+        alcohol,
+        alcohol_group,
+    ))
+    .reactant(carbonyl.id.clone(), 1, 1)
+    .reactant(alcohol.id.clone(), 2, 1)
+    .catalyst_order("destroy:proton", 1)
+    .condition(
+        ReactionCondition::new("acetal formation requires acidic, water-poor conditions")
+            .acidity(AcidityCondition::Acidic)
+            .max_water_activity(0.35),
+    );
+    if product_variants.len() == 1 {
+        let product = resolver.resolve(
+            product_variants
+                .into_iter()
+                .next()
+                .expect("length checked")
+                .structure,
+        )?;
+        builder = builder.product(product, 1);
+        builder = builder.product("destroy:water", 1);
+    } else {
+        for variant in product_variants {
+            builder = builder.channel(ReactionChannel::new(
+                format!("acetal_formation:stereo:{}", variant.channel_suffix),
+                [
+                    StoichiometricTerm::new(resolver.resolve(variant.structure)?, 1),
+                    StoichiometricTerm::new("destroy:water", 1),
+                ],
+                25.0 + variant.activation_delta_kj_per_mol,
+            ));
+        }
+        return Ok(builder.build());
+    }
+    Ok(builder.build())
+}
+
+fn generate_imine_formation(
+    carbonyl: &Substance,
+    carbonyl_structure: &MolecularStructure,
+    carbonyl_group: &FunctionalGroup,
+    amine: &Substance,
+    amine_structure: &MolecularStructure,
+    amine_group: &FunctionalGroup,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let carbonyl_carbon = carbonyl_group.atoms[0];
+    let carbonyl_oxygen = carbonyl_group.atoms[1];
+    let amine_nitrogen = amine_group.atoms[1];
+    let hydrogens = explicit_group_hydrogens(
+        amine_structure,
+        amine_group,
+        amine_nitrogen,
+        "imine formation",
+    )?;
+    if hydrogens.len() < 2 {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: generated_pair_group_reaction_id(
+                "imine_formation",
+                carbonyl,
+                carbonyl_group,
+                amine,
+                amine_group,
+            ),
+            reason: "primary amine must have two explicit hydrogens for imine formation"
+                .to_string(),
+        });
+    }
+
+    let mut carbonyl_editor = MolecularEditor::new(carbonyl_structure);
+    let carbonyl_mapping = carbonyl_editor.remove_atoms(&[carbonyl_oxygen])?;
+    let carbonyl_carbon = mapped_atom(&carbonyl_mapping, carbonyl_carbon, "carbonyl carbon")?;
+    let carbonyl_fragment = carbonyl_editor.finish()?;
+
+    let mut amine_editor = MolecularEditor::new(amine_structure);
+    let amine_mapping = amine_editor.remove_atoms(&[hydrogens[0], hydrogens[1]])?;
+    let amine_nitrogen = mapped_atom(&amine_mapping, amine_nitrogen, "amine nitrogen")?;
+    let amine_fragment = amine_editor.finish()?;
+
+    let product_structure = MolecularEditor::join_structures(
+        &carbonyl_fragment,
+        carbonyl_carbon,
+        &amine_fragment,
+        amine_nitrogen,
+        2.0,
+    )?;
+    let product = resolver.resolve(product_structure)?;
+    Ok(Reaction::builder(generated_pair_group_reaction_id(
+        "imine_formation",
+        carbonyl,
+        carbonyl_group,
+        amine,
+        amine_group,
+    ))
+    .reactant(carbonyl.id.clone(), 1, 1)
+    .reactant(amine.id.clone(), 1, 1)
+    .product(product, 1)
+    .product("destroy:water", 1)
+    .catalyst_order("destroy:proton", 1)
+    .condition(
+        ReactionCondition::new("imine formation requires acidic, water-poor conditions")
+            .acidity(AcidityCondition::Acidic)
+            .max_water_activity(0.5),
+    )
+    .build())
+}
+
+fn deprotonated_alcohol_fragment(
+    structure: &MolecularStructure,
+    group: &FunctionalGroup,
+    role: &str,
+) -> ChemistryResult<(MolecularStructure, usize)> {
+    let oxygen = group.atoms[1];
+    let hydrogen = first_bonded_hydrogen(structure, oxygen).ok_or_else(|| {
+        ChemistryError::InvalidReaction {
+            reaction_id: "<generated-organic>".to_string(),
+            reason: format!("{role} alcohol has no explicit hydroxyl hydrogen"),
+        }
+    })?;
+    let mut editor = MolecularEditor::new(structure);
+    let mapping = editor.remove_atoms(&[hydrogen])?;
+    let oxygen = mapped_atom(&mapping, oxygen, "alcohol oxygen")?;
+    Ok((editor.finish()?, oxygen))
 }
 
 fn generate_nitrile_hydrolysis(
@@ -2181,6 +2386,33 @@ mod tests {
             space.participants_of(&FunctionalGroupType::Alcohol).count(),
             0
         );
+    }
+
+    #[test]
+    fn acetal_and_imine_generators_create_concrete_products_with_conditions() {
+        let registry = generated_registry();
+        let acetal = reaction_with_prefix(&registry, "acetal_formation/");
+        assert!(acetal
+            .conditions
+            .iter()
+            .any(|condition| condition.acidity == Some(AcidityCondition::Acidic)));
+        assert!(acetal
+            .products
+            .iter()
+            .chain(
+                acetal
+                    .channels
+                    .iter()
+                    .flat_map(|channel| channel.products.iter())
+            )
+            .any(|term| term.substance_id.as_str() == "destroy:water"));
+
+        let imine = reaction_with_prefix(&registry, "imine_formation/");
+        assert!(imine
+            .conditions
+            .iter()
+            .any(|condition| condition.max_water_activity.is_some()));
+        assert!(imine.products.len() >= 2);
     }
 
     #[test]

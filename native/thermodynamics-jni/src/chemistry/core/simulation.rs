@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::catalysis::{CatalystSurfaceId, CatalystSurfaceState, SurfaceStep};
+use super::condition::evaluate_reaction_conditions;
 use super::error::{ChemistryError, ChemistryResult};
 use super::kinetics::{channel_rate_sum_per_second, LightBand};
 use super::mixture::{Mixture, MixturePhase, TRACE_CONCENTRATION_MOL_PER_BUCKET};
@@ -338,6 +339,12 @@ pub fn reaction_rate_mol_per_bucket_per_tick_with_context(
     if !redox_environment_allows_reaction(registry, mixture, reaction)? {
         return Ok(0.0);
     }
+    let condition_evaluation =
+        evaluate_reaction_conditions(registry, mixture, &reaction.conditions)?;
+    if !condition_evaluation.allowed {
+        return Ok(0.0);
+    }
+    rate *= condition_evaluation.multiplier;
     if reaction.requires_uv {
         rate *= context.uv_power;
     }
@@ -388,6 +395,12 @@ fn reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
     if !redox_environment_allows_reaction(registry, mixture, reaction)? {
         return Ok(0.0);
     }
+    let condition_evaluation =
+        evaluate_reaction_conditions(registry, mixture, &reaction.conditions)?;
+    if !condition_evaluation.allowed {
+        return Ok(0.0);
+    }
+    rate *= condition_evaluation.multiplier;
     if reaction.requires_uv {
         rate *= context.uv_power;
     }

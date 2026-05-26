@@ -508,6 +508,35 @@ impl MolecularEditor {
         Ok(group_root + offset)
     }
 
+    pub fn add_bond(&mut self, first: usize, second: usize, order: f64) -> ChemistryResult<()> {
+        if first >= self.atoms.len() || second >= self.atoms.len() || first == second {
+            return Err(invalid_structure(
+                &self.source_code,
+                "bond atom does not exist",
+            ));
+        }
+        if self.bonds.iter().any(|bond| {
+            (bond.from == first && bond.to == second) || (bond.from == second && bond.to == first)
+        }) {
+            return Err(invalid_structure(&self.source_code, "bond already exists"));
+        }
+        if !order.is_finite() || order <= 0.0 {
+            return Err(invalid_structure(
+                &self.source_code,
+                "bond order must be positive and finite",
+            ));
+        }
+        self.bonds.push(MolecularBond {
+            from: first,
+            to: second,
+            order,
+        });
+        self.clear_stereo_at_atom(first);
+        self.clear_stereo_at_atom(second);
+        self.modified = true;
+        Ok(())
+    }
+
     pub fn remove_atom(&mut self, atom_index: usize) -> ChemistryResult<()> {
         if atom_index >= self.atoms.len() {
             return Err(invalid_structure(
