@@ -8,7 +8,8 @@ use super::molecule::{
 use super::registry::{ChemistryRegistryBuilder, GasSolubilityModel, SolventMiscibility};
 use super::solution::{AcidBaseSpec, EquilibriumSpec};
 use super::substance::{
-    LiquidPhasePreference, Substance, SubstanceId, SubstancePhaseProperties, SubstanceTagId,
+    LiquidPhasePreference, SolventRole, Substance, SubstanceId, SubstancePhaseProperties,
+    SubstanceTagId,
 };
 
 const DEFAULT_DENSITY_GRAMS_PER_BUCKET: f64 = 1000.0;
@@ -330,7 +331,7 @@ fn estimate_phase_properties(
     tags: &[&str],
 ) -> SubstancePhaseProperties {
     if id == "water" {
-        return SubstancePhaseProperties::aqueous_unlimited();
+        return SubstancePhaseProperties::aqueous_solvent();
     }
     if matches!(id, "proton" | "hydroxide") {
         return SubstancePhaseProperties {
@@ -339,6 +340,7 @@ fn estimate_phase_properties(
             organic_solubility_mol_per_bucket: Some(0.0),
             can_precipitate: false,
             can_form_liquid_phase: true,
+            solvent_role: SolventRole::NotSolvent,
         };
     }
     if summary.charge != 0 {
@@ -348,6 +350,7 @@ fn estimate_phase_properties(
             organic_solubility_mol_per_bucket: Some(0.0),
             can_precipitate: true,
             can_form_liquid_phase: false,
+            solvent_role: SolventRole::NotSolvent,
         };
     }
     if tags.contains(&"solvent") {
@@ -360,6 +363,7 @@ fn estimate_phase_properties(
             organic_solubility_mol_per_bucket: Some(0.25),
             can_precipitate: false,
             can_form_liquid_phase: true,
+            solvent_role: SolventRole::KnownSolvent,
         };
     }
     SubstancePhaseProperties::organic_unlimited(0.05)

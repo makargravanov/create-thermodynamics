@@ -11,7 +11,8 @@ use super::reaction::{Reaction, ReactionId};
 use super::registry::{ChemistryRegistry, ChemistryRegistryBuilder, SubstanceIndex};
 use super::solution::AcidBaseSpec;
 use super::substance::{
-    LiquidPhasePreference, Substance, SubstanceId, SubstancePhaseProperties, SubstanceTagId,
+    LiquidPhasePreference, SolventRole, Substance, SubstanceId, SubstancePhaseProperties,
+    SubstanceTagId,
 };
 
 const DEFAULT_DYNAMIC_DENSITY: f64 = 1000.0;
@@ -1510,10 +1511,17 @@ fn estimate_dynamic_phase_properties(
             organic_solubility_mol_per_bucket: Some(0.0),
             can_precipitate: true,
             can_form_liquid_phase: false,
+            solvent_role: SolventRole::NotSolvent,
         };
     }
 
     let can_precipitate = estimate.solid_forming_tendency >= 0.7;
+    let can_be_solvent = conservative_dynamic_solvent_candidate(&estimate, molar_mass_grams);
+    let solvent_role = if can_be_solvent {
+        SolventRole::ConservativePredictedSolvent
+    } else {
+        SolventRole::NotSolvent
+    };
     if estimate.estimated_log_p <= -0.5 || estimate.polarity_score >= 4.0 {
         let organic_solubility = (0.35
             - estimate.polarity_score * 0.04
@@ -1524,7 +1532,8 @@ fn estimate_dynamic_phase_properties(
             aqueous_solubility_mol_per_bucket: None,
             organic_solubility_mol_per_bucket: Some(organic_solubility),
             can_precipitate,
-            can_form_liquid_phase: false,
+            can_form_liquid_phase: can_be_solvent,
+            solvent_role,
         }
     } else if estimate.estimated_log_p >= 1.0 {
         let aqueous_solubility = (0.08
@@ -1537,7 +1546,8 @@ fn estimate_dynamic_phase_properties(
             aqueous_solubility_mol_per_bucket: Some(aqueous_solubility),
             organic_solubility_mol_per_bucket: None,
             can_precipitate,
-            can_form_liquid_phase: false,
+            can_form_liquid_phase: can_be_solvent,
+            solvent_role,
         }
     } else if estimate.carbon_count >= estimate.hetero_atom_count {
         SubstancePhaseProperties {
@@ -1547,7 +1557,8 @@ fn estimate_dynamic_phase_properties(
             ),
             organic_solubility_mol_per_bucket: None,
             can_precipitate,
-            can_form_liquid_phase: false,
+            can_form_liquid_phase: can_be_solvent,
+            solvent_role,
         }
     } else {
         SubstancePhaseProperties {
@@ -1555,9 +1566,22 @@ fn estimate_dynamic_phase_properties(
             aqueous_solubility_mol_per_bucket: None,
             organic_solubility_mol_per_bucket: Some(0.2),
             can_precipitate,
-            can_form_liquid_phase: false,
+            can_form_liquid_phase: can_be_solvent,
+            solvent_role,
         }
     }
+}
+
+fn conservative_dynamic_solvent_candidate(
+    estimate: &DynamicPhaseEstimate,
+    molar_mass_grams: f64,
+) -> bool {
+    !estimate.ionic
+        && molar_mass_grams <= 150.0
+        && estimate.solid_forming_tendency < 0.35
+        && estimate.carbon_count > 0
+        && estimate.hetero_atom_count <= 4
+        && estimate.polarity_score <= 4.0
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1773,7 +1797,11 @@ mod tests {
             substance.phase_properties.organic_solubility_mol_per_bucket,
             None
         );
-        assert!(!substance.phase_properties.can_form_liquid_phase);
+        assert!(substance.phase_properties.can_form_liquid_phase);
+        assert_eq!(
+            substance.phase_properties.solvent_role,
+            SolventRole::ConservativePredictedSolvent
+        );
     }
 
     #[test]
@@ -1815,6 +1843,21 @@ mod tests {
         assert!(properties
             .organic_solubility_mol_per_bucket
             .is_some_and(|value| value < 0.2));
+        assert_eq!(properties.solvent_role, SolventRole::NotSolvent);
+    }
+
+    #[test]
+    fn dynamic_ethanol_like_molecule_is_conservative_predicted_solvent() {
+        let structure = parse_frowns("CCO").unwrap();
+        let summary = structure.summary().unwrap();
+        let properties =
+            estimate_dynamic_phase_properties(summary.charge, summary.molar_mass_grams, &structure);
+
+        assert!(properties.can_form_liquid_phase);
+        assert_eq!(
+            properties.solvent_role,
+            SolventRole::ConservativePredictedSolvent
+        );
     }
 
     #[test]
@@ -1829,6 +1872,7 @@ mod tests {
             LiquidPhasePreference::Organic
         );
         assert!(properties.can_precipitate);
+        assert_eq!(properties.solvent_role, SolventRole::NotSolvent);
         assert!(properties
             .aqueous_solubility_mol_per_bucket
             .is_some_and(|value| value < 0.1));

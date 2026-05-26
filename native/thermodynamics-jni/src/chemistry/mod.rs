@@ -570,6 +570,9 @@ mod tests {
         let registry = test_registry();
         let mut mixture = Mixture::new(298.0).unwrap();
         mixture
+            .add_substance(&registry, "destroy:water", 1.0)
+            .unwrap();
+        mixture
             .add_substance(&registry, "destroy:proton", 0.1)
             .unwrap();
         mixture
@@ -836,6 +839,9 @@ mod tests {
     fn complex_equilibrium_binds_free_metal_and_ligands() {
         let registry = destroy_registry_builder().unwrap().build().unwrap();
         let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 1.0)
+            .unwrap();
         mixture
             .add_substance(&registry, "destroy:copper_ii", 0.01)
             .unwrap();

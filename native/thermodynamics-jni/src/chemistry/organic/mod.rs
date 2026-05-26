@@ -1735,12 +1735,7 @@ fn atomic_stereo_priority(element: &str) -> u16 {
 fn expand_stereo_product_distribution(
     structure: MolecularStructure,
 ) -> ChemistryResult<Vec<StereoProductVariant>> {
-    expand_stereo_product_distribution_with_parameters(
-        structure,
-        "single".to_string(),
-        0.0,
-        1.0,
-    )
+    expand_stereo_product_distribution_with_parameters(structure, "single".to_string(), 0.0, 1.0)
 }
 
 fn expand_stereo_product_distribution_with_parameters(

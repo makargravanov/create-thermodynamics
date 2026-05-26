@@ -109,6 +109,13 @@ pub enum LiquidPhasePreference {
     Organic,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum SolventRole {
+    NotSolvent,
+    KnownSolvent,
+    ConservativePredictedSolvent,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubstancePhaseBehavior {
     pub preferred_liquid_phase: LiquidPhasePreference,
@@ -116,6 +123,7 @@ pub struct SubstancePhaseBehavior {
     pub organic_solubility_mol_per_bucket: Option<f64>,
     pub can_precipitate: bool,
     pub can_form_liquid_phase: bool,
+    pub solvent_role: SolventRole,
 }
 
 pub type SubstancePhaseProperties = SubstancePhaseBehavior;
@@ -128,6 +136,14 @@ impl SubstancePhaseBehavior {
             organic_solubility_mol_per_bucket: Some(0.0),
             can_precipitate: false,
             can_form_liquid_phase: true,
+            solvent_role: SolventRole::NotSolvent,
+        }
+    }
+
+    pub fn aqueous_solvent() -> Self {
+        Self {
+            solvent_role: SolventRole::KnownSolvent,
+            ..Self::aqueous_unlimited()
         }
     }
 
@@ -138,6 +154,7 @@ impl SubstancePhaseBehavior {
             organic_solubility_mol_per_bucket: None,
             can_precipitate: false,
             can_form_liquid_phase: true,
+            solvent_role: SolventRole::KnownSolvent,
         }
     }
 
@@ -148,6 +165,7 @@ impl SubstancePhaseBehavior {
             organic_solubility_mol_per_bucket: None,
             can_precipitate: false,
             can_form_liquid_phase: false,
+            solvent_role: SolventRole::NotSolvent,
         }
     }
 
@@ -168,6 +186,18 @@ impl SubstancePhaseBehavior {
                 reason: "charged substances must prefer the aqueous phase".to_string(),
             });
         }
+        if charge != 0 && self.solvent_role != SolventRole::NotSolvent {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: substance_id.to_string(),
+                reason: "charged substances must not be solvents".to_string(),
+            });
+        }
+        if self.solvent_role != SolventRole::NotSolvent && !self.can_form_liquid_phase {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: substance_id.to_string(),
+                reason: "solvents must be able to form a liquid phase".to_string(),
+            });
+        }
         Ok(())
     }
 }
@@ -182,8 +212,23 @@ impl Substance {
         molar_heat_capacity_j_per_mol_kelvin: f64,
         latent_heat_j_per_mol: f64,
     ) -> Self {
+        let id = id.into();
+        let phase_properties = if id.as_str() == "destroy:water" || id.as_str() == "water" {
+            SubstancePhaseProperties::aqueous_solvent()
+        } else if charge == 0 {
+            SubstancePhaseProperties::organic_unlimited(0.05)
+        } else {
+            SubstancePhaseProperties {
+                preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+                aqueous_solubility_mol_per_bucket: Some(10.0),
+                organic_solubility_mol_per_bucket: Some(0.0),
+                can_precipitate: true,
+                can_form_liquid_phase: false,
+                solvent_role: SolventRole::NotSolvent,
+            }
+        };
         Self {
-            id: id.into(),
+            id,
             charge,
             molar_mass_grams,
             liquid_density_grams_per_bucket,
@@ -199,17 +244,7 @@ impl Substance {
             translation_key: None,
             color_argb: 0x20FF_FFFF,
             tags: Vec::new(),
-            phase_properties: if charge == 0 {
-                SubstancePhaseProperties::organic_unlimited(0.05)
-            } else {
-                SubstancePhaseProperties {
-                    preferred_liquid_phase: LiquidPhasePreference::Aqueous,
-                    aqueous_solubility_mol_per_bucket: Some(10.0),
-                    organic_solubility_mol_per_bucket: Some(0.0),
-                    can_precipitate: true,
-                    can_form_liquid_phase: false,
-                }
-            },
+            phase_properties,
             redox_roles: Vec::new(),
             explicit_oxidation_states: Vec::new(),
         }
@@ -231,6 +266,14 @@ impl Substance {
 
     pub fn with_phase_properties(mut self, phase_properties: SubstancePhaseProperties) -> Self {
         self.phase_properties = phase_properties;
+        self
+    }
+
+    pub fn with_solvent_role(mut self, solvent_role: SolventRole) -> Self {
+        self.phase_properties.solvent_role = solvent_role;
+        if solvent_role != SolventRole::NotSolvent {
+            self.phase_properties.can_form_liquid_phase = true;
+        }
         self
     }
 

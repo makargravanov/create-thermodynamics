@@ -2,7 +2,8 @@ use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::MixturePhase;
 use super::solution::EquilibriumSpec;
 use super::substance::{
-    LiquidPhasePreference, Substance, SubstanceId, SubstancePhaseProperties, SubstanceTagId,
+    LiquidPhasePreference, SolventRole, Substance, SubstanceId, SubstancePhaseProperties,
+    SubstanceTagId,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -169,6 +170,7 @@ impl ComplexSpec {
             organic_solubility_mol_per_bucket: Some(0.0),
             can_precipitate: true,
             can_form_liquid_phase: false,
+            solvent_role: SolventRole::NotSolvent,
         }))
     }
 }

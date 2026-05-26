@@ -469,8 +469,13 @@ mod tests {
     use crate::chemistry::substance::{Substance, SubstancePhaseProperties};
 
     fn aqueous_substance(id: &str, charge: i32, mass: f64) -> Substance {
+        let phase_properties = if id == "destroy:water" {
+            SubstancePhaseProperties::aqueous_solvent()
+        } else {
+            SubstancePhaseProperties::aqueous_unlimited()
+        };
         Substance::new(id, charge, mass, 1_000.0, 10_000.0, 75.0, 20_000.0)
-            .with_phase_properties(SubstancePhaseProperties::aqueous_unlimited())
+            .with_phase_properties(phase_properties)
     }
 
     fn acid_registry() -> ChemistryRegistry {

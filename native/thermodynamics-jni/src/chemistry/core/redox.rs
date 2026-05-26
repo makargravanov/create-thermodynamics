@@ -924,6 +924,9 @@ mod tests {
 
         let mut without_acid = Mixture::new(298.0).unwrap();
         without_acid
+            .add_substance(&registry, "destroy:water", 1.0)
+            .unwrap();
+        without_acid
             .add_substance(&registry, "destroy:iron_ii", 0.2)
             .unwrap();
         without_acid

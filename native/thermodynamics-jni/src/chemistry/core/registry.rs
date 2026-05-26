@@ -11,7 +11,9 @@ use super::redox::{
     validate_redox_pair, RedoxHalfReaction, RedoxPair,
 };
 use super::solution::{AcidBaseSpec, EquilibriumSpec, IndexedEquilibrium, IndexedEquilibriumTerm};
-use super::substance::{Substance, SubstanceAggregateState, SubstanceId, SubstanceTagId};
+use super::substance::{
+    SolventRole, Substance, SubstanceAggregateState, SubstanceId, SubstanceTagId,
+};
 
 const MASS_TOLERANCE_GRAMS_PER_MOL: f64 = 1.0e-6;
 const THERMO_TOLERANCE: f64 = 1.0e-6;
@@ -1203,7 +1205,9 @@ fn build_solvent_miscibility(
 }
 
 fn validate_solvent_for_miscibility(substance: &Substance) -> ChemistryResult<()> {
-    if !substance.phase_properties.can_form_liquid_phase {
+    if substance.phase_properties.solvent_role == SolventRole::NotSolvent
+        || !substance.phase_properties.can_form_liquid_phase
+    {
         return Err(ChemistryError::InvalidSubstance {
             substance_id: substance.id.to_string(),
             reason: "miscibility table may only reference liquid-forming solvents".to_string(),

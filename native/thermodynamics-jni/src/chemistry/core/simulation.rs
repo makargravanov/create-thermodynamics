@@ -1100,28 +1100,20 @@ fn add_external(
 mod tests {
     use super::*;
     use crate::chemistry::registry::ChemistryRegistryBuilder;
-    use crate::chemistry::substance::{LiquidPhasePreference, Substance, SubstancePhaseProperties};
+    use crate::chemistry::substance::{
+        LiquidPhasePreference, SolventRole, Substance, SubstancePhaseProperties,
+    };
 
     fn simple_registry(reaction: Reaction) -> ChemistryRegistry {
         ChemistryRegistryBuilder::new()
-            .substance(Substance::new(
-                "destroy:a",
-                0,
-                10.0,
-                10_000.0,
-                500.0,
-                100.0,
-                20_000.0,
-            ))
-            .substance(Substance::new(
-                "destroy:b",
-                0,
-                10.0,
-                10_000.0,
-                500.0,
-                100.0,
-                20_000.0,
-            ))
+            .substance(
+                Substance::new("destroy:a", 0, 10.0, 10_000.0, 500.0, 100.0, 20_000.0)
+                    .with_phase_properties(SubstancePhaseProperties::organic_solute(0.0)),
+            )
+            .substance(
+                Substance::new("destroy:b", 0, 10.0, 10_000.0, 500.0, 100.0, 20_000.0)
+                    .with_phase_properties(SubstancePhaseProperties::organic_solute(0.0)),
+            )
             .substance(Substance::new(
                 "destroy:solvent",
                 0,
@@ -1138,6 +1130,15 @@ mod tests {
 
     fn precipitate_registry(reaction: Reaction) -> ChemistryRegistry {
         ChemistryRegistryBuilder::new()
+            .substance(Substance::new(
+                "destroy:water",
+                0,
+                18.0,
+                18_000.0,
+                373.0,
+                75.0,
+                40_650.0,
+            ))
             .substance(
                 Substance::new(
                     "destroy:solid_reactant",
@@ -1154,6 +1155,7 @@ mod tests {
                     organic_solubility_mol_per_bucket: Some(0.0),
                     can_precipitate: true,
                     can_form_liquid_phase: false,
+                    solvent_role: SolventRole::NotSolvent,
                 }),
             )
             .substance(Substance::new(
@@ -1186,6 +1188,9 @@ mod tests {
         let mut invalid_reaction = registry.reaction_by_index(reaction_index).unwrap().clone();
         invalid_reaction.enthalpy_change_kj_per_mol = f64::INFINITY;
         let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:solvent", 1.0)
+            .unwrap();
         mixture.add_substance(&registry, "destroy:a", 1.0).unwrap();
         let mut context = ReactionContext::default();
 
@@ -1201,6 +1206,7 @@ mod tests {
 
         assert!(matches!(error, ChemistryError::InvalidMixtureState(_)));
         assert_eq!(mixture.concentration_of(&"destroy:a".into()), 1.0);
+        assert_eq!(mixture.concentration_of(&"destroy:solvent".into()), 1.0);
         assert_eq!(mixture.concentration_of(&"destroy:b".into()), 0.0);
         assert_eq!(mixture.temperature_kelvin(), 298.0);
         assert!(context.reaction_results.is_empty());
@@ -1243,14 +1249,14 @@ mod tests {
         );
         let mut mixture = Mixture::new(298.0).unwrap();
         mixture
+            .add_substance(&registry, "destroy:solvent", 1.0)
+            .unwrap();
+        mixture
             .add_substance(
                 &registry,
                 "destroy:a",
                 EQUILIBRIUM_EPSILON_MOL_PER_BUCKET / 10.0,
             )
-            .unwrap();
-        mixture
-            .add_substance(&registry, "destroy:solvent", 1.0)
             .unwrap();
 
         let changed = react_for_tick(&registry, &mut mixture, 1).unwrap();
@@ -1273,15 +1279,17 @@ mod tests {
         let product: crate::chemistry::substance::SubstanceId = "destroy:product".into();
         let mut mixture = Mixture::new(298.0).unwrap();
         mixture
+            .add_substance(&registry, "destroy:water", 1.0)
+            .unwrap();
+        mixture
             .add_substance(&registry, reactant.clone(), 1.0)
             .unwrap();
 
         react_for_tick(&registry, &mut mixture, 1).unwrap();
 
         assert!((mixture.concentration_of(&reactant) - 0.9).abs() < 1.0e-9);
-        assert_eq!(
-            mixture.concentration_in_phase(&reactant, MixturePhase::Aqueous),
-            0.1
+        assert!(
+            (mixture.concentration_in_phase(&reactant, MixturePhase::Aqueous) - 0.1).abs() < 1.0e-9
         );
         assert_eq!(
             mixture.concentration_in_phase(&reactant, MixturePhase::Solid),
