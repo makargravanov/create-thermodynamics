@@ -1,5 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+mod catalog;
+#[allow(dead_code)]
+pub(crate) mod centers;
+mod resolver;
+#[allow(dead_code)]
+pub(crate) mod solver;
+mod space;
+
 use super::condition::{AcidityCondition, AtmosphereCondition, ReactionCondition};
 use super::error::{ChemistryError, ChemistryResult};
 use super::kinetics::ReactionChannel;
@@ -8,13 +16,13 @@ use super::molecule::{
     TetrahedralStereo,
 };
 use super::reaction::{Reaction, StoichiometricTerm};
-use super::reactive_site::{try_find_reactive_sites, ReactiveSite, ReactiveSiteKind};
+use super::reactive_site::{ReactiveSite, ReactiveSiteKind};
 use super::registry::{ChemistryRegistry, ChemistryRegistryBuilder};
 use super::substance::{Substance, SubstanceId};
 
-const DEFAULT_DERIVED_DENSITY: f64 = 1000.0;
-const DEFAULT_DERIVED_HEAT_CAPACITY: f64 = 100.0;
-const DEFAULT_DERIVED_LATENT_HEAT: f64 = 20_000.0;
+pub(crate) use catalog::GeneratedOrganicCatalog;
+use resolver::DerivedSubstanceResolver;
+pub(crate) use space::{GenerationScope, OrganicGenerationSpace, SiteParticipant};
 
 pub fn destroy_registry_with_generated_reactions_builder(
 ) -> ChemistryResult<ChemistryRegistryBuilder> {
@@ -28,169 +36,6 @@ pub fn destroy_registry_with_generated_reactions_builder(
         builder = builder.reaction(reaction);
     }
     Ok(builder)
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct GeneratedOrganicCatalog {
-    pub(crate) substances: Vec<Substance>,
-    pub(crate) reactions: Vec<Reaction>,
-}
-
-struct GenerationScope {
-    substances: BTreeSet<SubstanceId>,
-}
-
-impl GenerationScope {
-    fn all(registry: &ChemistryRegistry) -> Self {
-        Self {
-            substances: registry
-                .substances()
-                .map(|substance| substance.id.clone())
-                .collect(),
-        }
-    }
-
-    #[cfg(test)]
-    fn from_substances(substances: &BTreeSet<SubstanceId>) -> Self {
-        Self {
-            substances: substances.clone(),
-        }
-    }
-
-    fn contains(&self, substance_id: &SubstanceId) -> bool {
-        self.substances.contains(substance_id)
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct SiteParticipant<'a> {
-    pub(crate) substance: &'a Substance,
-    pub(crate) structure: &'a MolecularStructure,
-    pub(crate) site: ReactiveSite,
-}
-
-impl<'a> SiteParticipant<'a> {
-    fn is_seed(&self, seeds: Option<&BTreeSet<SubstanceId>>) -> bool {
-        seeds.is_none_or(|seeds| seeds.contains(&self.substance.id))
-    }
-}
-
-pub(crate) struct OrganicGenerationSpace<'a> {
-    all_substances: Vec<&'a Substance>,
-    participants_by_site: BTreeMap<ReactiveSiteKind, Vec<SiteParticipant<'a>>>,
-}
-
-impl<'a> OrganicGenerationSpace<'a> {
-    fn new(
-        substances: impl IntoIterator<Item = &'a Substance>,
-        scope: &GenerationScope,
-    ) -> ChemistryResult<Self> {
-        let mut all_substances = Vec::new();
-        let mut participants_by_site: BTreeMap<ReactiveSiteKind, Vec<SiteParticipant<'a>>> =
-            BTreeMap::new();
-
-        for substance in substances {
-            all_substances.push(substance);
-            if !scope.contains(&substance.id) {
-                continue;
-            }
-            let Some(structure) = substance.molecular_structure.as_ref() else {
-                continue;
-            };
-            for site in try_find_reactive_sites(structure)? {
-                participants_by_site
-                    .entry(site.kind.clone())
-                    .or_default()
-                    .push(SiteParticipant {
-                        substance,
-                        structure,
-                        site,
-                    });
-            }
-        }
-
-        Ok(Self {
-            all_substances,
-            participants_by_site,
-        })
-    }
-
-    pub(crate) fn from_substances_for_scope(
-        substances: impl IntoIterator<Item = &'a Substance>,
-        scope: &BTreeSet<SubstanceId>,
-    ) -> ChemistryResult<Self> {
-        Self::new(
-            substances,
-            &GenerationScope {
-                substances: scope.clone(),
-            },
-        )
-    }
-
-    fn site_participants(&self) -> impl Iterator<Item = SiteParticipant<'a>> + '_ {
-        self.participants_by_site
-            .values()
-            .flat_map(|participants| participants.iter().cloned())
-    }
-
-    fn sites_of(&self, kind: &ReactiveSiteKind) -> impl Iterator<Item = SiteParticipant<'a>> + '_ {
-        self.participants_by_site
-            .get(kind)
-            .into_iter()
-            .flat_map(|participants| participants.iter().cloned())
-    }
-}
-
-struct DerivedSubstanceResolver {
-    canonical_to_id: BTreeMap<String, SubstanceId>,
-    generated_id_to_canonical: BTreeMap<SubstanceId, String>,
-    substances: Vec<Substance>,
-}
-
-impl DerivedSubstanceResolver {
-    fn new_from_canonical_to_id(canonical_to_id: BTreeMap<String, SubstanceId>) -> Self {
-        Self {
-            canonical_to_id,
-            generated_id_to_canonical: BTreeMap::new(),
-            substances: Vec::new(),
-        }
-    }
-
-    fn resolve(&mut self, structure: MolecularStructure) -> ChemistryResult<SubstanceId> {
-        let canonical = super::frowns::write_frowns(&structure)?;
-        if let Some(id) = self.canonical_to_id.get(&canonical) {
-            return Ok(id.clone());
-        }
-        let id = SubstanceId::new(canonical.clone())?;
-        if let Some(existing) = self.generated_id_to_canonical.get(&id) {
-            if existing != &canonical {
-                return Err(ChemistryError::InvalidSubstance {
-                    substance_id: id.to_string(),
-                    reason: "derived substance id collision".to_string(),
-                });
-            }
-        }
-        let summary = structure.summary()?;
-        let substance = Substance::new(
-            id.clone(),
-            summary.charge,
-            summary.molar_mass_grams,
-            DEFAULT_DERIVED_DENSITY,
-            if summary.charge == 0 {
-                1000.0
-            } else {
-                f64::MAX
-            },
-            DEFAULT_DERIVED_HEAT_CAPACITY,
-            DEFAULT_DERIVED_LATENT_HEAT,
-        )
-        .with_catalog_metadata(Some(canonical.clone()), None, 0x20FF_FFFF, Vec::new())
-        .with_molecular_structure(structure);
-        self.canonical_to_id.insert(canonical.clone(), id.clone());
-        self.generated_id_to_canonical.insert(id.clone(), canonical);
-        self.substances.push(substance);
-        Ok(id)
-    }
 }
 
 #[derive(Clone)]
