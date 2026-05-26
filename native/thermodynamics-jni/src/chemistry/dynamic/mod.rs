@@ -8,7 +8,7 @@ use super::kinetics::EnergyModel;
 use super::molecule::{MolecularEditor, MolecularStructure, Stereochemistry};
 use super::organic::{self, OrganicGenerationSpace};
 use super::reaction::{Reaction, ReactionId};
-use super::reactive_site::find_reactive_sites;
+use super::reactive_site::{find_reactive_sites, ReactiveRole, ReactiveSiteKey, ReactiveSiteKind};
 use super::registry::{ChemistryRegistry, ChemistryRegistryBuilder, SubstanceIndex};
 use super::solution::AcidBaseSpec;
 use super::substance::{
@@ -76,6 +76,10 @@ enum OrganicGeneratorKind {
     AlkyneHydrogenation,
     AlkyneHydroiodination,
     AlkyneIodination,
+    AromaticNitration,
+    EpoxideHydrolysis,
+    OrganometallicCarbonylAddition,
+    AldolAddition,
 }
 
 impl OrganicGeneratorKind {
@@ -125,20 +129,24 @@ impl OrganicGeneratorKind {
             OrganicGeneratorKind::AlkyneHydrogenation => 37,
             OrganicGeneratorKind::AlkyneHydroiodination => 38,
             OrganicGeneratorKind::AlkyneIodination => 39,
+            OrganicGeneratorKind::AromaticNitration => 40,
+            OrganicGeneratorKind::EpoxideHydrolysis => 41,
+            OrganicGeneratorKind::OrganometallicCarbonylAddition => 42,
+            OrganicGeneratorKind::AldolAddition => 43,
         }
     }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-struct GroupHandle {
+struct SiteHandle {
     substance: KnownSubstanceIndex,
-    group_index: usize,
+    site_index: usize,
 }
 
 #[derive(Debug, Clone)]
-struct GroupBucket {
-    group_type: FunctionalGroupType,
-    handles: Vec<GroupHandle>,
+struct SiteBucket {
+    site_kind: ReactiveSiteKind,
+    handles: Vec<SiteHandle>,
 }
 
 #[derive(Debug, Clone)]
@@ -152,9 +160,9 @@ pub struct DynamicChemistryRegistry {
     dynamic_unindexed_reaction_indices: Vec<DynamicReactionIndex>,
     canonical_to_id: BTreeMap<String, SubstanceId>,
     canonical_by_id: BTreeMap<SubstanceId, String>,
-    group_index: Vec<GroupBucket>,
-    group_handles_by_substance: Vec<Vec<GroupHandle>>,
-    processed_generation_masks: Vec<Vec<u64>>,
+    site_index: Vec<SiteBucket>,
+    site_handles_by_substance: Vec<Vec<SiteHandle>>,
+    processed_generation_masks: BTreeMap<(usize, ReactiveSiteKey), u64>,
     dynamic_acid_base_specs: Vec<AcidBaseSpec>,
     energy_model: EnergyModel,
 }
@@ -188,14 +196,14 @@ impl DynamicChemistryRegistry {
             dynamic_unindexed_reaction_indices: Vec::new(),
             canonical_to_id: BTreeMap::new(),
             canonical_by_id: BTreeMap::new(),
-            group_index: Vec::new(),
-            group_handles_by_substance: vec![Vec::new(); static_substance_count],
-            processed_generation_masks: vec![Vec::new(); static_substance_count],
+            site_index: Vec::new(),
+            site_handles_by_substance: vec![Vec::new(); static_substance_count],
+            processed_generation_masks: BTreeMap::new(),
             dynamic_acid_base_specs: Vec::new(),
             energy_model: EnergyModel::new(),
         };
         result.rebuild_canonical_index()?;
-        result.rebuild_group_index();
+        result.rebuild_site_index();
         Ok(result)
     }
 
@@ -588,16 +596,16 @@ impl DynamicChemistryRegistry {
         Ok(())
     }
 
-    fn rebuild_group_index(&mut self) {
-        self.group_index.clear();
-        self.group_handles_by_substance = vec![
+    fn rebuild_site_index(&mut self) {
+        self.site_index.clear();
+        self.site_handles_by_substance = vec![
             Vec::new();
             self.static_registry.substance_count()
                 + self.dynamic_substances.len()
         ];
         let substance_indices = self.static_registry.substance_indices().collect::<Vec<_>>();
         for substance_index in substance_indices {
-            self.add_group_handles_for_substance(KnownSubstanceIndex::Static(substance_index));
+            self.add_site_handles_for_substance(KnownSubstanceIndex::Static(substance_index));
         }
     }
 
@@ -638,9 +646,8 @@ impl DynamicChemistryRegistry {
             .insert(substance.id.clone(), substance_index);
         self.dynamic_substances.push(substance);
         self.dynamic_reaction_index_by_substance.push(Vec::new());
-        self.processed_generation_masks.push(Vec::new());
-        self.group_handles_by_substance.push(Vec::new());
-        self.add_group_handles_for_substance(KnownSubstanceIndex::Dynamic(substance_index));
+        self.site_handles_by_substance.push(Vec::new());
+        self.add_site_handles_for_substance(KnownSubstanceIndex::Dynamic(substance_index));
         self.register_dynamic_acidity_for_substance(substance_index)?;
         Ok(())
     }
@@ -1074,78 +1081,49 @@ impl DynamicChemistryRegistry {
     fn generation_mask_updates_for_substance(
         &self,
         substance_index: KnownSubstanceIndex,
-    ) -> ChemistryResult<Vec<(usize, usize, u64)>> {
-        let Some((group_types, has_reactive_sites)) =
-            self.generation_group_types_for_substance(substance_index)?
-        else {
-            return Ok(Vec::new());
-        };
+    ) -> ChemistryResult<Vec<(usize, ReactiveSiteKey, u64)>> {
+        let site_keys = self.generation_site_keys_for_substance(substance_index)?;
         let slot = known_substance_slot(self.static_registry.substance_count(), substance_index);
         let mut updates = Vec::new();
-        for (group_index, group_type) in group_types.iter().enumerate() {
+        for site_key in site_keys {
             let current_mask = self
                 .processed_generation_masks
-                .get(slot)
-                .and_then(|groups| groups.get(group_index))
+                .get(&(slot, site_key.clone()))
                 .copied()
                 .unwrap_or(0);
             let mut next_mask = current_mask;
-            for generator in generators_for_group(group_type) {
+            for generator in generators_for_site(&site_key.kind, &site_key.roles) {
                 let bit = generator.bit();
                 if next_mask & bit == 0 {
                     next_mask |= bit;
                 }
             }
             if next_mask != current_mask {
-                updates.push((slot, group_index, next_mask));
-            }
-        }
-        if has_reactive_sites {
-            let site_slot = group_types.len();
-            let current_mask = self
-                .processed_generation_masks
-                .get(slot)
-                .and_then(|groups| groups.get(site_slot))
-                .copied()
-                .unwrap_or(0);
-            let site_mask = 1_u64 << 63;
-            if current_mask & site_mask == 0 {
-                updates.push((slot, site_slot, current_mask | site_mask));
+                updates.push((slot, site_key, next_mask));
             }
         }
         Ok(updates)
     }
 
-    fn apply_generation_mask_updates(&mut self, updates: &[(usize, usize, u64)]) {
-        for (slot, group_index, mask) in updates {
-            if self.processed_generation_masks.len() <= *slot {
-                self.processed_generation_masks
-                    .resize(*slot + 1, Vec::new());
-            }
-            if self.processed_generation_masks[*slot].len() <= *group_index {
-                self.processed_generation_masks[*slot].resize(*group_index + 1, 0);
-            }
-            self.processed_generation_masks[*slot][*group_index] = *mask;
+    fn apply_generation_mask_updates(&mut self, updates: &[(usize, ReactiveSiteKey, u64)]) {
+        for (slot, site_key, mask) in updates {
+            self.processed_generation_masks
+                .insert((*slot, site_key.clone()), *mask);
         }
     }
 
-    fn generation_group_types_for_substance(
+    fn generation_site_keys_for_substance(
         &self,
         substance_index: KnownSubstanceIndex,
-    ) -> ChemistryResult<Option<(Vec<FunctionalGroupType>, bool)>> {
+    ) -> ChemistryResult<Vec<ReactiveSiteKey>> {
         let substance = self.substance_by_known_index(substance_index)?;
         let Some(structure) = substance.molecular_structure.as_ref() else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
-        let has_reactive_sites = !find_reactive_sites(structure).is_empty();
-        Ok(Some((
-            substance
-                .functional_groups
-                .iter()
-                .map(|group| group.group_type.clone())
-                .collect(),
-            has_reactive_sites,
-        )))
+        Ok(find_reactive_sites(structure)
+            .into_iter()
+            .map(|site| site.key())
+            .collect())
     }
 
     fn generate_organic_for_known_substances(
@@ -1176,29 +1154,28 @@ impl DynamicChemistryRegistry {
         )
     }
 
-    fn add_group_handles_for_substance(&mut self, substance: KnownSubstanceIndex) {
+    fn add_site_handles_for_substance(&mut self, substance: KnownSubstanceIndex) {
         let Some(substance_data) = self.substance_by_known_index(substance).ok() else {
             return;
         };
-        if substance_data.molecular_structure.is_none() {
+        let Some(structure) = substance_data.molecular_structure.as_ref() else {
             return;
-        }
-        let group_types = substance_data
-            .functional_groups
-            .iter()
-            .map(|group| group.group_type.clone())
+        };
+        let site_kinds = find_reactive_sites(structure)
+            .into_iter()
+            .map(|site| site.kind)
             .collect::<Vec<_>>();
-        for (group_index, group_type) in group_types.into_iter().enumerate() {
-            let handle = GroupHandle {
+        for (site_index, site_kind) in site_kinds.into_iter().enumerate() {
+            let handle = SiteHandle {
                 substance,
-                group_index,
+                site_index,
             };
             let slot = known_substance_slot(self.static_registry.substance_count(), substance);
-            if self.group_handles_by_substance.len() <= slot {
-                self.group_handles_by_substance.resize(slot + 1, Vec::new());
+            if self.site_handles_by_substance.len() <= slot {
+                self.site_handles_by_substance.resize(slot + 1, Vec::new());
             }
-            self.group_handles_by_substance[slot].push(handle);
-            push_group_handle(&mut self.group_index, group_type, handle);
+            self.site_handles_by_substance[slot].push(handle);
+            push_site_handle(&mut self.site_index, site_kind, handle);
         }
     }
 
@@ -1254,50 +1231,61 @@ impl DynamicChemistryRegistry {
     }
 }
 
-fn generators_for_group(group_type: &FunctionalGroupType) -> &'static [OrganicGeneratorKind] {
-    match group_type {
-        FunctionalGroupType::Halide => &[
+fn generators_for_site(
+    site_kind: &ReactiveSiteKind,
+    roles: &[ReactiveRole],
+) -> &'static [OrganicGeneratorKind] {
+    match site_kind {
+        ReactiveSiteKind::Halide => &[
             OrganicGeneratorKind::HalideHydroxideSubstitution,
             OrganicGeneratorKind::HalideAmmoniaSubstitution,
             OrganicGeneratorKind::HalideCyanideSubstitution,
             OrganicGeneratorKind::HalideAmineSubstitution,
         ],
-        FunctionalGroupType::Alcohol => &[
+        ReactiveSiteKind::Alcohol => &[
             OrganicGeneratorKind::AlcoholOxidation,
             OrganicGeneratorKind::AlcoholDehydration,
             OrganicGeneratorKind::ThionylChlorideSubstitution,
             OrganicGeneratorKind::CarboxylicAcidEsterification,
             OrganicGeneratorKind::AcylChlorideEsterification,
         ],
-        FunctionalGroupType::Alkoxide => &[OrganicGeneratorKind::AlkoxideProtonation],
-        FunctionalGroupType::Nitrile => &[
+        ReactiveSiteKind::Alkoxide => &[OrganicGeneratorKind::AlkoxideProtonation],
+        ReactiveSiteKind::Nitrile => &[
             OrganicGeneratorKind::NitrileHydrolysis,
             OrganicGeneratorKind::NitrileHydrogenation,
         ],
-        FunctionalGroupType::Nitro => &[OrganicGeneratorKind::NitroHydrogenation],
-        FunctionalGroupType::AcylChloride => &[
+        ReactiveSiteKind::Nitro => &[OrganicGeneratorKind::NitroHydrogenation],
+        ReactiveSiteKind::AcylChloride => &[
             OrganicGeneratorKind::AcylChlorideHydrolysis,
             OrganicGeneratorKind::AcylChlorideEsterification,
         ],
-        FunctionalGroupType::CarboxylicAcid => &[
+        ReactiveSiteKind::CarboxylicAcid => &[
             OrganicGeneratorKind::AcylChlorideFormation,
             OrganicGeneratorKind::CarboxylicAcidEsterification,
         ],
-        FunctionalGroupType::Carbonyl => &[
+        ReactiveSiteKind::Aldehyde => &[
             OrganicGeneratorKind::AldehydeOxidation,
             OrganicGeneratorKind::CyanideNucleophilicAddition,
             OrganicGeneratorKind::WolffKishnerReduction,
+            OrganicGeneratorKind::OrganometallicCarbonylAddition,
+            OrganicGeneratorKind::AldolAddition,
         ],
-        FunctionalGroupType::UnsubstitutedAmide => &[OrganicGeneratorKind::AmideHydrolysis],
-        FunctionalGroupType::PrimaryAmine => &[OrganicGeneratorKind::AminePhosgenation],
-        FunctionalGroupType::NonTertiaryAmine => &[
+        ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl => &[
+            OrganicGeneratorKind::CyanideNucleophilicAddition,
+            OrganicGeneratorKind::WolffKishnerReduction,
+            OrganicGeneratorKind::OrganometallicCarbonylAddition,
+            OrganicGeneratorKind::AldolAddition,
+        ],
+        ReactiveSiteKind::Amide => &[OrganicGeneratorKind::AmideHydrolysis],
+        ReactiveSiteKind::PrimaryAmine => &[OrganicGeneratorKind::AminePhosgenation],
+        ReactiveSiteKind::NonTertiaryAmine => &[
             OrganicGeneratorKind::CyanamideAddition,
             OrganicGeneratorKind::HalideAmineSubstitution,
         ],
-        FunctionalGroupType::Isocyanate => &[OrganicGeneratorKind::IsocyanateHydrolysis],
-        FunctionalGroupType::Borane => &[OrganicGeneratorKind::BoraneOxidation],
-        FunctionalGroupType::BorateEster => &[OrganicGeneratorKind::BorateEsterHydrolysis],
-        FunctionalGroupType::Alkene => &[
+        ReactiveSiteKind::Isocyanate => &[OrganicGeneratorKind::IsocyanateHydrolysis],
+        ReactiveSiteKind::Borane => &[OrganicGeneratorKind::BoraneOxidation],
+        ReactiveSiteKind::BorateEster => &[OrganicGeneratorKind::BorateEsterHydrolysis],
+        ReactiveSiteKind::Alkene => &[
             OrganicGeneratorKind::AlkeneChlorination,
             OrganicGeneratorKind::AlkeneChlorohydrination,
             OrganicGeneratorKind::AlkeneHydrolysis,
@@ -1307,7 +1295,7 @@ fn generators_for_group(group_type: &FunctionalGroupType) -> &'static [OrganicGe
             OrganicGeneratorKind::AlkeneHydroiodination,
             OrganicGeneratorKind::AlkeneIodination,
         ],
-        FunctionalGroupType::Alkyne => &[
+        ReactiveSiteKind::Alkyne => &[
             OrganicGeneratorKind::AlkyneChlorination,
             OrganicGeneratorKind::AlkyneChlorohydrination,
             OrganicGeneratorKind::AlkyneHydrolysis,
@@ -1317,6 +1305,18 @@ fn generators_for_group(group_type: &FunctionalGroupType) -> &'static [OrganicGe
             OrganicGeneratorKind::AlkyneHydroiodination,
             OrganicGeneratorKind::AlkyneIodination,
         ],
+        ReactiveSiteKind::AromaticRing => &[OrganicGeneratorKind::AromaticNitration],
+        ReactiveSiteKind::Epoxide => &[OrganicGeneratorKind::EpoxideHydrolysis],
+        ReactiveSiteKind::Organomagnesium
+        | ReactiveSiteKind::Organolithium
+        | ReactiveSiteKind::Organocopper => {
+            if roles.contains(&ReactiveRole::Nucleophile) {
+                &[OrganicGeneratorKind::OrganometallicCarbonylAddition]
+            } else {
+                &[]
+            }
+        }
+        ReactiveSiteKind::Enol => &[OrganicGeneratorKind::AldolAddition],
         _ => &[],
     }
 }
@@ -1372,19 +1372,19 @@ fn enqueue_known_substance(
     }
 }
 
-fn push_group_handle(
-    buckets: &mut Vec<GroupBucket>,
-    group_type: FunctionalGroupType,
-    handle: GroupHandle,
+fn push_site_handle(
+    buckets: &mut Vec<SiteBucket>,
+    site_kind: ReactiveSiteKind,
+    handle: SiteHandle,
 ) {
     if let Some(bucket) = buckets
         .iter_mut()
-        .find(|bucket| bucket.group_type == group_type)
+        .find(|bucket| bucket.site_kind == site_kind)
     {
         bucket.handles.push(handle);
     } else {
-        buckets.push(GroupBucket {
-            group_type,
+        buckets.push(SiteBucket {
+            site_kind,
             handles: vec![handle],
         });
     }
@@ -1709,13 +1709,13 @@ mod tests {
     }
 
     #[test]
-    fn resolving_dynamic_substance_updates_group_index() {
+    fn resolving_dynamic_substance_updates_site_index() {
         let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
         let id = registry.resolve_frowns("CCCC=C").unwrap();
         let index = registry.known_substance_index(&id).unwrap();
 
-        assert!(registry.group_index.iter().any(|bucket| bucket.group_type
-            == FunctionalGroupType::Alkene
+        assert!(registry.site_index.iter().any(|bucket| bucket.site_kind
+            == ReactiveSiteKind::Alkene
             && bucket
                 .handles
                 .iter()

@@ -29,6 +29,7 @@ pub enum ReactiveSiteKind {
     Ether,
     Halide,
     Imine,
+    Isocyanate,
     Ketone,
     Nitrile,
     Nitro,
@@ -57,10 +58,27 @@ pub enum ReactiveRole {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ReactiveSiteKey {
+    pub kind: ReactiveSiteKind,
+    pub atoms: Vec<usize>,
+    pub roles: Vec<ReactiveRole>,
+    pub primary_atom: Option<usize>,
+    pub anchor_atoms: Vec<usize>,
+    pub leaving_atom: Option<usize>,
+    pub bond_order: Option<i32>,
+    pub substitution_degree: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReactiveSite {
     pub kind: ReactiveSiteKind,
     pub atoms: Vec<usize>,
     pub roles: Vec<ReactiveRole>,
+    pub primary_atom: Option<usize>,
+    pub anchor_atoms: Vec<usize>,
+    pub leaving_atom: Option<usize>,
+    pub bond_order: Option<i32>,
+    pub substitution_degree: Option<usize>,
 }
 
 impl ReactiveSite {
@@ -75,7 +93,29 @@ impl ReactiveSite {
         let mut roles = roles.into();
         roles.sort();
         roles.dedup();
-        Self { kind, atoms, roles }
+        Self {
+            kind,
+            atoms,
+            roles,
+            primary_atom: None,
+            anchor_atoms: Vec::new(),
+            leaving_atom: None,
+            bond_order: None,
+            substitution_degree: None,
+        }
+    }
+
+    pub fn key(&self) -> ReactiveSiteKey {
+        ReactiveSiteKey {
+            kind: self.kind.clone(),
+            atoms: self.atoms.clone(),
+            roles: self.roles.clone(),
+            primary_atom: self.primary_atom,
+            anchor_atoms: self.anchor_atoms.clone(),
+            leaving_atom: self.leaving_atom,
+            bond_order: self.bond_order,
+            substitution_degree: self.substitution_degree,
+        }
     }
 }
 
@@ -145,9 +185,10 @@ pub fn find_reactive_sites(structure: &MolecularStructure) -> Vec<ReactiveSite> 
                 ReactiveSiteKind::Halide,
                 vec![ReactiveRole::Electrophile, ReactiveRole::LeavingGroup],
             ),
-            FunctionalGroupType::Isocyanate => {
-                (ReactiveSiteKind::Imine, vec![ReactiveRole::Electrophile])
-            }
+            FunctionalGroupType::Isocyanate => (
+                ReactiveSiteKind::Isocyanate,
+                vec![ReactiveRole::Electrophile],
+            ),
             FunctionalGroupType::Nitrile => {
                 (ReactiveSiteKind::Nitrile, vec![ReactiveRole::Electrophile])
             }
@@ -176,6 +217,7 @@ pub fn find_reactive_sites(structure: &MolecularStructure) -> Vec<ReactiveSite> 
     add_nitrogen_sites(structure, &mut sites);
     add_organometallic_sites(structure, &mut sites);
     add_alpha_sites(structure, &mut sites);
+    enrich_sites(structure, &mut sites);
     deduplicate_sites(&mut sites);
     sites
 }
@@ -420,15 +462,91 @@ fn is_aromatic_carbon(structure: &MolecularStructure, atom: usize) -> bool {
             >= 2
 }
 
+fn enrich_sites(structure: &MolecularStructure, sites: &mut [ReactiveSite]) {
+    for site in sites {
+        site.primary_atom = primary_atom_for_site(site);
+        site.anchor_atoms = anchor_atoms_for_site(site);
+        site.leaving_atom = leaving_atom_for_site(structure, site);
+        site.bond_order = bond_order_for_site(structure, site);
+        site.substitution_degree = site.primary_atom.and_then(|atom| {
+            (structure.atoms[atom].element == "C").then(|| structure.carbon_degree(atom))
+        });
+    }
+}
+
+fn primary_atom_for_site(site: &ReactiveSite) -> Option<usize> {
+    match site.kind {
+        ReactiveSiteKind::Alcohol
+        | ReactiveSiteKind::Alkoxide
+        | ReactiveSiteKind::Aldehyde
+        | ReactiveSiteKind::Ketone
+        | ReactiveSiteKind::Carbonyl
+        | ReactiveSiteKind::CarboxylicAcid
+        | ReactiveSiteKind::AcylChloride
+        | ReactiveSiteKind::AcidAnhydride
+        | ReactiveSiteKind::Ester
+        | ReactiveSiteKind::Halide
+        | ReactiveSiteKind::Nitrile
+        | ReactiveSiteKind::Nitro
+        | ReactiveSiteKind::Amide
+        | ReactiveSiteKind::Borane
+        | ReactiveSiteKind::BorateEster
+        | ReactiveSiteKind::Alkene
+        | ReactiveSiteKind::Alkyne
+        | ReactiveSiteKind::Enol
+        | ReactiveSiteKind::AromaticCarbon
+        | ReactiveSiteKind::ArylHalide => site.atoms.first().copied(),
+        ReactiveSiteKind::AromaticRing => None,
+        _ => site.atoms.first().copied(),
+    }
+}
+
+fn anchor_atoms_for_site(site: &ReactiveSite) -> Vec<usize> {
+    match site.kind {
+        ReactiveSiteKind::Alkene
+        | ReactiveSiteKind::Alkyne
+        | ReactiveSiteKind::Carbonyl
+        | ReactiveSiteKind::Aldehyde
+        | ReactiveSiteKind::Ketone
+        | ReactiveSiteKind::Enol
+        | ReactiveSiteKind::Organomagnesium
+        | ReactiveSiteKind::Organolithium
+        | ReactiveSiteKind::Organocopper => site.atoms.iter().copied().take(2).collect(),
+        ReactiveSiteKind::Epoxide => site.atoms.clone(),
+        _ => site
+            .primary_atom
+            .map(|atom| vec![atom])
+            .unwrap_or_else(|| site.atoms.clone()),
+    }
+}
+
+fn leaving_atom_for_site(structure: &MolecularStructure, site: &ReactiveSite) -> Option<usize> {
+    if !site.roles.contains(&ReactiveRole::LeavingGroup) {
+        return None;
+    }
+    site.atoms.iter().copied().find(|atom| {
+        matches!(
+            structure.atoms[*atom].element.as_str(),
+            "F" | "Cl" | "Br" | "I"
+        )
+    })
+}
+
+fn bond_order_for_site(structure: &MolecularStructure, site: &ReactiveSite) -> Option<i32> {
+    let first = *site.anchor_atoms.first()?;
+    let second = *site.anchor_atoms.get(1)?;
+    structure
+        .neighbors(first)
+        .into_iter()
+        .find_map(|(neighbor, order)| {
+            (neighbor == second).then_some((order * 1000.0).round() as i32)
+        })
+}
+
 fn deduplicate_sites(sites: &mut Vec<ReactiveSite>) {
     let mut seen = BTreeSet::new();
-    sites.retain(|site| seen.insert((site.kind.clone(), site.atoms.clone(), site.roles.clone())));
-    sites.sort_by(|left, right| {
-        left.kind
-            .cmp(&right.kind)
-            .then_with(|| left.atoms.cmp(&right.atoms))
-            .then_with(|| left.roles.cmp(&right.roles))
-    });
+    sites.retain(|site| seen.insert(site.key()));
+    sites.sort_by(|left, right| left.key().cmp(&right.key()));
 }
 
 #[cfg(test)]

@@ -63,32 +63,6 @@ impl GenerationScope {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct GroupParticipant<'a> {
-    pub(crate) substance: &'a Substance,
-    pub(crate) structure: &'a MolecularStructure,
-    pub(crate) group_index: usize,
-}
-
-impl<'a> GroupParticipant<'a> {
-    fn group(self) -> ChemistryResult<&'a FunctionalGroup> {
-        self.substance
-            .functional_groups
-            .get(self.group_index)
-            .ok_or_else(|| ChemistryError::InvalidSubstance {
-                substance_id: self.substance.id.to_string(),
-                reason: format!(
-                    "functional group index {} is outside the substance group list",
-                    self.group_index
-                ),
-            })
-    }
-
-    fn is_seed(self, seeds: Option<&BTreeSet<SubstanceId>>) -> bool {
-        seeds.is_none_or(|seeds| seeds.contains(&self.substance.id))
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct SiteParticipant<'a> {
     pub(crate) substance: &'a Substance,
@@ -100,11 +74,14 @@ impl<'a> SiteParticipant<'a> {
     fn is_seed(&self, seeds: Option<&BTreeSet<SubstanceId>>) -> bool {
         seeds.is_none_or(|seeds| seeds.contains(&self.substance.id))
     }
+
+    fn legacy_group(&self) -> ChemistryResult<FunctionalGroup> {
+        legacy_group_from_site(self.substance, self.structure, &self.site)
+    }
 }
 
 pub(crate) struct OrganicGenerationSpace<'a> {
     all_substances: Vec<&'a Substance>,
-    participants_by_group: BTreeMap<FunctionalGroupType, Vec<GroupParticipant<'a>>>,
     participants_by_site: BTreeMap<ReactiveSiteKind, Vec<SiteParticipant<'a>>>,
 }
 
@@ -114,8 +91,6 @@ impl<'a> OrganicGenerationSpace<'a> {
         scope: &GenerationScope,
     ) -> ChemistryResult<Self> {
         let mut all_substances = Vec::new();
-        let mut participants_by_group: BTreeMap<FunctionalGroupType, Vec<GroupParticipant<'a>>> =
-            BTreeMap::new();
         let mut participants_by_site: BTreeMap<ReactiveSiteKind, Vec<SiteParticipant<'a>>> =
             BTreeMap::new();
 
@@ -127,16 +102,6 @@ impl<'a> OrganicGenerationSpace<'a> {
             let Some(structure) = substance.molecular_structure.as_ref() else {
                 continue;
             };
-            for (group_index, group) in substance.functional_groups.iter().enumerate() {
-                participants_by_group
-                    .entry(group.group_type.clone())
-                    .or_default()
-                    .push(GroupParticipant {
-                        substance,
-                        structure,
-                        group_index,
-                    });
-            }
             for site in find_reactive_sites(structure) {
                 participants_by_site
                     .entry(site.kind.clone())
@@ -151,7 +116,6 @@ impl<'a> OrganicGenerationSpace<'a> {
 
         Ok(Self {
             all_substances,
-            participants_by_group,
             participants_by_site,
         })
     }
@@ -168,22 +132,6 @@ impl<'a> OrganicGenerationSpace<'a> {
         )
     }
 
-    fn participants(&self) -> impl Iterator<Item = GroupParticipant<'a>> + '_ {
-        self.participants_by_group
-            .values()
-            .flat_map(|participants| participants.iter().copied())
-    }
-
-    fn participants_of(
-        &self,
-        group_type: &FunctionalGroupType,
-    ) -> impl Iterator<Item = GroupParticipant<'a>> + '_ {
-        self.participants_by_group
-            .get(group_type)
-            .into_iter()
-            .flat_map(|participants| participants.iter().copied())
-    }
-
     fn site_participants(&self) -> impl Iterator<Item = SiteParticipant<'a>> + '_ {
         self.participants_by_site
             .values()
@@ -195,6 +143,17 @@ impl<'a> OrganicGenerationSpace<'a> {
             .get(kind)
             .into_iter()
             .flat_map(|participants| participants.iter().cloned())
+    }
+
+    fn sites_of_legacy_group(
+        &self,
+        group_type: FunctionalGroupType,
+    ) -> impl Iterator<Item = SiteParticipant<'a>> + '_ {
+        self.site_participants().filter(move |participant| {
+            participant
+                .legacy_group()
+                .is_ok_and(|group| group.group_type == group_type)
+        })
     }
 }
 
@@ -250,6 +209,140 @@ impl DerivedSubstanceResolver {
     }
 }
 
+fn legacy_group_from_site(
+    substance: &Substance,
+    structure: &MolecularStructure,
+    site: &ReactiveSite,
+) -> ChemistryResult<FunctionalGroup> {
+    let mut group_type = match site.kind {
+        ReactiveSiteKind::AcidAnhydride => FunctionalGroupType::AcidAnhydride,
+        ReactiveSiteKind::AcylChloride => FunctionalGroupType::AcylChloride,
+        ReactiveSiteKind::Alcohol => FunctionalGroupType::Alcohol,
+        ReactiveSiteKind::Alkene => FunctionalGroupType::Alkene,
+        ReactiveSiteKind::Alkoxide => FunctionalGroupType::Alkoxide,
+        ReactiveSiteKind::Alkyne => FunctionalGroupType::Alkyne,
+        ReactiveSiteKind::Amide => FunctionalGroupType::UnsubstitutedAmide,
+        ReactiveSiteKind::Borane => FunctionalGroupType::Borane,
+        ReactiveSiteKind::BorateEster => FunctionalGroupType::BorateEster,
+        ReactiveSiteKind::CarboxylicAcid => FunctionalGroupType::CarboxylicAcid,
+        ReactiveSiteKind::Ester => FunctionalGroupType::Ester,
+        ReactiveSiteKind::Halide => FunctionalGroupType::Halide,
+        ReactiveSiteKind::Isocyanate => FunctionalGroupType::Isocyanate,
+        ReactiveSiteKind::Nitrile => FunctionalGroupType::Nitrile,
+        ReactiveSiteKind::Nitro => FunctionalGroupType::Nitro,
+        ReactiveSiteKind::NonTertiaryAmine => FunctionalGroupType::NonTertiaryAmine,
+        ReactiveSiteKind::PrimaryAmine => FunctionalGroupType::PrimaryAmine,
+        ReactiveSiteKind::Aldehyde | ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl => {
+            FunctionalGroupType::Carbonyl
+        }
+        _ => {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: format!("<{}:{}>", substance.id, site_kind_suffix(&site.kind)),
+                reason: "reactive site cannot be represented as a legacy functional fragment"
+                    .to_string(),
+            })
+        }
+    };
+    if let Some(group) = substance
+        .functional_groups
+        .iter()
+        .find(|group| group.group_type == group_type && same_atom_set(&group.atoms, &site.atoms))
+    {
+        return Ok(group.clone());
+    }
+
+    let mut group = FunctionalGroup {
+        group_type: group_type.clone(),
+        atoms: site.atoms.clone(),
+        degree: None,
+        is_ketone: None,
+    };
+    if let Some(degree) = site.substitution_degree {
+        group.degree = Some(degree);
+    }
+    if matches!(
+        site.kind,
+        ReactiveSiteKind::Aldehyde | ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl
+    ) {
+        group.is_ketone = Some(site.kind == ReactiveSiteKind::Ketone);
+    }
+    if group.group_type == FunctionalGroupType::Halide && group.degree.is_none() {
+        let carbon = group_atom_or_error(&group, 0, substance, "halide carbon")?;
+        group.degree = Some(structure.carbon_degree(carbon));
+    }
+    if matches!(
+        group_type,
+        FunctionalGroupType::Alkene | FunctionalGroupType::Alkyne
+    ) && group.atoms.len() >= 2
+    {
+        let first = group.atoms[0];
+        let second = group.atoms[1];
+        let first_degree = structure.carbon_degree(first).saturating_sub(1);
+        let second_degree = structure.carbon_degree(second).saturating_sub(1);
+        if second_degree > first_degree {
+            group.atoms.swap(0, 1);
+        }
+    }
+    group_type = group.group_type.clone();
+    if !legacy_group_is_usable(&group) {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: format!("<{}:{}>", substance.id, site_kind_suffix(&site.kind)),
+            reason: format!("reactive site does not contain atoms required for {group_type:?}"),
+        });
+    }
+    Ok(group)
+}
+
+fn same_atom_set(left: &[usize], right: &[usize]) -> bool {
+    let mut left = left.to_vec();
+    let mut right = right.to_vec();
+    left.sort_unstable();
+    right.sort_unstable();
+    left == right
+}
+
+fn group_atom_or_error(
+    group: &FunctionalGroup,
+    index: usize,
+    substance: &Substance,
+    label: &str,
+) -> ChemistryResult<usize> {
+    group
+        .atoms
+        .get(index)
+        .copied()
+        .ok_or_else(|| ChemistryError::InvalidSubstance {
+            substance_id: substance.id.to_string(),
+            reason: format!("reactive site is missing {label}"),
+        })
+}
+
+fn legacy_group_is_usable(group: &FunctionalGroup) -> bool {
+    let required_atoms = match group.group_type {
+        FunctionalGroupType::AcidAnhydride => 5,
+        FunctionalGroupType::AcylChloride => 3,
+        FunctionalGroupType::Alcohol => 3,
+        FunctionalGroupType::Alkene => 2,
+        FunctionalGroupType::Alkoxide => 2,
+        FunctionalGroupType::Alkyne => 2,
+        FunctionalGroupType::Borane => 2,
+        FunctionalGroupType::BorateEster => 3,
+        FunctionalGroupType::BoricAcid => 3,
+        FunctionalGroupType::Carbonyl => 2,
+        FunctionalGroupType::CarboxylicAcid => 4,
+        FunctionalGroupType::Ester => 4,
+        FunctionalGroupType::Halide => 2,
+        FunctionalGroupType::Isocyanate => 4,
+        FunctionalGroupType::Nitrile => 2,
+        FunctionalGroupType::Nitro => 4,
+        FunctionalGroupType::NonTertiaryAmine => 3,
+        FunctionalGroupType::NonTertiaryBorane => 3,
+        FunctionalGroupType::PrimaryAmine => 4,
+        FunctionalGroupType::UnsubstitutedAmide => 5,
+    };
+    group.atoms.len() >= required_atoms
+}
+
 pub(crate) fn generate_organic_reactions(
     registry: &ChemistryRegistry,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
@@ -286,7 +379,7 @@ fn generate_organic_reactions_with_space(
 
 pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
     space: &OrganicGenerationSpace<'a>,
-    seed_participants: impl IntoIterator<Item = GroupParticipant<'a>>,
+    seed_participants: impl IntoIterator<Item = SiteParticipant<'a>>,
     canonical_to_id: BTreeMap<String, SubstanceId>,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
     let mut resolver = DerivedSubstanceResolver::new_from_canonical_to_id(canonical_to_id);
@@ -296,13 +389,13 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
     for participant in seed_participants {
         let substance = participant.substance;
         let structure = participant.structure;
-        let group = participant.group()?;
+        let group = participant.legacy_group()?;
         match group.group_type {
             FunctionalGroupType::Halide => {
                 if let Some(reaction) = generate_halide_hydroxide_substitution(
                     substance,
                     structure,
-                    group,
+                    &group,
                     &mut resolver,
                 )? {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
@@ -310,110 +403,110 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 let reaction = generate_halide_ammonia_substitution(
                     substance,
                     structure,
-                    group,
+                    &group,
                     &mut resolver,
                 )?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 let reaction = generate_halide_cyanide_substitution(
                     substance,
                     structure,
-                    group,
+                    &group,
                     &mut resolver,
                 )?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::Alcohol => {
                 if let Some(reaction) =
-                    generate_alcohol_oxidation(substance, structure, group, &mut resolver)?
+                    generate_alcohol_oxidation(substance, structure, &group, &mut resolver)?
                 {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
                 if let Some(reaction) =
-                    generate_alcohol_dehydration(substance, structure, group, &mut resolver)?
+                    generate_alcohol_dehydration(substance, structure, &group, &mut resolver)?
                 {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
                 let reaction = generate_thionyl_chloride_substitution(
                     substance,
                     structure,
-                    group,
+                    &group,
                     &mut resolver,
                 )?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::Alkoxide => {
                 let reaction =
-                    generate_alkoxide_protonation(substance, structure, group, &mut resolver)?;
+                    generate_alkoxide_protonation(substance, structure, &group, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::Nitrile => {
                 let reaction =
-                    generate_nitrile_hydrolysis(substance, structure, group, &mut resolver)?;
+                    generate_nitrile_hydrolysis(substance, structure, &group, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 let reaction =
-                    generate_nitrile_hydrogenation(substance, structure, group, &mut resolver)?;
+                    generate_nitrile_hydrogenation(substance, structure, &group, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::Nitro => {
                 let reaction =
-                    generate_nitro_hydrogenation(substance, structure, group, &mut resolver)?;
+                    generate_nitro_hydrogenation(substance, structure, &group, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::AcylChloride => {
                 let reaction =
-                    generate_acyl_chloride_hydrolysis(substance, structure, group, &mut resolver)?;
+                    generate_acyl_chloride_hydrolysis(substance, structure, &group, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::CarboxylicAcid => {
                 let reaction =
-                    generate_acyl_chloride_formation(substance, structure, group, &mut resolver)?;
+                    generate_acyl_chloride_formation(substance, structure, &group, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::Carbonyl => {
                 if let Some(reaction) =
-                    generate_aldehyde_oxidation(substance, structure, group, &mut resolver)?
+                    generate_aldehyde_oxidation(substance, structure, &group, &mut resolver)?
                 {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
                 let reaction = generate_cyanide_nucleophilic_addition(
                     substance,
                     structure,
-                    group,
+                    &group,
                     &mut resolver,
                 )?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 let reaction =
-                    generate_wolff_kishner_reduction(substance, structure, group, &mut resolver)?;
+                    generate_wolff_kishner_reduction(substance, structure, &group, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::UnsubstitutedAmide => {
                 let reaction =
-                    generate_amide_hydrolysis(substance, structure, group, &mut resolver)?;
+                    generate_amide_hydrolysis(substance, structure, &group, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::PrimaryAmine => {
                 let reaction =
-                    generate_amine_phosgenation(substance, structure, group, &mut resolver)?;
+                    generate_amine_phosgenation(substance, structure, &group, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::NonTertiaryAmine => {
                 let reaction =
-                    generate_cyanamide_addition(substance, structure, group, &mut resolver)?;
+                    generate_cyanamide_addition(substance, structure, &group, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::Isocyanate => {
                 let reaction =
-                    generate_isocyanate_hydrolysis(substance, structure, group, &mut resolver)?;
+                    generate_isocyanate_hydrolysis(substance, structure, &group, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::Borane => {
                 let reaction =
-                    generate_borane_oxidation(substance, structure, group, &mut resolver)?;
+                    generate_borane_oxidation(substance, structure, &group, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::BorateEster => {
                 let reaction =
-                    generate_borate_ester_hydrolysis(substance, structure, group, &mut resolver)?;
+                    generate_borate_ester_hydrolysis(substance, structure, &group, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             FunctionalGroupType::Alkene => {
@@ -421,7 +514,7 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                     let reaction = match generate_electrophilic_addition(
                         substance,
                         structure,
-                        group,
+                        &group,
                         spec,
                         &mut resolver,
                     ) {
@@ -437,7 +530,7 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                     let reaction = match generate_electrophilic_addition(
                         substance,
                         structure,
-                        group,
+                        &group,
                         spec,
                         &mut resolver,
                     ) {
@@ -472,8 +565,9 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
     canonical_to_id: BTreeMap<String, SubstanceId>,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
     let seed_participants = space
-        .participants()
+        .site_participants()
         .filter(|participant| participant.is_seed(Some(seeds)))
+        .filter(|participant| participant.legacy_group().is_ok())
         .collect::<Vec<_>>();
     let mut generated = generate_organic_reactions_for_seed_participants(
         space,
@@ -487,13 +581,12 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
         .iter()
         .map(|reaction| reaction.id.to_string())
         .collect::<BTreeSet<_>>();
-    let seed_site_participants = space
-        .site_participants()
-        .filter(|participant| participant.is_seed(Some(seeds)))
-        .collect::<Vec<_>>();
     generate_site_reactions_for_seed_participants(
         space,
-        seed_site_participants,
+        space
+            .site_participants()
+            .filter(|participant| participant.is_seed(Some(seeds)))
+            .collect::<Vec<_>>(),
         &mut resolver,
         &mut generated.reactions,
         &mut reaction_ids,
@@ -542,142 +635,153 @@ fn canonical_to_id_from_substances<'a>(
 }
 
 fn generate_pair_reactions_for_seed(
-    seed: GroupParticipant<'_>,
+    seed: SiteParticipant<'_>,
     space: &OrganicGenerationSpace<'_>,
     resolver: &mut DerivedSubstanceResolver,
     reactions: &mut Vec<Reaction>,
     reaction_ids: &mut BTreeSet<String>,
 ) -> ChemistryResult<()> {
-    match seed.group()?.group_type {
+    let seed_group = seed.legacy_group()?;
+    match seed_group.group_type {
         FunctionalGroupType::CarboxylicAcid => {
-            for alcohol in space.participants_of(&FunctionalGroupType::Alcohol) {
+            for alcohol in space.sites_of_legacy_group(FunctionalGroupType::Alcohol) {
+                let alcohol_group = alcohol.legacy_group()?;
                 let reaction = generate_carboxylic_acid_esterification(
                     seed.substance,
                     seed.structure,
-                    seed.group()?,
+                    &seed_group,
                     alcohol.substance,
                     alcohol.structure,
-                    alcohol.group()?,
+                    &alcohol_group,
                     resolver,
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
         FunctionalGroupType::Alcohol => {
-            for acid in space.participants_of(&FunctionalGroupType::CarboxylicAcid) {
+            for acid in space.sites_of_legacy_group(FunctionalGroupType::CarboxylicAcid) {
+                let acid_group = acid.legacy_group()?;
                 let reaction = generate_carboxylic_acid_esterification(
                     acid.substance,
                     acid.structure,
-                    acid.group()?,
+                    &acid_group,
                     seed.substance,
                     seed.structure,
-                    seed.group()?,
+                    &seed_group,
                     resolver,
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
-            for acyl_chloride in space.participants_of(&FunctionalGroupType::AcylChloride) {
+            for acyl_chloride in space.sites_of_legacy_group(FunctionalGroupType::AcylChloride) {
+                let acyl_chloride_group = acyl_chloride.legacy_group()?;
                 let reaction = generate_acyl_chloride_esterification(
                     acyl_chloride.substance,
                     acyl_chloride.structure,
-                    acyl_chloride.group()?,
+                    &acyl_chloride_group,
                     seed.substance,
                     seed.structure,
-                    seed.group()?,
+                    &seed_group,
                     resolver,
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
-            for carbonyl in space.participants_of(&FunctionalGroupType::Carbonyl) {
+            for carbonyl in space.sites_of_legacy_group(FunctionalGroupType::Carbonyl) {
+                let carbonyl_group = carbonyl.legacy_group()?;
                 let reaction = generate_acetal_formation(
                     carbonyl.substance,
                     carbonyl.structure,
-                    carbonyl.group()?,
+                    &carbonyl_group,
                     seed.substance,
                     seed.structure,
-                    seed.group()?,
+                    &seed_group,
                     resolver,
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
         FunctionalGroupType::AcylChloride => {
-            for alcohol in space.participants_of(&FunctionalGroupType::Alcohol) {
+            for alcohol in space.sites_of_legacy_group(FunctionalGroupType::Alcohol) {
+                let alcohol_group = alcohol.legacy_group()?;
                 let reaction = generate_acyl_chloride_esterification(
                     seed.substance,
                     seed.structure,
-                    seed.group()?,
+                    &seed_group,
                     alcohol.substance,
                     alcohol.structure,
-                    alcohol.group()?,
+                    &alcohol_group,
                     resolver,
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
         FunctionalGroupType::Halide => {
-            for amine in space.participants_of(&FunctionalGroupType::NonTertiaryAmine) {
+            for amine in space.sites_of_legacy_group(FunctionalGroupType::NonTertiaryAmine) {
+                let amine_group = amine.legacy_group()?;
                 let reaction = generate_halide_amine_substitution(
                     seed.substance,
                     seed.structure,
-                    seed.group()?,
+                    &seed_group,
                     amine.substance,
                     amine.structure,
-                    amine.group()?,
+                    &amine_group,
                     resolver,
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
         FunctionalGroupType::NonTertiaryAmine => {
-            for halide in space.participants_of(&FunctionalGroupType::Halide) {
+            for halide in space.sites_of_legacy_group(FunctionalGroupType::Halide) {
+                let halide_group = halide.legacy_group()?;
                 let reaction = generate_halide_amine_substitution(
                     halide.substance,
                     halide.structure,
-                    halide.group()?,
+                    &halide_group,
                     seed.substance,
                     seed.structure,
-                    seed.group()?,
+                    &seed_group,
                     resolver,
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
         FunctionalGroupType::Carbonyl => {
-            for alcohol in space.participants_of(&FunctionalGroupType::Alcohol) {
+            for alcohol in space.sites_of_legacy_group(FunctionalGroupType::Alcohol) {
+                let alcohol_group = alcohol.legacy_group()?;
                 let reaction = generate_acetal_formation(
                     seed.substance,
                     seed.structure,
-                    seed.group()?,
+                    &seed_group,
                     alcohol.substance,
                     alcohol.structure,
-                    alcohol.group()?,
+                    &alcohol_group,
                     resolver,
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
-            for amine in space.participants_of(&FunctionalGroupType::PrimaryAmine) {
+            for amine in space.sites_of_legacy_group(FunctionalGroupType::PrimaryAmine) {
+                let amine_group = amine.legacy_group()?;
                 let reaction = generate_imine_formation(
                     seed.substance,
                     seed.structure,
-                    seed.group()?,
+                    &seed_group,
                     amine.substance,
                     amine.structure,
-                    amine.group()?,
+                    &amine_group,
                     resolver,
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
         FunctionalGroupType::PrimaryAmine => {
-            for carbonyl in space.participants_of(&FunctionalGroupType::Carbonyl) {
+            for carbonyl in space.sites_of_legacy_group(FunctionalGroupType::Carbonyl) {
+                let carbonyl_group = carbonyl.legacy_group()?;
                 let reaction = generate_imine_formation(
                     carbonyl.substance,
                     carbonyl.structure,
-                    carbonyl.group()?,
+                    &carbonyl_group,
                     seed.substance,
                     seed.structure,
-                    seed.group()?,
+                    &seed_group,
                     resolver,
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
@@ -2848,16 +2952,43 @@ fn generated_pair_site_reaction_id(
 
 fn site_kind_suffix(kind: &ReactiveSiteKind) -> &'static str {
     match kind {
+        ReactiveSiteKind::AcidAnhydride => "acid_anhydride",
+        ReactiveSiteKind::AcylChloride => "acyl_chloride",
+        ReactiveSiteKind::Alcohol => "alcohol",
+        ReactiveSiteKind::Alkene => "alkene",
+        ReactiveSiteKind::Alkoxide => "alkoxide",
+        ReactiveSiteKind::Alkyne => "alkyne",
         ReactiveSiteKind::Aldehyde => "aldehyde",
-        ReactiveSiteKind::Ketone => "ketone",
-        ReactiveSiteKind::Carbonyl => "carbonyl",
-        ReactiveSiteKind::Enol => "enol",
-        ReactiveSiteKind::Organomagnesium => "organomagnesium",
-        ReactiveSiteKind::Organolithium => "organolithium",
-        ReactiveSiteKind::Organocopper => "organocopper",
+        ReactiveSiteKind::Amide => "amide",
+        ReactiveSiteKind::AromaticCarbon => "aromatic_carbon",
         ReactiveSiteKind::AromaticRing => "aromatic_ring",
+        ReactiveSiteKind::ArylHalide => "aryl_halide",
+        ReactiveSiteKind::Azide => "azide",
+        ReactiveSiteKind::Borane => "borane",
+        ReactiveSiteKind::BorateEster => "borate_ester",
+        ReactiveSiteKind::Carbonyl => "carbonyl",
+        ReactiveSiteKind::CarboxylicAcid => "carboxylic_acid",
+        ReactiveSiteKind::Diazonium => "diazonium",
+        ReactiveSiteKind::Enol => "enol",
+        ReactiveSiteKind::Enolate => "enolate",
         ReactiveSiteKind::Epoxide => "epoxide",
-        _ => "site",
+        ReactiveSiteKind::Ester => "ester",
+        ReactiveSiteKind::Ether => "ether",
+        ReactiveSiteKind::Halide => "halide",
+        ReactiveSiteKind::Imine => "imine",
+        ReactiveSiteKind::Isocyanate => "isocyanate",
+        ReactiveSiteKind::Ketone => "ketone",
+        ReactiveSiteKind::Nitrile => "nitrile",
+        ReactiveSiteKind::Nitro => "nitro",
+        ReactiveSiteKind::NonTertiaryAmine => "non_tertiary_amine",
+        ReactiveSiteKind::Organocopper => "organocopper",
+        ReactiveSiteKind::Organolithium => "organolithium",
+        ReactiveSiteKind::Organomagnesium => "organomagnesium",
+        ReactiveSiteKind::Phenol => "phenol",
+        ReactiveSiteKind::PrimaryAmine => "primary_amine",
+        ReactiveSiteKind::Sulfide => "sulfide",
+        ReactiveSiteKind::SulfonylChloride => "sulfonyl_chloride",
+        ReactiveSiteKind::Thiol => "thiol",
     }
 }
 
@@ -2967,12 +3098,14 @@ mod tests {
         let space = OrganicGenerationSpace::new(substances.iter().copied(), &scope).unwrap();
 
         let acids = space
-            .participants_of(&FunctionalGroupType::CarboxylicAcid)
+            .sites_of_legacy_group(FunctionalGroupType::CarboxylicAcid)
             .collect::<Vec<_>>();
         assert_eq!(acids.len(), 1);
         assert_eq!(acids[0].substance.id.as_str(), "destroy:acetic_acid");
         assert_eq!(
-            space.participants_of(&FunctionalGroupType::Alcohol).count(),
+            space
+                .sites_of_legacy_group(FunctionalGroupType::Alcohol)
+                .count(),
             0
         );
     }
