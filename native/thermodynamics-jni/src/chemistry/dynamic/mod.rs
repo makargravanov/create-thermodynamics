@@ -8,7 +8,9 @@ use super::kinetics::EnergyModel;
 use super::molecule::{MolecularEditor, MolecularStructure, Stereochemistry};
 use super::organic::{self, OrganicGenerationSpace};
 use super::reaction::{Reaction, ReactionId};
-use super::reactive_site::{find_reactive_sites, ReactiveRole, ReactiveSiteKey, ReactiveSiteKind};
+use super::reactive_site::{
+    try_find_reactive_sites, ReactiveRole, ReactiveSiteKey, ReactiveSiteKind,
+};
 use super::registry::{ChemistryRegistry, ChemistryRegistryBuilder, SubstanceIndex};
 use super::solution::AcidBaseSpec;
 use super::substance::{
@@ -203,7 +205,7 @@ impl DynamicChemistryRegistry {
             energy_model: EnergyModel::new(),
         };
         result.rebuild_canonical_index()?;
-        result.rebuild_site_index();
+        result.rebuild_site_index()?;
         Ok(result)
     }
 
@@ -596,7 +598,7 @@ impl DynamicChemistryRegistry {
         Ok(())
     }
 
-    fn rebuild_site_index(&mut self) {
+    fn rebuild_site_index(&mut self) -> ChemistryResult<()> {
         self.site_index.clear();
         self.site_handles_by_substance = vec![
             Vec::new();
@@ -605,8 +607,9 @@ impl DynamicChemistryRegistry {
         ];
         let substance_indices = self.static_registry.substance_indices().collect::<Vec<_>>();
         for substance_index in substance_indices {
-            self.add_site_handles_for_substance(KnownSubstanceIndex::Static(substance_index));
+            self.add_site_handles_for_substance(KnownSubstanceIndex::Static(substance_index))?;
         }
+        Ok(())
     }
 
     fn add_dynamic_substance_with_canonical(
@@ -647,7 +650,7 @@ impl DynamicChemistryRegistry {
         self.dynamic_substances.push(substance);
         self.dynamic_reaction_index_by_substance.push(Vec::new());
         self.site_handles_by_substance.push(Vec::new());
-        self.add_site_handles_for_substance(KnownSubstanceIndex::Dynamic(substance_index));
+        self.add_site_handles_for_substance(KnownSubstanceIndex::Dynamic(substance_index))?;
         self.register_dynamic_acidity_for_substance(substance_index)?;
         Ok(())
     }
@@ -1120,7 +1123,7 @@ impl DynamicChemistryRegistry {
         let Some(structure) = substance.molecular_structure.as_ref() else {
             return Ok(Vec::new());
         };
-        Ok(find_reactive_sites(structure)
+        Ok(try_find_reactive_sites(structure)?
             .into_iter()
             .map(|site| site.key())
             .collect())
@@ -1154,14 +1157,17 @@ impl DynamicChemistryRegistry {
         )
     }
 
-    fn add_site_handles_for_substance(&mut self, substance: KnownSubstanceIndex) {
+    fn add_site_handles_for_substance(
+        &mut self,
+        substance: KnownSubstanceIndex,
+    ) -> ChemistryResult<()> {
         let Some(substance_data) = self.substance_by_known_index(substance).ok() else {
-            return;
+            return Ok(());
         };
         let Some(structure) = substance_data.molecular_structure.as_ref() else {
-            return;
+            return Ok(());
         };
-        let site_kinds = find_reactive_sites(structure)
+        let site_kinds = try_find_reactive_sites(structure)?
             .into_iter()
             .map(|site| site.kind)
             .collect::<Vec<_>>();
@@ -1177,6 +1183,7 @@ impl DynamicChemistryRegistry {
             self.site_handles_by_substance[slot].push(handle);
             push_site_handle(&mut self.site_index, site_kind, handle);
         }
+        Ok(())
     }
 
     fn all_known_substance_indices(&self) -> Vec<KnownSubstanceIndex> {

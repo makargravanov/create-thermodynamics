@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use super::error::{ChemistryError, ChemistryResult};
 use super::functional_group::{find_functional_groups, FunctionalGroupType};
 use super::molecule::{bond_order_matches, MolecularStructure};
 
@@ -18,6 +19,7 @@ pub enum ReactiveSiteKind {
     ArylHalide,
     Azide,
     Borane,
+    BoricAcid,
     BorateEster,
     Carbonyl,
     CarboxylicAcid,
@@ -117,9 +119,81 @@ impl ReactiveSite {
             substitution_degree: self.substitution_degree,
         }
     }
+
+    pub fn validate_against(&self, structure: &MolecularStructure) -> ChemistryResult<()> {
+        for atom in &self.atoms {
+            if *atom >= structure.atoms.len() {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: "<reactive-site>".to_string(),
+                    reason: format!(
+                        "reactive site {:?} references missing atom {atom}",
+                        self.kind
+                    ),
+                });
+            }
+        }
+        if let Some(atom) = self.primary_atom {
+            if !self.atoms.contains(&atom) {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: "<reactive-site>".to_string(),
+                    reason: format!(
+                        "reactive site {:?} primary atom is outside site atoms",
+                        self.kind
+                    ),
+                });
+            }
+        }
+        for atom in &self.anchor_atoms {
+            if !self.atoms.contains(atom) {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: "<reactive-site>".to_string(),
+                    reason: format!(
+                        "reactive site {:?} anchor atom is outside site atoms",
+                        self.kind
+                    ),
+                });
+            }
+        }
+        if let Some(atom) = self.leaving_atom {
+            if !self.atoms.contains(&atom) {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: "<reactive-site>".to_string(),
+                    reason: format!(
+                        "reactive site {:?} leaving atom is outside site atoms",
+                        self.kind
+                    ),
+                });
+            }
+            if !self.roles.contains(&ReactiveRole::LeavingGroup) {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: "<reactive-site>".to_string(),
+                    reason: format!(
+                        "reactive site {:?} has leaving atom without leaving role",
+                        self.kind
+                    ),
+                });
+            }
+        }
+        if self.bond_order.is_some() && self.anchor_atoms.len() < 2 {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: "<reactive-site>".to_string(),
+                reason: format!(
+                    "reactive site {:?} has bond order without two anchors",
+                    self.kind
+                ),
+            });
+        }
+        Ok(())
+    }
 }
 
 pub fn find_reactive_sites(structure: &MolecularStructure) -> Vec<ReactiveSite> {
+    try_find_reactive_sites(structure).expect("reactive site search produced an invalid site")
+}
+
+pub fn try_find_reactive_sites(
+    structure: &MolecularStructure,
+) -> ChemistryResult<Vec<ReactiveSite>> {
     let mut sites = Vec::new();
     for group in find_functional_groups(structure) {
         let (kind, roles) = match group.group_type {
@@ -154,7 +228,7 @@ pub fn find_reactive_sites(structure: &MolecularStructure) -> Vec<ReactiveSite> 
                 vec![ReactiveRole::Electrophile],
             ),
             FunctionalGroupType::BoricAcid => (
-                ReactiveSiteKind::CarboxylicAcid,
+                ReactiveSiteKind::BoricAcid,
                 vec![ReactiveRole::AcidicProton],
             ),
             FunctionalGroupType::Carbonyl => {
@@ -219,7 +293,10 @@ pub fn find_reactive_sites(structure: &MolecularStructure) -> Vec<ReactiveSite> 
     add_alpha_sites(structure, &mut sites);
     enrich_sites(structure, &mut sites);
     deduplicate_sites(&mut sites);
-    sites
+    for site in &sites {
+        site.validate_against(structure)?;
+    }
+    Ok(sites)
 }
 
 fn add_aromatic_sites(structure: &MolecularStructure, sites: &mut Vec<ReactiveSite>) {
@@ -490,6 +567,7 @@ fn primary_atom_for_site(site: &ReactiveSite) -> Option<usize> {
         | ReactiveSiteKind::Nitro
         | ReactiveSiteKind::Amide
         | ReactiveSiteKind::Borane
+        | ReactiveSiteKind::BoricAcid
         | ReactiveSiteKind::BorateEster
         | ReactiveSiteKind::Alkene
         | ReactiveSiteKind::Alkyne

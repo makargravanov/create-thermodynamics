@@ -2,14 +2,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::condition::{AcidityCondition, AtmosphereCondition, ReactionCondition};
 use super::error::{ChemistryError, ChemistryResult};
-use super::functional_group::{FunctionalGroup, FunctionalGroupType};
 use super::kinetics::ReactionChannel;
 use super::molecule::{
     MolecularEditor, MolecularStructure, StereoDescriptor, StereoMixtureKind, Stereochemistry,
     TetrahedralStereo,
 };
 use super::reaction::{Reaction, StoichiometricTerm};
-use super::reactive_site::{find_reactive_sites, ReactiveSite, ReactiveSiteKind};
+use super::reactive_site::{try_find_reactive_sites, ReactiveSite, ReactiveSiteKind};
 use super::registry::{ChemistryRegistry, ChemistryRegistryBuilder};
 use super::substance::{Substance, SubstanceId};
 
@@ -74,10 +73,6 @@ impl<'a> SiteParticipant<'a> {
     fn is_seed(&self, seeds: Option<&BTreeSet<SubstanceId>>) -> bool {
         seeds.is_none_or(|seeds| seeds.contains(&self.substance.id))
     }
-
-    fn legacy_group(&self) -> ChemistryResult<FunctionalGroup> {
-        legacy_group_from_site(self.substance, self.structure, &self.site)
-    }
 }
 
 pub(crate) struct OrganicGenerationSpace<'a> {
@@ -102,7 +97,7 @@ impl<'a> OrganicGenerationSpace<'a> {
             let Some(structure) = substance.molecular_structure.as_ref() else {
                 continue;
             };
-            for site in find_reactive_sites(structure) {
+            for site in try_find_reactive_sites(structure)? {
                 participants_by_site
                     .entry(site.kind.clone())
                     .or_default()
@@ -143,17 +138,6 @@ impl<'a> OrganicGenerationSpace<'a> {
             .get(kind)
             .into_iter()
             .flat_map(|participants| participants.iter().cloned())
-    }
-
-    fn sites_of_legacy_group(
-        &self,
-        group_type: FunctionalGroupType,
-    ) -> impl Iterator<Item = SiteParticipant<'a>> + '_ {
-        self.site_participants().filter(move |participant| {
-            participant
-                .legacy_group()
-                .is_ok_and(|group| group.group_type == group_type)
-        })
     }
 }
 
@@ -209,138 +193,416 @@ impl DerivedSubstanceResolver {
     }
 }
 
-fn legacy_group_from_site(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    site: &ReactiveSite,
-) -> ChemistryResult<FunctionalGroup> {
-    let mut group_type = match site.kind {
-        ReactiveSiteKind::AcidAnhydride => FunctionalGroupType::AcidAnhydride,
-        ReactiveSiteKind::AcylChloride => FunctionalGroupType::AcylChloride,
-        ReactiveSiteKind::Alcohol => FunctionalGroupType::Alcohol,
-        ReactiveSiteKind::Alkene => FunctionalGroupType::Alkene,
-        ReactiveSiteKind::Alkoxide => FunctionalGroupType::Alkoxide,
-        ReactiveSiteKind::Alkyne => FunctionalGroupType::Alkyne,
-        ReactiveSiteKind::Amide => FunctionalGroupType::UnsubstitutedAmide,
-        ReactiveSiteKind::Borane => FunctionalGroupType::Borane,
-        ReactiveSiteKind::BorateEster => FunctionalGroupType::BorateEster,
-        ReactiveSiteKind::CarboxylicAcid => FunctionalGroupType::CarboxylicAcid,
-        ReactiveSiteKind::Ester => FunctionalGroupType::Ester,
-        ReactiveSiteKind::Halide => FunctionalGroupType::Halide,
-        ReactiveSiteKind::Isocyanate => FunctionalGroupType::Isocyanate,
-        ReactiveSiteKind::Nitrile => FunctionalGroupType::Nitrile,
-        ReactiveSiteKind::Nitro => FunctionalGroupType::Nitro,
-        ReactiveSiteKind::NonTertiaryAmine => FunctionalGroupType::NonTertiaryAmine,
-        ReactiveSiteKind::PrimaryAmine => FunctionalGroupType::PrimaryAmine,
-        ReactiveSiteKind::Aldehyde | ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl => {
-            FunctionalGroupType::Carbonyl
-        }
-        _ => {
-            return Err(ChemistryError::InvalidReaction {
-                reaction_id: format!("<{}:{}>", substance.id, site_kind_suffix(&site.kind)),
-                reason: "reactive site cannot be represented as a legacy functional fragment"
-                    .to_string(),
+#[derive(Clone)]
+struct HalideSite<'a> {
+    participant: SiteParticipant<'a>,
+    carbon: usize,
+    halogen: usize,
+    degree: usize,
+}
+
+#[derive(Clone)]
+struct AlcoholSite<'a> {
+    participant: SiteParticipant<'a>,
+    carbon: usize,
+    oxygen: usize,
+    hydrogen: usize,
+    degree: usize,
+}
+
+#[derive(Clone)]
+struct AlkoxideSite<'a> {
+    participant: SiteParticipant<'a>,
+    oxygen: usize,
+}
+
+#[derive(Clone)]
+struct CarbonylSite<'a> {
+    participant: SiteParticipant<'a>,
+    carbon: usize,
+    oxygen: usize,
+    is_ketone: bool,
+}
+
+#[derive(Clone)]
+struct CarboxylicAcidSite<'a> {
+    participant: SiteParticipant<'a>,
+    carbon: usize,
+    hydroxyl_oxygen: usize,
+    hydroxyl_hydrogen: usize,
+}
+
+#[derive(Clone)]
+struct AcylChlorideSite<'a> {
+    participant: SiteParticipant<'a>,
+    carbon: usize,
+    chlorine: usize,
+}
+
+#[derive(Clone)]
+struct AmideSite<'a> {
+    participant: SiteParticipant<'a>,
+    carbon: usize,
+    nitrogen: usize,
+    nitrogen_hydrogens: Vec<usize>,
+}
+
+#[derive(Clone)]
+struct AmineSite<'a> {
+    participant: SiteParticipant<'a>,
+    nitrogen: usize,
+    hydrogens: Vec<usize>,
+}
+
+#[derive(Clone)]
+struct NitrileSite<'a> {
+    participant: SiteParticipant<'a>,
+    carbon: usize,
+    nitrogen: usize,
+}
+
+#[derive(Clone)]
+struct NitroSite<'a> {
+    participant: SiteParticipant<'a>,
+    nitrogen: usize,
+    oxygens: [usize; 2],
+}
+
+#[derive(Clone)]
+struct UnsaturatedBondSite<'a> {
+    participant: SiteParticipant<'a>,
+    high_degree_carbon: usize,
+    low_degree_carbon: usize,
+    is_alkyne: bool,
+}
+
+#[derive(Clone)]
+struct BoraneSite<'a> {
+    participant: SiteParticipant<'a>,
+    carbon: usize,
+    boron: usize,
+}
+
+#[derive(Clone)]
+struct BorateEsterSite<'a> {
+    participant: SiteParticipant<'a>,
+    oxygen: usize,
+    boron: usize,
+}
+
+#[derive(Clone)]
+struct IsocyanateSite<'a> {
+    participant: SiteParticipant<'a>,
+    nitrogen: usize,
+    functional_carbon: usize,
+    oxygen: usize,
+}
+
+impl<'a> SiteParticipant<'a> {
+    fn require_kind(&self, expected: ReactiveSiteKind) -> ChemistryResult<()> {
+        if self.site.kind == expected {
+            Ok(())
+        } else {
+            Err(ChemistryError::InvalidReaction {
+                reaction_id: generated_site_reaction_id("typed_site", self),
+                reason: format!(
+                    "expected {:?} reactive site, got {:?}",
+                    expected, self.site.kind
+                ),
             })
         }
-    };
-    if let Some(group) = substance
-        .functional_groups
-        .iter()
-        .find(|group| group.group_type == group_type && same_atom_set(&group.atoms, &site.atoms))
-    {
-        return Ok(group.clone());
     }
 
-    let mut group = FunctionalGroup {
-        group_type: group_type.clone(),
-        atoms: site.atoms.clone(),
-        degree: None,
-        is_ketone: None,
-    };
-    if let Some(degree) = site.substitution_degree {
-        group.degree = Some(degree);
+    fn halide_site(self) -> ChemistryResult<HalideSite<'a>> {
+        self.require_kind(ReactiveSiteKind::Halide)?;
+        let carbon = self.site_atom_by_element("C", "halide carbon")?;
+        let halogen = self
+            .site
+            .leaving_atom
+            .or_else(|| {
+                self.site.atoms.iter().copied().find(|atom| {
+                    matches!(
+                        self.structure.atoms[*atom].element.as_str(),
+                        "F" | "Cl" | "I"
+                    )
+                })
+            })
+            .ok_or_else(|| self.site_error("halide site has no supported halogen"))?;
+        Ok(HalideSite {
+            degree: self
+                .site
+                .substitution_degree
+                .unwrap_or_else(|| self.structure.carbon_degree(carbon)),
+            participant: self,
+            carbon,
+            halogen,
+        })
     }
-    if matches!(
-        site.kind,
-        ReactiveSiteKind::Aldehyde | ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl
-    ) {
-        group.is_ketone = Some(site.kind == ReactiveSiteKind::Ketone);
+
+    fn alcohol_site(self) -> ChemistryResult<AlcoholSite<'a>> {
+        self.require_kind(ReactiveSiteKind::Alcohol)?;
+        let oxygen = self.site_atom_by_element("O", "alcohol oxygen")?;
+        let carbon = self.bonded_site_atom(oxygen, "C", 1.0, "alcohol carbon")?;
+        let hydrogen = first_bonded_hydrogen(self.structure, oxygen)
+            .ok_or_else(|| self.site_error("alcohol oxygen has no explicit hydrogen"))?;
+        Ok(AlcoholSite {
+            degree: self
+                .site
+                .substitution_degree
+                .unwrap_or_else(|| self.structure.carbon_degree(carbon)),
+            participant: self,
+            carbon,
+            oxygen,
+            hydrogen,
+        })
     }
-    if group.group_type == FunctionalGroupType::Halide && group.degree.is_none() {
-        let carbon = group_atom_or_error(&group, 0, substance, "halide carbon")?;
-        group.degree = Some(structure.carbon_degree(carbon));
+
+    fn alkoxide_site(self) -> ChemistryResult<AlkoxideSite<'a>> {
+        self.require_kind(ReactiveSiteKind::Alkoxide)?;
+        let oxygen = self.site_atom_by_element("O", "alkoxide oxygen")?;
+        self.bonded_site_atom(oxygen, "C", 1.0, "alkoxide carbon")?;
+        Ok(AlkoxideSite {
+            participant: self,
+            oxygen,
+        })
     }
-    if matches!(
-        group_type,
-        FunctionalGroupType::Alkene | FunctionalGroupType::Alkyne
-    ) && group.atoms.len() >= 2
-    {
-        let first = group.atoms[0];
-        let second = group.atoms[1];
-        let first_degree = structure.carbon_degree(first).saturating_sub(1);
-        let second_degree = structure.carbon_degree(second).saturating_sub(1);
-        if second_degree > first_degree {
-            group.atoms.swap(0, 1);
+
+    fn carbonyl_site(self) -> ChemistryResult<CarbonylSite<'a>> {
+        if !matches!(
+            self.site.kind,
+            ReactiveSiteKind::Aldehyde | ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl
+        ) {
+            return Err(self.site_error("site is not a carbonyl center"));
+        }
+        let (carbon, oxygen) = carbonyl_atoms_from_site(self.structure, &self.site, "carbonyl")?;
+        let carbon_neighbors = self
+            .structure
+            .neighbors(carbon)
+            .into_iter()
+            .filter(|(neighbor, order)| {
+                *neighbor != oxygen
+                    && self.structure.atoms[*neighbor].element == "C"
+                    && super::molecule::bond_order_matches(*order, 1.0)
+            })
+            .count();
+        Ok(CarbonylSite {
+            is_ketone: self.site.kind == ReactiveSiteKind::Ketone
+                || (self.site.kind == ReactiveSiteKind::Carbonyl && carbon_neighbors >= 2),
+            participant: self,
+            carbon,
+            oxygen,
+        })
+    }
+
+    fn carboxylic_acid_site(self) -> ChemistryResult<CarboxylicAcidSite<'a>> {
+        self.require_kind(ReactiveSiteKind::CarboxylicAcid)?;
+        let (carbon, carbonyl_oxygen) =
+            carbonyl_atoms_from_site(self.structure, &self.site, "carboxylic acid")?;
+        let hydroxyl_oxygen = self
+            .structure
+            .neighbors(carbon)
+            .into_iter()
+            .find_map(|(neighbor, order)| {
+                (neighbor != carbonyl_oxygen
+                    && self.structure.atoms[neighbor].element == "O"
+                    && super::molecule::bond_order_matches(order, 1.0))
+                .then_some(neighbor)
+            })
+            .ok_or_else(|| self.site_error("carboxylic acid has no hydroxyl oxygen"))?;
+        let hydroxyl_hydrogen = first_bonded_hydrogen(self.structure, hydroxyl_oxygen)
+            .ok_or_else(|| self.site_error("carboxylic acid has no explicit hydroxyl hydrogen"))?;
+        Ok(CarboxylicAcidSite {
+            participant: self,
+            carbon,
+            hydroxyl_oxygen,
+            hydroxyl_hydrogen,
+        })
+    }
+
+    fn acyl_chloride_site(self) -> ChemistryResult<AcylChlorideSite<'a>> {
+        self.require_kind(ReactiveSiteKind::AcylChloride)?;
+        let (carbon, _) = carbonyl_atoms_from_site(self.structure, &self.site, "acyl chloride")?;
+        let chlorine = self.bonded_site_atom(carbon, "Cl", 1.0, "acyl chloride chlorine")?;
+        Ok(AcylChlorideSite {
+            participant: self,
+            carbon,
+            chlorine,
+        })
+    }
+
+    fn amide_site(self) -> ChemistryResult<AmideSite<'a>> {
+        self.require_kind(ReactiveSiteKind::Amide)?;
+        let (carbon, oxygen) = carbonyl_atoms_from_site(self.structure, &self.site, "amide")?;
+        let nitrogen = self
+            .structure
+            .neighbors(carbon)
+            .into_iter()
+            .find_map(|(neighbor, order)| {
+                (neighbor != oxygen
+                    && self.structure.atoms[neighbor].element == "N"
+                    && super::molecule::bond_order_matches(order, 1.0))
+                .then_some(neighbor)
+            })
+            .ok_or_else(|| self.site_error("amide has no nitrogen atom"))?;
+        let nitrogen_hydrogens = bonded_hydrogens(self.structure, nitrogen);
+        Ok(AmideSite {
+            participant: self,
+            carbon,
+            nitrogen,
+            nitrogen_hydrogens,
+        })
+    }
+
+    fn amine_site(self) -> ChemistryResult<AmineSite<'a>> {
+        if !matches!(
+            self.site.kind,
+            ReactiveSiteKind::PrimaryAmine | ReactiveSiteKind::NonTertiaryAmine
+        ) {
+            return Err(self.site_error("site is not an amine center"));
+        }
+        let nitrogen = self.site_atom_by_element("N", "amine nitrogen")?;
+        let hydrogens = bonded_hydrogens(self.structure, nitrogen);
+        if hydrogens.is_empty() {
+            return Err(self.site_error("amine has no explicit nitrogen hydrogen"));
+        }
+        Ok(AmineSite {
+            participant: self,
+            nitrogen,
+            hydrogens,
+        })
+    }
+
+    fn nitrile_site(self) -> ChemistryResult<NitrileSite<'a>> {
+        self.require_kind(ReactiveSiteKind::Nitrile)?;
+        let carbon = self.site_atom_by_element("C", "nitrile carbon")?;
+        let nitrogen = self.bonded_site_atom(carbon, "N", 3.0, "nitrile nitrogen")?;
+        Ok(NitrileSite {
+            participant: self,
+            carbon,
+            nitrogen,
+        })
+    }
+
+    fn nitro_site(self) -> ChemistryResult<NitroSite<'a>> {
+        self.require_kind(ReactiveSiteKind::Nitro)?;
+        let nitrogen = self.site_atom_by_element("N", "nitro nitrogen")?;
+        let oxygens = self
+            .site
+            .atoms
+            .iter()
+            .copied()
+            .filter(|atom| self.structure.atoms[*atom].element == "O")
+            .collect::<Vec<_>>();
+        let oxygens: [usize; 2] = oxygens
+            .try_into()
+            .map_err(|_| self.site_error("nitro center must contain exactly two oxygens"))?;
+        Ok(NitroSite {
+            participant: self,
+            nitrogen,
+            oxygens,
+        })
+    }
+
+    fn unsaturated_bond_site(self) -> ChemistryResult<UnsaturatedBondSite<'a>> {
+        let is_alkyne = match self.site.kind {
+            ReactiveSiteKind::Alkene => false,
+            ReactiveSiteKind::Alkyne => true,
+            _ => return Err(self.site_error("site is not an unsaturated bond")),
+        };
+        let carbons = self
+            .site
+            .atoms
+            .iter()
+            .copied()
+            .filter(|atom| self.structure.atoms[*atom].element == "C")
+            .collect::<Vec<_>>();
+        if carbons.len() != 2 {
+            return Err(self.site_error("unsaturated bond must contain exactly two carbons"));
+        }
+        let first_degree = self.structure.carbon_degree(carbons[0]).saturating_sub(1);
+        let second_degree = self.structure.carbon_degree(carbons[1]).saturating_sub(1);
+        let (high_degree_carbon, low_degree_carbon) = if second_degree > first_degree {
+            (carbons[1], carbons[0])
+        } else {
+            (carbons[0], carbons[1])
+        };
+        Ok(UnsaturatedBondSite {
+            participant: self,
+            high_degree_carbon,
+            low_degree_carbon,
+            is_alkyne,
+        })
+    }
+
+    fn borane_site(self) -> ChemistryResult<BoraneSite<'a>> {
+        self.require_kind(ReactiveSiteKind::Borane)?;
+        let carbon = self.site_atom_by_element("C", "borane carbon")?;
+        let boron = self.bonded_site_atom(carbon, "B", 1.0, "borane boron")?;
+        Ok(BoraneSite {
+            participant: self,
+            carbon,
+            boron,
+        })
+    }
+
+    fn borate_ester_site(self) -> ChemistryResult<BorateEsterSite<'a>> {
+        self.require_kind(ReactiveSiteKind::BorateEster)?;
+        let oxygen = self.site_atom_by_element("O", "borate ester oxygen")?;
+        let boron = self.bonded_site_atom(oxygen, "B", 1.0, "borate ester boron")?;
+        Ok(BorateEsterSite {
+            participant: self,
+            oxygen,
+            boron,
+        })
+    }
+
+    fn isocyanate_site(self) -> ChemistryResult<IsocyanateSite<'a>> {
+        self.require_kind(ReactiveSiteKind::Isocyanate)?;
+        let nitrogen = self.site_atom_by_element("N", "isocyanate nitrogen")?;
+        let functional_carbon = self.bonded_site_atom(nitrogen, "C", 2.0, "isocyanate carbon")?;
+        let oxygen = self.bonded_site_atom(functional_carbon, "O", 2.0, "isocyanate oxygen")?;
+        Ok(IsocyanateSite {
+            participant: self,
+            nitrogen,
+            functional_carbon,
+            oxygen,
+        })
+    }
+
+    fn site_atom_by_element(&self, element: &str, label: &str) -> ChemistryResult<usize> {
+        self.site
+            .atoms
+            .iter()
+            .copied()
+            .find(|atom| self.structure.atoms[*atom].element == element)
+            .ok_or_else(|| self.site_error(&format!("reactive site is missing {label}")))
+    }
+
+    fn bonded_site_atom(
+        &self,
+        parent: usize,
+        element: &str,
+        order: f64,
+        label: &str,
+    ) -> ChemistryResult<usize> {
+        self.structure
+            .neighbors(parent)
+            .into_iter()
+            .find_map(|(neighbor, bond_order)| {
+                (self.site.atoms.contains(&neighbor)
+                    && self.structure.atoms[neighbor].element == element
+                    && super::molecule::bond_order_matches(bond_order, order))
+                .then_some(neighbor)
+            })
+            .ok_or_else(|| self.site_error(&format!("reactive site is missing {label}")))
+    }
+
+    fn site_error(&self, reason: &str) -> ChemistryError {
+        ChemistryError::InvalidReaction {
+            reaction_id: generated_site_reaction_id("typed_site", self),
+            reason: reason.to_string(),
         }
     }
-    group_type = group.group_type.clone();
-    if !legacy_group_is_usable(&group) {
-        return Err(ChemistryError::InvalidReaction {
-            reaction_id: format!("<{}:{}>", substance.id, site_kind_suffix(&site.kind)),
-            reason: format!("reactive site does not contain atoms required for {group_type:?}"),
-        });
-    }
-    Ok(group)
-}
-
-fn same_atom_set(left: &[usize], right: &[usize]) -> bool {
-    let mut left = left.to_vec();
-    let mut right = right.to_vec();
-    left.sort_unstable();
-    right.sort_unstable();
-    left == right
-}
-
-fn group_atom_or_error(
-    group: &FunctionalGroup,
-    index: usize,
-    substance: &Substance,
-    label: &str,
-) -> ChemistryResult<usize> {
-    group
-        .atoms
-        .get(index)
-        .copied()
-        .ok_or_else(|| ChemistryError::InvalidSubstance {
-            substance_id: substance.id.to_string(),
-            reason: format!("reactive site is missing {label}"),
-        })
-}
-
-fn legacy_group_is_usable(group: &FunctionalGroup) -> bool {
-    let required_atoms = match group.group_type {
-        FunctionalGroupType::AcidAnhydride => 5,
-        FunctionalGroupType::AcylChloride => 3,
-        FunctionalGroupType::Alcohol => 3,
-        FunctionalGroupType::Alkene => 2,
-        FunctionalGroupType::Alkoxide => 2,
-        FunctionalGroupType::Alkyne => 2,
-        FunctionalGroupType::Borane => 2,
-        FunctionalGroupType::BorateEster => 3,
-        FunctionalGroupType::BoricAcid => 3,
-        FunctionalGroupType::Carbonyl => 2,
-        FunctionalGroupType::CarboxylicAcid => 4,
-        FunctionalGroupType::Ester => 4,
-        FunctionalGroupType::Halide => 2,
-        FunctionalGroupType::Isocyanate => 4,
-        FunctionalGroupType::Nitrile => 2,
-        FunctionalGroupType::Nitro => 4,
-        FunctionalGroupType::NonTertiaryAmine => 3,
-        FunctionalGroupType::NonTertiaryBorane => 3,
-        FunctionalGroupType::PrimaryAmine => 4,
-        FunctionalGroupType::UnsubstitutedAmide => 5,
-    };
-    group.atoms.len() >= required_atoms
 }
 
 pub(crate) fn generate_organic_reactions(
@@ -387,137 +649,102 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
     let mut reaction_ids = BTreeSet::new();
 
     for participant in seed_participants {
-        let substance = participant.substance;
-        let structure = participant.structure;
-        let group = participant.legacy_group()?;
-        match group.group_type {
-            FunctionalGroupType::Halide => {
-                if let Some(reaction) = generate_halide_hydroxide_substitution(
-                    substance,
-                    structure,
-                    &group,
-                    &mut resolver,
-                )? {
-                    push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-                }
-                let reaction = generate_halide_ammonia_substitution(
-                    substance,
-                    structure,
-                    &group,
-                    &mut resolver,
-                )?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-                let reaction = generate_halide_cyanide_substitution(
-                    substance,
-                    structure,
-                    &group,
-                    &mut resolver,
-                )?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-            }
-            FunctionalGroupType::Alcohol => {
+        match participant.site.kind {
+            ReactiveSiteKind::Halide => {
+                let site = participant.clone().halide_site()?;
                 if let Some(reaction) =
-                    generate_alcohol_oxidation(substance, structure, &group, &mut resolver)?
+                    generate_halide_hydroxide_substitution(&site, &mut resolver)?
                 {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
-                if let Some(reaction) =
-                    generate_alcohol_dehydration(substance, structure, &group, &mut resolver)?
-                {
+                let reaction = generate_halide_ammonia_substitution(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                let reaction = generate_halide_cyanide_substitution(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+            }
+            ReactiveSiteKind::Alcohol => {
+                let site = participant.clone().alcohol_site()?;
+                if let Some(reaction) = generate_alcohol_oxidation(&site, &mut resolver)? {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
-                let reaction = generate_thionyl_chloride_substitution(
-                    substance,
-                    structure,
-                    &group,
-                    &mut resolver,
-                )?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-            }
-            FunctionalGroupType::Alkoxide => {
-                let reaction =
-                    generate_alkoxide_protonation(substance, structure, &group, &mut resolver)?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-            }
-            FunctionalGroupType::Nitrile => {
-                let reaction =
-                    generate_nitrile_hydrolysis(substance, structure, &group, &mut resolver)?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-                let reaction =
-                    generate_nitrile_hydrogenation(substance, structure, &group, &mut resolver)?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-            }
-            FunctionalGroupType::Nitro => {
-                let reaction =
-                    generate_nitro_hydrogenation(substance, structure, &group, &mut resolver)?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-            }
-            FunctionalGroupType::AcylChloride => {
-                let reaction =
-                    generate_acyl_chloride_hydrolysis(substance, structure, &group, &mut resolver)?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-            }
-            FunctionalGroupType::CarboxylicAcid => {
-                let reaction =
-                    generate_acyl_chloride_formation(substance, structure, &group, &mut resolver)?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-            }
-            FunctionalGroupType::Carbonyl => {
-                if let Some(reaction) =
-                    generate_aldehyde_oxidation(substance, structure, &group, &mut resolver)?
-                {
+                if let Some(reaction) = generate_alcohol_dehydration(&site, &mut resolver)? {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
-                let reaction = generate_cyanide_nucleophilic_addition(
-                    substance,
-                    structure,
-                    &group,
-                    &mut resolver,
-                )?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-                let reaction =
-                    generate_wolff_kishner_reduction(substance, structure, &group, &mut resolver)?;
+                let reaction = generate_thionyl_chloride_substitution(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
-            FunctionalGroupType::UnsubstitutedAmide => {
-                let reaction =
-                    generate_amide_hydrolysis(substance, structure, &group, &mut resolver)?;
+            ReactiveSiteKind::Alkoxide => {
+                let site = participant.clone().alkoxide_site()?;
+                let reaction = generate_alkoxide_protonation(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
-            FunctionalGroupType::PrimaryAmine => {
-                let reaction =
-                    generate_amine_phosgenation(substance, structure, &group, &mut resolver)?;
+            ReactiveSiteKind::Nitrile => {
+                let site = participant.clone().nitrile_site()?;
+                let reaction = generate_nitrile_hydrolysis(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                let reaction = generate_nitrile_hydrogenation(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
-            FunctionalGroupType::NonTertiaryAmine => {
-                let reaction =
-                    generate_cyanamide_addition(substance, structure, &group, &mut resolver)?;
+            ReactiveSiteKind::Nitro => {
+                let site = participant.clone().nitro_site()?;
+                let reaction = generate_nitro_hydrogenation(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
-            FunctionalGroupType::Isocyanate => {
-                let reaction =
-                    generate_isocyanate_hydrolysis(substance, structure, &group, &mut resolver)?;
+            ReactiveSiteKind::AcylChloride => {
+                let site = participant.clone().acyl_chloride_site()?;
+                let reaction = generate_acyl_chloride_hydrolysis(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
-            FunctionalGroupType::Borane => {
-                let reaction =
-                    generate_borane_oxidation(substance, structure, &group, &mut resolver)?;
+            ReactiveSiteKind::CarboxylicAcid => {
+                let site = participant.clone().carboxylic_acid_site()?;
+                let reaction = generate_acyl_chloride_formation(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
-            FunctionalGroupType::BorateEster => {
-                let reaction =
-                    generate_borate_ester_hydrolysis(substance, structure, &group, &mut resolver)?;
+            ReactiveSiteKind::Aldehyde | ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl => {
+                let site = participant.clone().carbonyl_site()?;
+                if let Some(reaction) = generate_aldehyde_oxidation(&site, &mut resolver)? {
+                    push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                }
+                let reaction = generate_cyanide_nucleophilic_addition(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                let reaction = generate_wolff_kishner_reduction(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
-            FunctionalGroupType::Alkene => {
+            ReactiveSiteKind::Amide => {
+                let site = participant.clone().amide_site()?;
+                let reaction = generate_amide_hydrolysis(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+            }
+            ReactiveSiteKind::PrimaryAmine => {
+                let site = participant.clone().amine_site()?;
+                let reaction = generate_amine_phosgenation(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+            }
+            ReactiveSiteKind::NonTertiaryAmine => {
+                let site = participant.clone().amine_site()?;
+                let reaction = generate_cyanamide_addition(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+            }
+            ReactiveSiteKind::Isocyanate => {
+                let site = participant.clone().isocyanate_site()?;
+                let reaction = generate_isocyanate_hydrolysis(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+            }
+            ReactiveSiteKind::Borane => {
+                let site = participant.clone().borane_site()?;
+                let reaction = generate_borane_oxidation(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+            }
+            ReactiveSiteKind::BorateEster => {
+                let site = participant.clone().borate_ester_site()?;
+                let reaction = generate_borate_ester_hydrolysis(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+            }
+            ReactiveSiteKind::Alkene => {
+                let site = participant.clone().unsaturated_bond_site()?;
                 for spec in electrophilic_addition_specs(false) {
-                    let reaction = match generate_electrophilic_addition(
-                        substance,
-                        structure,
-                        &group,
-                        spec,
-                        &mut resolver,
-                    ) {
+                    let reaction = match generate_electrophilic_addition(&site, spec, &mut resolver)
+                    {
                         Ok(reaction) => reaction,
                         Err(error) if is_unknown_stereo_distribution(&error) => continue,
                         Err(error) => return Err(error),
@@ -525,15 +752,11 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
             }
-            FunctionalGroupType::Alkyne => {
+            ReactiveSiteKind::Alkyne => {
+                let site = participant.clone().unsaturated_bond_site()?;
                 for spec in electrophilic_addition_specs(true) {
-                    let reaction = match generate_electrophilic_addition(
-                        substance,
-                        structure,
-                        &group,
-                        spec,
-                        &mut resolver,
-                    ) {
+                    let reaction = match generate_electrophilic_addition(&site, spec, &mut resolver)
+                    {
                         Ok(reaction) => reaction,
                         Err(error) if is_unknown_stereo_distribution(&error) => continue,
                         Err(error) => return Err(error),
@@ -567,7 +790,7 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
     let seed_participants = space
         .site_participants()
         .filter(|participant| participant.is_seed(Some(seeds)))
-        .filter(|participant| participant.legacy_group().is_ok())
+        .filter(|participant| is_generator_seed_site(&participant.site.kind))
         .collect::<Vec<_>>();
     let mut generated = generate_organic_reactions_for_seed_participants(
         space,
@@ -593,6 +816,30 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
     )?;
     generated.substances.extend(resolver.substances);
     Ok(generated)
+}
+
+fn is_generator_seed_site(kind: &ReactiveSiteKind) -> bool {
+    matches!(
+        kind,
+        ReactiveSiteKind::Halide
+            | ReactiveSiteKind::Alcohol
+            | ReactiveSiteKind::Alkoxide
+            | ReactiveSiteKind::Nitrile
+            | ReactiveSiteKind::Nitro
+            | ReactiveSiteKind::AcylChloride
+            | ReactiveSiteKind::CarboxylicAcid
+            | ReactiveSiteKind::Aldehyde
+            | ReactiveSiteKind::Ketone
+            | ReactiveSiteKind::Carbonyl
+            | ReactiveSiteKind::Amide
+            | ReactiveSiteKind::PrimaryAmine
+            | ReactiveSiteKind::NonTertiaryAmine
+            | ReactiveSiteKind::Isocyanate
+            | ReactiveSiteKind::Borane
+            | ReactiveSiteKind::BorateEster
+            | ReactiveSiteKind::Alkene
+            | ReactiveSiteKind::Alkyne
+    )
 }
 
 fn canonical_to_id_from_generated(
@@ -641,155 +888,106 @@ fn generate_pair_reactions_for_seed(
     reactions: &mut Vec<Reaction>,
     reaction_ids: &mut BTreeSet<String>,
 ) -> ChemistryResult<()> {
-    let seed_group = seed.legacy_group()?;
-    match seed_group.group_type {
-        FunctionalGroupType::CarboxylicAcid => {
-            for alcohol in space.sites_of_legacy_group(FunctionalGroupType::Alcohol) {
-                let alcohol_group = alcohol.legacy_group()?;
-                let reaction = generate_carboxylic_acid_esterification(
-                    seed.substance,
-                    seed.structure,
-                    &seed_group,
-                    alcohol.substance,
-                    alcohol.structure,
-                    &alcohol_group,
-                    resolver,
-                )?;
+    match seed.site.kind {
+        ReactiveSiteKind::CarboxylicAcid => {
+            let acid_site = seed.clone().carboxylic_acid_site()?;
+            for alcohol in space.sites_of(&ReactiveSiteKind::Alcohol) {
+                let alcohol_site = alcohol.alcohol_site()?;
+                let reaction =
+                    generate_carboxylic_acid_esterification(&acid_site, &alcohol_site, resolver)?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
-        FunctionalGroupType::Alcohol => {
-            for acid in space.sites_of_legacy_group(FunctionalGroupType::CarboxylicAcid) {
-                let acid_group = acid.legacy_group()?;
-                let reaction = generate_carboxylic_acid_esterification(
-                    acid.substance,
-                    acid.structure,
-                    &acid_group,
-                    seed.substance,
-                    seed.structure,
-                    &seed_group,
-                    resolver,
-                )?;
+        ReactiveSiteKind::Alcohol => {
+            let alcohol_site = seed.clone().alcohol_site()?;
+            for acid in space.sites_of(&ReactiveSiteKind::CarboxylicAcid) {
+                let acid_site = acid.carboxylic_acid_site()?;
+                let reaction =
+                    generate_carboxylic_acid_esterification(&acid_site, &alcohol_site, resolver)?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
-            for acyl_chloride in space.sites_of_legacy_group(FunctionalGroupType::AcylChloride) {
-                let acyl_chloride_group = acyl_chloride.legacy_group()?;
+            for acyl_chloride in space.sites_of(&ReactiveSiteKind::AcylChloride) {
+                let acyl_chloride_site = acyl_chloride.acyl_chloride_site()?;
                 let reaction = generate_acyl_chloride_esterification(
-                    acyl_chloride.substance,
-                    acyl_chloride.structure,
-                    &acyl_chloride_group,
-                    seed.substance,
-                    seed.structure,
-                    &seed_group,
+                    &acyl_chloride_site,
+                    &alcohol_site,
                     resolver,
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
-            for carbonyl in space.sites_of_legacy_group(FunctionalGroupType::Carbonyl) {
-                let carbonyl_group = carbonyl.legacy_group()?;
-                let reaction = generate_acetal_formation(
-                    carbonyl.substance,
-                    carbonyl.structure,
-                    &carbonyl_group,
-                    seed.substance,
-                    seed.structure,
-                    &seed_group,
-                    resolver,
-                )?;
-                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            for carbonyl_kind in carbonyl_site_kinds() {
+                for carbonyl in space.sites_of(&carbonyl_kind) {
+                    let carbonyl_site = carbonyl.carbonyl_site()?;
+                    let reaction =
+                        generate_acetal_formation(&carbonyl_site, &alcohol_site, resolver)?;
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
             }
         }
-        FunctionalGroupType::AcylChloride => {
-            for alcohol in space.sites_of_legacy_group(FunctionalGroupType::Alcohol) {
-                let alcohol_group = alcohol.legacy_group()?;
+        ReactiveSiteKind::AcylChloride => {
+            let acyl_chloride_site = seed.clone().acyl_chloride_site()?;
+            for alcohol in space.sites_of(&ReactiveSiteKind::Alcohol) {
+                let alcohol_site = alcohol.alcohol_site()?;
                 let reaction = generate_acyl_chloride_esterification(
-                    seed.substance,
-                    seed.structure,
-                    &seed_group,
-                    alcohol.substance,
-                    alcohol.structure,
-                    &alcohol_group,
+                    &acyl_chloride_site,
+                    &alcohol_site,
                     resolver,
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
-        FunctionalGroupType::Halide => {
-            for amine in space.sites_of_legacy_group(FunctionalGroupType::NonTertiaryAmine) {
-                let amine_group = amine.legacy_group()?;
-                let reaction = generate_halide_amine_substitution(
-                    seed.substance,
-                    seed.structure,
-                    &seed_group,
-                    amine.substance,
-                    amine.structure,
-                    &amine_group,
-                    resolver,
-                )?;
+        ReactiveSiteKind::Halide => {
+            let halide_site = seed.clone().halide_site()?;
+            for amine in space.sites_of(&ReactiveSiteKind::NonTertiaryAmine) {
+                let amine_site = amine.amine_site()?;
+                let reaction =
+                    generate_halide_amine_substitution(&halide_site, &amine_site, resolver)?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
-        FunctionalGroupType::NonTertiaryAmine => {
-            for halide in space.sites_of_legacy_group(FunctionalGroupType::Halide) {
-                let halide_group = halide.legacy_group()?;
-                let reaction = generate_halide_amine_substitution(
-                    halide.substance,
-                    halide.structure,
-                    &halide_group,
-                    seed.substance,
-                    seed.structure,
-                    &seed_group,
-                    resolver,
-                )?;
+        ReactiveSiteKind::NonTertiaryAmine => {
+            let amine_site = seed.clone().amine_site()?;
+            for halide in space.sites_of(&ReactiveSiteKind::Halide) {
+                let halide_site = halide.halide_site()?;
+                let reaction =
+                    generate_halide_amine_substitution(&halide_site, &amine_site, resolver)?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
-        FunctionalGroupType::Carbonyl => {
-            for alcohol in space.sites_of_legacy_group(FunctionalGroupType::Alcohol) {
-                let alcohol_group = alcohol.legacy_group()?;
-                let reaction = generate_acetal_formation(
-                    seed.substance,
-                    seed.structure,
-                    &seed_group,
-                    alcohol.substance,
-                    alcohol.structure,
-                    &alcohol_group,
-                    resolver,
-                )?;
+        ReactiveSiteKind::Aldehyde | ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl => {
+            let carbonyl_site = seed.clone().carbonyl_site()?;
+            for alcohol in space.sites_of(&ReactiveSiteKind::Alcohol) {
+                let alcohol_site = alcohol.alcohol_site()?;
+                let reaction = generate_acetal_formation(&carbonyl_site, &alcohol_site, resolver)?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
-            for amine in space.sites_of_legacy_group(FunctionalGroupType::PrimaryAmine) {
-                let amine_group = amine.legacy_group()?;
-                let reaction = generate_imine_formation(
-                    seed.substance,
-                    seed.structure,
-                    &seed_group,
-                    amine.substance,
-                    amine.structure,
-                    &amine_group,
-                    resolver,
-                )?;
+            for amine in space.sites_of(&ReactiveSiteKind::PrimaryAmine) {
+                let amine_site = amine.amine_site()?;
+                let reaction = generate_imine_formation(&carbonyl_site, &amine_site, resolver)?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
-        FunctionalGroupType::PrimaryAmine => {
-            for carbonyl in space.sites_of_legacy_group(FunctionalGroupType::Carbonyl) {
-                let carbonyl_group = carbonyl.legacy_group()?;
-                let reaction = generate_imine_formation(
-                    carbonyl.substance,
-                    carbonyl.structure,
-                    &carbonyl_group,
-                    seed.substance,
-                    seed.structure,
-                    &seed_group,
-                    resolver,
-                )?;
-                push_unique_reaction(reactions, reaction_ids, reaction)?;
+        ReactiveSiteKind::PrimaryAmine => {
+            let amine_site = seed.clone().amine_site()?;
+            for carbonyl_kind in carbonyl_site_kinds() {
+                for carbonyl in space.sites_of(&carbonyl_kind) {
+                    let carbonyl_site = carbonyl.carbonyl_site()?;
+                    let reaction = generate_imine_formation(&carbonyl_site, &amine_site, resolver)?;
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
             }
         }
         _ => {}
     }
     Ok(())
+}
+
+fn carbonyl_site_kinds() -> [ReactiveSiteKind; 3] {
+    [
+        ReactiveSiteKind::Aldehyde,
+        ReactiveSiteKind::Ketone,
+        ReactiveSiteKind::Carbonyl,
+    ]
 }
 
 fn generate_site_reactions_for_seed_participants<'a>(
@@ -878,23 +1076,22 @@ fn push_unique_reaction(
 }
 
 fn generate_halide_hydroxide_substitution(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &HalideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Option<Reaction>> {
-    let carbon = group.atoms[0];
-    let halogen = group.atoms[1];
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let halogen = site.halogen;
     let halide_ion = match structure.atoms[halogen].element.as_str() {
         "Cl" => "destroy:chloride",
         "F" => "destroy:fluoride",
         "I" => "destroy:iodide",
         _ => {
             return Err(ChemistryError::InvalidReaction {
-                reaction_id: generated_group_reaction_id(
+                reaction_id: generated_site_reaction_id(
                     "halide_hydroxide_substitution",
-                    substance,
-                    group,
+                    &site.participant,
                 ),
                 reason: "halide group does not contain a supported halogen".to_string(),
             })
@@ -907,21 +1104,12 @@ fn generate_halide_hydroxide_substitution(
     editor.add_atom(oxygen, "H", 0.0, 1.0)?;
     let product = resolver.resolve(editor.finish()?)?;
     Ok(Some(
-        Reaction::builder(generated_group_reaction_id(
+        Reaction::builder(generated_site_reaction_id(
             "halide_hydroxide_substitution",
-            substance,
-            group,
+            &site.participant,
         ))
         .reactant(substance.id.clone(), 1, 1)
-        .reactant(
-            "destroy:hydroxide",
-            1,
-            if group.degree.unwrap_or_default() == 3 {
-                0
-            } else {
-                1
-            },
-        )
+        .reactant("destroy:hydroxide", 1, if site.degree == 3 { 0 } else { 1 })
         .product(product, 1)
         .product(halide_ion, 1)
         .build(),
@@ -929,25 +1117,20 @@ fn generate_halide_hydroxide_substitution(
 }
 
 fn generate_alcohol_oxidation(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &AlcoholSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Option<Reaction>> {
-    if group.degree.unwrap_or_default() >= 3 {
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    if site.degree >= 3 {
         return Ok(None);
     }
-    let carbon = group.atoms[0];
-    let oxygen = group.atoms[1];
+    let carbon = site.carbon;
+    let oxygen = site.oxygen;
     let Some(carbon_hydrogen) = first_bonded_hydrogen(structure, carbon) else {
         return Ok(None);
     };
-    let oxygen_hydrogen = first_bonded_hydrogen(structure, oxygen).ok_or_else(|| {
-        ChemistryError::InvalidReaction {
-            reaction_id: generated_group_reaction_id("alcohol_oxidation", substance, group),
-            reason: "alcohol oxygen has no explicit hydrogen".to_string(),
-        }
-    })?;
+    let oxygen_hydrogen = site.hydrogen;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[carbon_hydrogen, oxygen_hydrogen])?;
     let carbon = mapped_atom(&mapping, carbon, "alcohol carbon")?;
@@ -955,10 +1138,9 @@ fn generate_alcohol_oxidation(
     editor.set_bond_order(carbon, oxygen, 2.0)?;
     let product = resolver.resolve(editor.finish()?)?;
     Ok(Some(
-        Reaction::builder(generated_group_reaction_id(
+        Reaction::builder(generated_site_reaction_id(
             "alcohol_oxidation",
-            substance,
-            group,
+            &site.participant,
         ))
         .reactant(substance.id.clone(), 3, 1)
         .reactant("destroy:dichromate", 1, 1)
@@ -972,43 +1154,19 @@ fn generate_alcohol_oxidation(
 }
 
 fn generate_carboxylic_acid_esterification(
-    acid: &Substance,
-    acid_structure: &MolecularStructure,
-    acid_group: &FunctionalGroup,
-    alcohol: &Substance,
-    alcohol_structure: &MolecularStructure,
-    alcohol_group: &FunctionalGroup,
+    acid_site: &CarboxylicAcidSite<'_>,
+    alcohol_site: &AlcoholSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let acid_carbon = acid_group.atoms[0];
-    let acid_hydroxyl_oxygen = acid_group.atoms[2];
-    let acid_proton =
-        first_bonded_hydrogen(acid_structure, acid_hydroxyl_oxygen).ok_or_else(|| {
-            ChemistryError::InvalidReaction {
-                reaction_id: generated_pair_group_reaction_id(
-                    "carboxylic_acid_esterification",
-                    acid,
-                    acid_group,
-                    alcohol,
-                    alcohol_group,
-                ),
-                reason: "carboxylic acid has no explicit hydroxyl hydrogen".to_string(),
-            }
-        })?;
-    let alcohol_oxygen = alcohol_group.atoms[1];
-    let alcohol_proton =
-        first_bonded_hydrogen(alcohol_structure, alcohol_oxygen).ok_or_else(|| {
-            ChemistryError::InvalidReaction {
-                reaction_id: generated_pair_group_reaction_id(
-                    "carboxylic_acid_esterification",
-                    acid,
-                    acid_group,
-                    alcohol,
-                    alcohol_group,
-                ),
-                reason: "alcohol has no explicit hydroxyl hydrogen".to_string(),
-            }
-        })?;
+    let acid = acid_site.participant.substance;
+    let acid_structure = acid_site.participant.structure;
+    let alcohol = alcohol_site.participant.substance;
+    let alcohol_structure = alcohol_site.participant.structure;
+    let acid_carbon = acid_site.carbon;
+    let acid_hydroxyl_oxygen = acid_site.hydroxyl_oxygen;
+    let acid_proton = acid_site.hydroxyl_hydrogen;
+    let alcohol_oxygen = alcohol_site.oxygen;
+    let alcohol_proton = alcohol_site.hydrogen;
 
     let mut acid_editor = MolecularEditor::new(acid_structure);
     let acid_mapping = acid_editor.remove_atoms(&[acid_proton, acid_hydroxyl_oxygen])?;
@@ -1028,12 +1186,10 @@ fn generate_carboxylic_acid_esterification(
         1.0,
     )?;
     let product = resolver.resolve(product_structure)?;
-    Ok(Reaction::builder(generated_pair_group_reaction_id(
+    Ok(Reaction::builder(generated_pair_site_reaction_id(
         "carboxylic_acid_esterification",
-        acid,
-        acid_group,
-        alcohol,
-        alcohol_group,
+        &acid_site.participant,
+        &alcohol_site.participant,
     ))
     .reactant(acid.id.clone(), 1, 1)
     .reactant(alcohol.id.clone(), 1, 0)
@@ -1044,18 +1200,17 @@ fn generate_carboxylic_acid_esterification(
 }
 
 fn generate_acetal_formation(
-    carbonyl: &Substance,
-    carbonyl_structure: &MolecularStructure,
-    carbonyl_group: &FunctionalGroup,
-    alcohol: &Substance,
-    alcohol_structure: &MolecularStructure,
-    alcohol_group: &FunctionalGroup,
+    carbonyl_site: &CarbonylSite<'_>,
+    alcohol_site: &AlcoholSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let carbonyl_carbon = carbonyl_group.atoms[0];
-    let carbonyl_oxygen = carbonyl_group.atoms[1];
+    let carbonyl = carbonyl_site.participant.substance;
+    let carbonyl_structure = carbonyl_site.participant.structure;
+    let alcohol = alcohol_site.participant.substance;
+    let carbonyl_carbon = carbonyl_site.carbon;
+    let carbonyl_oxygen = carbonyl_site.oxygen;
     let (alcohol_fragment, alcohol_oxygen) =
-        deprotonated_alcohol_fragment(alcohol_structure, alcohol_group, "acetal formation")?;
+        deprotonated_alcohol_fragment(alcohol_site, "acetal formation")?;
 
     let mut carbonyl_editor = MolecularEditor::new(carbonyl_structure);
     let carbonyl_mapping = carbonyl_editor.remove_atoms(&[carbonyl_oxygen])?;
@@ -1066,12 +1221,10 @@ fn generate_acetal_formation(
     product_editor.mark_tetrahedral_stereo_mixture_if_valid(carbonyl_carbon)?;
     let product_variants = expand_stereo_product_distribution(product_editor.finish()?)?;
 
-    let mut builder = Reaction::builder(generated_pair_group_reaction_id(
+    let mut builder = Reaction::builder(generated_pair_site_reaction_id(
         "acetal_formation",
-        carbonyl,
-        carbonyl_group,
-        alcohol,
-        alcohol_group,
+        &carbonyl_site.participant,
+        &alcohol_site.participant,
     ))
     .reactant(carbonyl.id.clone(), 1, 1)
     .reactant(alcohol.id.clone(), 2, 1)
@@ -1108,31 +1261,24 @@ fn generate_acetal_formation(
 }
 
 fn generate_imine_formation(
-    carbonyl: &Substance,
-    carbonyl_structure: &MolecularStructure,
-    carbonyl_group: &FunctionalGroup,
-    amine: &Substance,
-    amine_structure: &MolecularStructure,
-    amine_group: &FunctionalGroup,
+    carbonyl_site: &CarbonylSite<'_>,
+    amine_site: &AmineSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let carbonyl_carbon = carbonyl_group.atoms[0];
-    let carbonyl_oxygen = carbonyl_group.atoms[1];
-    let amine_nitrogen = amine_group.atoms[1];
-    let hydrogens = explicit_group_hydrogens(
-        amine_structure,
-        amine_group,
-        amine_nitrogen,
-        "imine formation",
-    )?;
+    let carbonyl = carbonyl_site.participant.substance;
+    let carbonyl_structure = carbonyl_site.participant.structure;
+    let amine = amine_site.participant.substance;
+    let amine_structure = amine_site.participant.structure;
+    let carbonyl_carbon = carbonyl_site.carbon;
+    let carbonyl_oxygen = carbonyl_site.oxygen;
+    let amine_nitrogen = amine_site.nitrogen;
+    let hydrogens = &amine_site.hydrogens;
     if hydrogens.len() < 2 {
         return Err(ChemistryError::InvalidReaction {
-            reaction_id: generated_pair_group_reaction_id(
+            reaction_id: generated_pair_site_reaction_id(
                 "imine_formation",
-                carbonyl,
-                carbonyl_group,
-                amine,
-                amine_group,
+                &carbonyl_site.participant,
+                &amine_site.participant,
             ),
             reason: "primary amine must have two explicit hydrogens for imine formation"
                 .to_string(),
@@ -1157,12 +1303,10 @@ fn generate_imine_formation(
         2.0,
     )?;
     let product = resolver.resolve(product_structure)?;
-    Ok(Reaction::builder(generated_pair_group_reaction_id(
+    Ok(Reaction::builder(generated_pair_site_reaction_id(
         "imine_formation",
-        carbonyl,
-        carbonyl_group,
-        amine,
-        amine_group,
+        &carbonyl_site.participant,
+        &amine_site.participant,
     ))
     .reactant(carbonyl.id.clone(), 1, 1)
     .reactant(amine.id.clone(), 1, 1)
@@ -1390,17 +1534,12 @@ fn generate_epoxide_hydrolysis(
 }
 
 fn deprotonated_alcohol_fragment(
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
-    role: &str,
+    site: &AlcoholSite<'_>,
+    _role: &str,
 ) -> ChemistryResult<(MolecularStructure, usize)> {
-    let oxygen = group.atoms[1];
-    let hydrogen = first_bonded_hydrogen(structure, oxygen).ok_or_else(|| {
-        ChemistryError::InvalidReaction {
-            reaction_id: "<generated-organic>".to_string(),
-            reason: format!("{role} alcohol has no explicit hydroxyl hydrogen"),
-        }
-    })?;
+    let structure = site.participant.structure;
+    let oxygen = site.oxygen;
+    let hydrogen = site.hydrogen;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[hydrogen])?;
     let oxygen = mapped_atom(&mapping, oxygen, "alcohol oxygen")?;
@@ -1408,13 +1547,13 @@ fn deprotonated_alcohol_fragment(
 }
 
 fn generate_nitrile_hydrolysis(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &NitrileSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let carbon = group.atoms[0];
-    let nitrogen = group.atoms[1];
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let nitrogen = site.nitrogen;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[nitrogen])?;
     let carbon = mapped_atom(&mapping, carbon, "nitrile carbon")?;
@@ -1423,10 +1562,9 @@ fn generate_nitrile_hydrolysis(
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "nitrile_hydrolysis",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:water", 1, 1)
@@ -1436,24 +1574,22 @@ fn generate_nitrile_hydrolysis(
 }
 
 fn generate_nitro_hydrogenation(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &NitroSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let nitrogen = group.atoms[1];
-    let first_oxygen = group.atoms[2];
-    let second_oxygen = group.atoms[3];
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let nitrogen = site.nitrogen;
+    let [first_oxygen, second_oxygen] = site.oxygens;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[first_oxygen, second_oxygen])?;
     let nitrogen = mapped_atom(&mapping, nitrogen, "nitro nitrogen")?;
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "nitro_hydrogenation",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:hydrogen", 3, 1)
@@ -1464,23 +1600,22 @@ fn generate_nitro_hydrogenation(
 }
 
 fn generate_acyl_chloride_formation(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &CarboxylicAcidSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let carbon = group.atoms[0];
-    let hydroxyl_oxygen = group.atoms[2];
-    let proton = explicit_group_hydrogen(structure, group, 3, hydroxyl_oxygen, "carboxylic acid")?;
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let hydroxyl_oxygen = site.hydroxyl_oxygen;
+    let proton = site.hydroxyl_hydrogen;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[hydroxyl_oxygen, proton])?;
     let carbon = mapped_atom(&mapping, carbon, "carboxylic acid carbon")?;
     editor.add_atom(carbon, "Cl", 0.0, 1.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "acyl_chloride_formation",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:phosgene", 1, 1)
@@ -1491,22 +1626,21 @@ fn generate_acyl_chloride_formation(
 }
 
 fn generate_acyl_chloride_hydrolysis(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &AcylChlorideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let carbon = group.atoms[0];
-    let chlorine = group.atoms[2];
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let chlorine = site.chlorine;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[chlorine])?;
     let carbon = mapped_atom(&mapping, carbon, "acyl chloride carbon")?;
     add_hydroxyl(&mut editor, carbon)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "acyl_chloride_hydrolysis",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:water", 1, 1)
@@ -1516,24 +1650,18 @@ fn generate_acyl_chloride_hydrolysis(
 }
 
 fn generate_acyl_chloride_esterification(
-    acyl_chloride: &Substance,
-    acyl_chloride_structure: &MolecularStructure,
-    acyl_chloride_group: &FunctionalGroup,
-    alcohol: &Substance,
-    alcohol_structure: &MolecularStructure,
-    alcohol_group: &FunctionalGroup,
+    acyl_chloride_site: &AcylChlorideSite<'_>,
+    alcohol_site: &AlcoholSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let acyl_carbon = acyl_chloride_group.atoms[0];
-    let chlorine = acyl_chloride_group.atoms[2];
-    let alcohol_oxygen = alcohol_group.atoms[1];
-    let alcohol_proton = explicit_group_hydrogen(
-        alcohol_structure,
-        alcohol_group,
-        2,
-        alcohol_oxygen,
-        "alcohol",
-    )?;
+    let acyl_chloride = acyl_chloride_site.participant.substance;
+    let acyl_chloride_structure = acyl_chloride_site.participant.structure;
+    let alcohol = alcohol_site.participant.substance;
+    let alcohol_structure = alcohol_site.participant.structure;
+    let acyl_carbon = acyl_chloride_site.carbon;
+    let chlorine = acyl_chloride_site.chlorine;
+    let alcohol_oxygen = alcohol_site.oxygen;
+    let alcohol_proton = alcohol_site.hydrogen;
     let mut acyl_editor = MolecularEditor::new(acyl_chloride_structure);
     let acyl_mapping = acyl_editor.remove_atoms(&[chlorine])?;
     let acyl_carbon = mapped_atom(&acyl_mapping, acyl_carbon, "acyl chloride carbon")?;
@@ -1551,12 +1679,10 @@ fn generate_acyl_chloride_esterification(
         alcohol_oxygen,
         1.0,
     )?)?;
-    Ok(Reaction::builder(generated_pair_group_reaction_id(
+    Ok(Reaction::builder(generated_pair_site_reaction_id(
         "acyl_chloride_esterification",
-        acyl_chloride,
-        acyl_chloride_group,
-        alcohol,
-        alcohol_group,
+        &acyl_chloride_site.participant,
+        &alcohol_site.participant,
     ))
     .reactant(acyl_chloride.id.clone(), 1, 1)
     .reactant(alcohol.id.clone(), 1, 1)
@@ -1566,14 +1692,14 @@ fn generate_acyl_chloride_esterification(
 }
 
 fn generate_alcohol_dehydration(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &AlcoholSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Option<Reaction>> {
-    let alcohol_carbon = group.atoms[0];
-    let oxygen = group.atoms[1];
-    let proton = explicit_group_hydrogen(structure, group, 2, oxygen, "alcohol")?;
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let alcohol_carbon = site.carbon;
+    let oxygen = site.oxygen;
+    let proton = site.hydrogen;
     let mut products = Vec::new();
     for (neighbor, order) in structure.neighbors(alcohol_carbon) {
         if structure.atoms[neighbor].element != "C"
@@ -1594,10 +1720,9 @@ fn generate_alcohol_dehydration(
     if products.is_empty() {
         return Ok(None);
     }
-    let mut builder = Reaction::builder(generated_group_reaction_id(
+    let mut builder = Reaction::builder(generated_site_reaction_id(
         "alcohol_dehydration",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), products.len() as u32, 1)
     .reactant("destroy:oleum", products.len() as u32, 1)
@@ -1609,20 +1734,19 @@ fn generate_alcohol_dehydration(
 }
 
 fn generate_alkoxide_protonation(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &AlkoxideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let oxygen = group.atoms[1];
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let oxygen = site.oxygen;
     let mut editor = MolecularEditor::new(structure);
     editor.replace_atom(oxygen, "O", 0.0)?;
     editor.add_atom(oxygen, "H", 0.0, 1.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "alkoxide_protonation",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:proton", 1, 1)
@@ -1631,23 +1755,22 @@ fn generate_alkoxide_protonation(
 }
 
 fn generate_thionyl_chloride_substitution(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &AlcoholSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let carbon = group.atoms[0];
-    let oxygen = group.atoms[1];
-    let proton = explicit_group_hydrogen(structure, group, 2, oxygen, "alcohol")?;
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let oxygen = site.oxygen;
+    let proton = site.hydrogen;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[oxygen, proton])?;
     let carbon = mapped_atom(&mapping, carbon, "alcohol carbon")?;
     editor.add_atom(carbon, "Cl", 0.0, 1.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "thionyl_chloride_substitution",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:thionyl_chloride", 1, 1)
@@ -1658,15 +1781,15 @@ fn generate_thionyl_chloride_substitution(
 }
 
 fn generate_aldehyde_oxidation(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &CarbonylSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Option<Reaction>> {
-    if group.is_ketone.unwrap_or(true) {
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    if site.is_ketone {
         return Ok(None);
     }
-    let carbon = group.atoms[0];
+    let carbon = site.carbon;
     let Some(hydrogen) = first_bonded_hydrogen(structure, carbon) else {
         return Ok(None);
     };
@@ -1676,10 +1799,9 @@ fn generate_aldehyde_oxidation(
     add_hydroxyl(&mut editor, carbon)?;
     let product = resolver.resolve(editor.finish()?)?;
     Ok(Some(
-        Reaction::builder(generated_group_reaction_id(
+        Reaction::builder(generated_site_reaction_id(
             "aldehyde_oxidation",
-            substance,
-            group,
+            &site.participant,
         ))
         .reactant(substance.id.clone(), 3, 1)
         .reactant("destroy:dichromate", 1, 1)
@@ -1693,23 +1815,22 @@ fn generate_aldehyde_oxidation(
 }
 
 fn generate_cyanide_nucleophilic_addition(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &CarbonylSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let carbon = group.atoms[0];
-    let oxygen = group.atoms[1];
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let oxygen = site.oxygen;
     let mut editor = MolecularEditor::new(structure);
     editor.set_bond_order(carbon, oxygen, 1.0)?;
     editor.add_atom(oxygen, "H", 0.0, 1.0)?;
     let nitrile_carbon = editor.add_atom(carbon, "C", 0.0, 1.0)?;
     editor.add_atom(nitrile_carbon, "N", 0.0, 3.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "cyanide_nucleophilic_addition",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:hydrogen_cyanide", 1, 1)
@@ -1719,23 +1840,22 @@ fn generate_cyanide_nucleophilic_addition(
 }
 
 fn generate_wolff_kishner_reduction(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &CarbonylSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let carbon = group.atoms[0];
-    let oxygen = group.atoms[1];
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let oxygen = site.oxygen;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[oxygen])?;
     let carbon = mapped_atom(&mapping, carbon, "carbonyl carbon")?;
     editor.add_atom(carbon, "H", 0.0, 1.0)?;
     editor.add_atom(carbon, "H", 0.0, 1.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "wolff_kishner_reduction",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:hydrazine", 1, 1)
@@ -1747,17 +1867,17 @@ fn generate_wolff_kishner_reduction(
 }
 
 fn generate_amide_hydrolysis(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &AmideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let carbon = group.atoms[0];
-    let nitrogen = group.atoms[2];
-    let hydrogens = explicit_group_hydrogens(structure, group, nitrogen, "amide nitrogen")?;
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let nitrogen = site.nitrogen;
+    let hydrogens = &site.nitrogen_hydrogens;
     if hydrogens.len() != 2 {
         return Err(ChemistryError::InvalidReaction {
-            reaction_id: generated_group_reaction_id("amide_hydrolysis", substance, group),
+            reaction_id: generated_site_reaction_id("amide_hydrolysis", &site.participant),
             reason: "unsubstituted amide must have exactly two explicit nitrogen hydrogens"
                 .to_string(),
         });
@@ -1767,10 +1887,9 @@ fn generate_amide_hydrolysis(
     let carbon = mapped_atom(&mapping, carbon, "amide carbon")?;
     add_hydroxyl(&mut editor, carbon)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "amide_hydrolysis",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:water", 1, 1)
@@ -1781,16 +1900,16 @@ fn generate_amide_hydrolysis(
 }
 
 fn generate_amine_phosgenation(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &AmineSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let nitrogen = group.atoms[1];
-    let hydrogens = explicit_group_hydrogens(structure, group, nitrogen, "primary amine")?;
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let nitrogen = site.nitrogen;
+    let hydrogens = &site.hydrogens;
     if hydrogens.len() != 2 {
         return Err(ChemistryError::InvalidReaction {
-            reaction_id: generated_group_reaction_id("amine_phosgenation", substance, group),
+            reaction_id: generated_site_reaction_id("amine_phosgenation", &site.participant),
             reason: "primary amine must have exactly two explicit hydrogens".to_string(),
         });
     }
@@ -1800,10 +1919,9 @@ fn generate_amine_phosgenation(
     let carbon = editor.add_atom(nitrogen, "C", 0.0, 2.0)?;
     editor.add_atom(carbon, "O", 0.0, 2.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "amine_phosgenation",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:phosgene", 1, 1)
@@ -1813,13 +1931,19 @@ fn generate_amine_phosgenation(
 }
 
 fn generate_cyanamide_addition(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &AmineSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let nitrogen = group.atoms[1];
-    let hydrogen = explicit_group_hydrogen(structure, group, 2, nitrogen, "amine")?;
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let nitrogen = site.nitrogen;
+    let hydrogen = *site
+        .hydrogens
+        .first()
+        .ok_or_else(|| ChemistryError::InvalidReaction {
+            reaction_id: generated_site_reaction_id("cyanamide_addition", &site.participant),
+            reason: "amine has no explicit hydrogen".to_string(),
+        })?;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[hydrogen])?;
     let nitrogen = mapped_atom(&mapping, nitrogen, "amine nitrogen")?;
@@ -1830,10 +1954,9 @@ fn generate_cyanamide_addition(
     editor.add_atom(amine_nitrogen, "H", 0.0, 1.0)?;
     editor.add_atom(amine_nitrogen, "H", 0.0, 1.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "cyanamide_addition",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:cyanamide", 1, 1)
@@ -1842,13 +1965,13 @@ fn generate_cyanamide_addition(
 }
 
 fn generate_halide_ammonia_substitution(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &HalideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let carbon = group.atoms[0];
-    let halogen = group.atoms[1];
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let halogen = site.halogen;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[halogen])?;
     let carbon = mapped_atom(&mapping, carbon, "halide carbon")?;
@@ -1856,29 +1979,19 @@ fn generate_halide_ammonia_substitution(
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "halide_ammonia_substitution",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
-    .reactant(
-        "destroy:ammonia",
-        2,
-        if group.degree.unwrap_or_default() == 3 {
-            1
-        } else {
-            2
-        },
-    )
+    .reactant("destroy:ammonia", 2, if site.degree == 3 { 1 } else { 2 })
     .product(product, 1)
     .product(
         halide_ion(
             structure,
             halogen,
             "halide_ammonia_substitution",
-            substance,
-            group,
+            &site.participant,
         )?,
         1,
     )
@@ -1887,42 +2000,32 @@ fn generate_halide_ammonia_substitution(
 }
 
 fn generate_halide_cyanide_substitution(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &HalideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let carbon = group.atoms[0];
-    let halogen = group.atoms[1];
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let halogen = site.halogen;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[halogen])?;
     let carbon = mapped_atom(&mapping, carbon, "halide carbon")?;
     let nitrile_carbon = editor.add_atom(carbon, "C", 0.0, 1.0)?;
     editor.add_atom(nitrile_carbon, "N", 0.0, 3.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "halide_cyanide_substitution",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
-    .reactant(
-        "destroy:cyanide",
-        1,
-        if group.degree.unwrap_or_default() == 3 {
-            0
-        } else {
-            1
-        },
-    )
+    .reactant("destroy:cyanide", 1, if site.degree == 3 { 0 } else { 1 })
     .product(product, 1)
     .product(
         halide_ion(
             structure,
             halogen,
             "halide_cyanide_substitution",
-            substance,
-            group,
+            &site.participant,
         )?,
         1,
     )
@@ -1930,19 +2033,29 @@ fn generate_halide_cyanide_substitution(
 }
 
 fn generate_halide_amine_substitution(
-    halide: &Substance,
-    halide_structure: &MolecularStructure,
-    halide_group: &FunctionalGroup,
-    amine: &Substance,
-    amine_structure: &MolecularStructure,
-    amine_group: &FunctionalGroup,
+    halide_site: &HalideSite<'_>,
+    amine_site: &AmineSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let halide_carbon = halide_group.atoms[0];
-    let halogen = halide_group.atoms[1];
-    let amine_nitrogen = amine_group.atoms[1];
+    let halide = halide_site.participant.substance;
+    let halide_structure = halide_site.participant.structure;
+    let amine = amine_site.participant.substance;
+    let amine_structure = amine_site.participant.structure;
+    let halide_carbon = halide_site.carbon;
+    let halogen = halide_site.halogen;
+    let amine_nitrogen = amine_site.nitrogen;
     let amine_hydrogen =
-        explicit_group_hydrogen(amine_structure, amine_group, 2, amine_nitrogen, "amine")?;
+        *amine_site
+            .hydrogens
+            .first()
+            .ok_or_else(|| ChemistryError::InvalidReaction {
+                reaction_id: generated_pair_site_reaction_id(
+                    "halide_amine_substitution",
+                    &halide_site.participant,
+                    &amine_site.participant,
+                ),
+                reason: "amine has no explicit hydrogen".to_string(),
+            })?;
     let mut halide_editor = MolecularEditor::new(halide_structure);
     let halide_mapping = halide_editor.remove_atoms(&[halogen])?;
     let halide_carbon = mapped_atom(&halide_mapping, halide_carbon, "halide carbon")?;
@@ -1960,12 +2073,10 @@ fn generate_halide_amine_substitution(
         amine_nitrogen,
         1.0,
     )?)?;
-    Ok(Reaction::builder(generated_pair_group_reaction_id(
+    Ok(Reaction::builder(generated_pair_site_reaction_id(
         "halide_amine_substitution",
-        halide,
-        halide_group,
-        amine,
-        amine_group,
+        &halide_site.participant,
+        &amine_site.participant,
     ))
     .reactant(halide.id.clone(), 1, 1)
     .reactant(amine.id.clone(), 1, 2)
@@ -1975,8 +2086,7 @@ fn generate_halide_amine_substitution(
             halide_structure,
             halogen,
             "halide_amine_substitution",
-            halide,
-            halide_group,
+            &halide_site.participant,
         )?,
         1,
     )
@@ -1985,24 +2095,23 @@ fn generate_halide_amine_substitution(
 }
 
 fn generate_isocyanate_hydrolysis(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &IsocyanateSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let nitrogen = group.atoms[1];
-    let functional_carbon = group.atoms[2];
-    let oxygen = group.atoms[3];
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let nitrogen = site.nitrogen;
+    let functional_carbon = site.functional_carbon;
+    let oxygen = site.oxygen;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[functional_carbon, oxygen])?;
     let nitrogen = mapped_atom(&mapping, nitrogen, "isocyanate nitrogen")?;
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "isocyanate_hydrolysis",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:water", 1, 1)
@@ -2012,13 +2121,13 @@ fn generate_isocyanate_hydrolysis(
 }
 
 fn generate_nitrile_hydrogenation(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &NitrileSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let carbon = group.atoms[0];
-    let nitrogen = group.atoms[1];
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let nitrogen = site.nitrogen;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[nitrogen])?;
     let carbon = mapped_atom(&mapping, carbon, "nitrile carbon")?;
@@ -2028,10 +2137,9 @@ fn generate_nitrile_hydrogenation(
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "nitrile_hydrogenation",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:hydrogen", 2, 1)
@@ -2041,20 +2149,19 @@ fn generate_nitrile_hydrogenation(
 }
 
 fn generate_borane_oxidation(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &BoraneSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let carbon = group.atoms[0];
-    let boron = group.atoms[1];
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let boron = site.boron;
     let mut editor = MolecularEditor::new(structure);
     editor.insert_bridging_atom(carbon, boron, "O", 0.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "borane_oxidation",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:hydrogen_peroxide", 1, 1)
@@ -2065,13 +2172,13 @@ fn generate_borane_oxidation(
 }
 
 fn generate_borate_ester_hydrolysis(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &BorateEsterSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let oxygen = group.atoms[1];
-    let boron = group.atoms[2];
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let oxygen = site.oxygen;
+    let boron = site.boron;
     let (first, first_mapping, second, second_mapping) =
         MolecularEditor::split_at_bond(structure, oxygen, boron)?;
     let (boron_fragment, boron_mapping, alcohol_fragment, oxygen_mapping) =
@@ -2091,10 +2198,9 @@ fn generate_borate_ester_hydrolysis(
     alcohol_editor.add_atom(oxygen, "H", 0.0, 1.0)?;
     let alcohol_product = resolver.resolve(alcohol_editor.finish()?)?;
 
-    Ok(Reaction::builder(generated_group_reaction_id(
+    Ok(Reaction::builder(generated_site_reaction_id(
         "borate_ester_hydrolysis",
-        substance,
-        group,
+        &site.participant,
     ))
     .reactant(substance.id.clone(), 1, 1)
     .reactant("destroy:water", 1, 1)
@@ -2272,15 +2378,15 @@ fn electrophilic_addition_specs(alkyne: bool) -> Vec<ElectrophilicAdditionSpec> 
 }
 
 fn generate_electrophilic_addition(
-    substance: &Substance,
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
+    site: &UnsaturatedBondSite<'_>,
     spec: ElectrophilicAdditionSpec,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let high_degree_carbon = group.atoms[0];
-    let low_degree_carbon = group.atoms[1];
-    let is_alkyne = group.group_type == FunctionalGroupType::Alkyne;
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let high_degree_carbon = site.high_degree_carbon;
+    let low_degree_carbon = site.low_degree_carbon;
+    let is_alkyne = site.is_alkyne;
     let mut editor = MolecularEditor::new(structure);
     editor.set_bond_order(
         high_degree_carbon,
@@ -2310,7 +2416,7 @@ fn generate_electrophilic_addition(
             variant.pre_exponential_factor_multiplier,
         ));
     }
-    let mut builder = Reaction::builder(generated_group_reaction_id(spec.prefix, substance, group))
+    let mut builder = Reaction::builder(generated_site_reaction_id(spec.prefix, &site.participant))
         .reactant(substance.id.clone(), spec.nucleophile_ratio, 1)
         .reactant(spec.electrophile, 1, 1)
         .activation_energy_kj_per_mol(spec.activation_energy);
@@ -2634,70 +2740,27 @@ fn add_addition_group(
     Ok(())
 }
 
-fn explicit_group_hydrogen(
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
-    preferred_atom_position: usize,
-    parent: usize,
-    role: &str,
-) -> ChemistryResult<usize> {
-    if let Some(index) = group.atoms.get(preferred_atom_position) {
-        if structure.atoms[*index].element == "H" {
-            return Ok(*index);
-        }
-    }
-    first_bonded_hydrogen(structure, parent).ok_or_else(|| ChemistryError::InvalidReaction {
-        reaction_id: "<generated-organic>".to_string(),
-        reason: format!("{role} has no explicit hydrogen"),
-    })
-}
-
-fn explicit_group_hydrogens(
-    structure: &MolecularStructure,
-    group: &FunctionalGroup,
-    parent: usize,
-    role: &str,
-) -> ChemistryResult<Vec<usize>> {
-    let hydrogens = group
-        .atoms
-        .iter()
-        .copied()
-        .filter(|index| structure.atoms[*index].element == "H")
-        .collect::<Vec<_>>();
-    if hydrogens.is_empty() {
-        return Err(ChemistryError::InvalidReaction {
-            reaction_id: "<generated-organic>".to_string(),
-            reason: format!("{role} has no explicit hydrogen"),
-        });
-    }
-    for hydrogen in &hydrogens {
-        if !structure
-            .neighbors(parent)
-            .into_iter()
-            .any(|(neighbor, _)| neighbor == *hydrogen)
-        {
-            return Err(ChemistryError::InvalidReaction {
-                reaction_id: "<generated-organic>".to_string(),
-                reason: format!("{role} group hydrogen is not bonded to the expected atom"),
-            });
-        }
-    }
-    Ok(hydrogens)
+fn bonded_hydrogens(structure: &MolecularStructure, parent: usize) -> Vec<usize> {
+    structure
+        .neighbors(parent)
+        .into_iter()
+        .map(|(neighbor, _)| neighbor)
+        .filter(|neighbor| structure.atoms[*neighbor].element == "H")
+        .collect()
 }
 
 fn halide_ion(
     structure: &MolecularStructure,
     halogen: usize,
     prefix: &str,
-    substance: &Substance,
-    group: &FunctionalGroup,
+    participant: &SiteParticipant<'_>,
 ) -> ChemistryResult<&'static str> {
     match structure.atoms[halogen].element.as_str() {
         "Cl" => Ok("destroy:chloride"),
         "F" => Ok("destroy:fluoride"),
         "I" => Ok("destroy:iodide"),
         _ => Err(ChemistryError::InvalidReaction {
-            reaction_id: generated_group_reaction_id(prefix, substance, group),
+            reaction_id: generated_site_reaction_id(prefix, participant),
             reason: "halide group does not contain a supported halogen".to_string(),
         }),
     }
@@ -2870,42 +2933,11 @@ fn mapped_atom(mapping: &[Option<usize>], old_index: usize, role: &str) -> Chemi
         })
 }
 
-fn generated_reaction_id(prefix: &str, substance: &Substance) -> String {
-    format!("{prefix}/{}", sanitize_id(substance.id.as_str()))
-}
-
-fn generated_group_reaction_id(
-    prefix: &str,
-    substance: &Substance,
-    group: &FunctionalGroup,
-) -> String {
-    format!(
-        "{}/{}",
-        generated_reaction_id(prefix, substance),
-        atom_suffix(group)
-    )
-}
-
 fn generated_pair_reaction_id(prefix: &str, first: &Substance, second: &Substance) -> String {
     format!(
         "{prefix}/{}/{}",
         sanitize_id(first.id.as_str()),
         sanitize_id(second.id.as_str())
-    )
-}
-
-fn generated_pair_group_reaction_id(
-    prefix: &str,
-    first: &Substance,
-    first_group: &FunctionalGroup,
-    second: &Substance,
-    second_group: &FunctionalGroup,
-) -> String {
-    format!(
-        "{}/{}/{}",
-        generated_pair_reaction_id(prefix, first, second),
-        atom_suffix(first_group),
-        atom_suffix(second_group)
     )
 }
 
@@ -2965,6 +2997,7 @@ fn site_kind_suffix(kind: &ReactiveSiteKind) -> &'static str {
         ReactiveSiteKind::ArylHalide => "aryl_halide",
         ReactiveSiteKind::Azide => "azide",
         ReactiveSiteKind::Borane => "borane",
+        ReactiveSiteKind::BoricAcid => "boric_acid",
         ReactiveSiteKind::BorateEster => "borate_ester",
         ReactiveSiteKind::Carbonyl => "carbonyl",
         ReactiveSiteKind::CarboxylicAcid => "carboxylic_acid",
@@ -2990,15 +3023,6 @@ fn site_kind_suffix(kind: &ReactiveSiteKind) -> &'static str {
         ReactiveSiteKind::SulfonylChloride => "sulfonyl_chloride",
         ReactiveSiteKind::Thiol => "thiol",
     }
-}
-
-fn atom_suffix(group: &FunctionalGroup) -> String {
-    group
-        .atoms
-        .iter()
-        .map(usize::to_string)
-        .collect::<Vec<_>>()
-        .join("_")
 }
 
 fn sanitize_id(value: &str) -> String {
@@ -3098,16 +3122,19 @@ mod tests {
         let space = OrganicGenerationSpace::new(substances.iter().copied(), &scope).unwrap();
 
         let acids = space
-            .sites_of_legacy_group(FunctionalGroupType::CarboxylicAcid)
+            .sites_of(&ReactiveSiteKind::CarboxylicAcid)
             .collect::<Vec<_>>();
         assert_eq!(acids.len(), 1);
         assert_eq!(acids[0].substance.id.as_str(), "destroy:acetic_acid");
-        assert_eq!(
-            space
-                .sites_of_legacy_group(FunctionalGroupType::Alcohol)
-                .count(),
-            0
-        );
+        assert_eq!(space.sites_of(&ReactiveSiteKind::Alcohol).count(), 0);
+    }
+
+    #[test]
+    fn organic_generation_has_no_functional_group_transition_layer() {
+        let source = include_str!("mod.rs");
+        assert!(!source.contains(concat!("legacy", "_group", "_from", "_site")));
+        assert!(!source.contains(concat!("sites", "_of", "_legacy", "_group")));
+        assert!(!source.contains(concat!("Functional", "Group")));
     }
 
     #[test]
