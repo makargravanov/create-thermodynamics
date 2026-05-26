@@ -537,6 +537,24 @@ impl MolecularEditor {
         Ok(())
     }
 
+    pub fn remove_bond(&mut self, first: usize, second: usize) -> ChemistryResult<()> {
+        let position = self
+            .bonds
+            .iter()
+            .position(|bond| {
+                (bond.from == first && bond.to == second)
+                    || (bond.from == second && bond.to == first)
+            })
+            .ok_or_else(|| invalid_structure(&self.source_code, "removed bond does not exist"))?;
+        self.bonds.remove(position);
+        self.clear_stereo_at_bond(first, second);
+        self.clear_stereo_at_atom(first);
+        self.clear_stereo_at_atom(second);
+        self.modified = true;
+        self.structure().validate()?;
+        Ok(())
+    }
+
     pub fn remove_atom(&mut self, atom_index: usize) -> ChemistryResult<()> {
         if atom_index >= self.atoms.len() {
             return Err(invalid_structure(
@@ -1645,8 +1663,9 @@ fn next_lowest_valency(element: &str, bonds: f64) -> f64 {
         "N" => &[3.0, 4.0],
         "O" => &[0.0, 2.0],
         "B" => &[3.0],
-        "F" | "Na" | "Cl" | "K" | "Ni" | "Zn" | "Zr" | "I" | "Pt" => &[1.0],
-        "Ca" | "Hg" => &[2.0],
+        "P" => &[3.0, 5.0],
+        "F" | "Na" | "Cl" | "K" | "Li" | "Ni" | "Zn" | "Zr" | "Br" | "I" | "Pt" => &[1.0],
+        "Mg" | "Ca" | "Hg" => &[2.0],
         "Cr" => &[2.0, 3.0, 6.0],
         "Fe" => &[0.0, 2.0, 3.0],
         "Cu" => &[1.0, 2.0],
@@ -1670,9 +1689,10 @@ fn max_valency(element: &str) -> f64 {
         "N" => 4.0,
         "O" => 3.0,
         "B" => 3.0,
-        "F" | "Na" | "Cl" | "K" | "Ni" | "Zn" | "Zr" | "I" => 1.0,
+        "P" => 5.0,
+        "F" | "Na" | "Cl" | "K" | "Li" | "Ni" | "Zn" | "Zr" | "Br" | "I" => 1.0,
         "Pt" => 4.0,
-        "Ca" | "Hg" => 2.0,
+        "Mg" | "Ca" | "Hg" => 2.0,
         "Cr" => 6.0,
         "Fe" => 3.0,
         "Cu" => 2.0,
@@ -1692,8 +1712,11 @@ pub fn element_mass(symbol: &str) -> ChemistryResult<f64> {
         "N" => 14.01,
         "O" => 16.00,
         "B" => 10.81,
+        "P" => 30.97,
         "F" => 19.00,
+        "Li" => 6.94,
         "Na" => 23.00,
+        "Mg" => 24.31,
         "Cl" => 35.45,
         "K" => 39.10,
         "Ca" => 40.08,
@@ -1703,6 +1726,7 @@ pub fn element_mass(symbol: &str) -> ChemistryResult<f64> {
         "Cu" => 63.55,
         "Zn" => 65.38,
         "Zr" => 91.22,
+        "Br" => 79.90,
         "I" => 126.90,
         "Pt" => 195.08,
         "Au" => 196.97,
@@ -1728,8 +1752,11 @@ pub fn legacy_element_symbol(name: &str) -> ChemistryResult<&'static str> {
         "NITROGEN" => "N",
         "OXYGEN" => "O",
         "BORON" => "B",
+        "PHOSPHORUS" => "P",
         "FLUORINE" => "F",
+        "LITHIUM" => "Li",
         "SODIUM" => "Na",
+        "MAGNESIUM" => "Mg",
         "CHLORINE" => "Cl",
         "POTASSIUM" => "K",
         "CALCIUM" => "Ca",
@@ -1739,6 +1766,7 @@ pub fn legacy_element_symbol(name: &str) -> ChemistryResult<&'static str> {
         "COPPER" => "Cu",
         "ZINC" => "Zn",
         "ZIRCONIUM" => "Zr",
+        "BROMINE" => "Br",
         "IODINE" => "I",
         "PLATINUM" => "Pt",
         "GOLD" => "Au",

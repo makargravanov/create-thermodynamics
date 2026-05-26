@@ -927,6 +927,15 @@ fn product_charge(reaction: &Reaction, registry: &ChemistryRegistry) -> Chemistr
         return Ok(first_channel_charge.unwrap_or(0.0));
     }
     if let Some(distribution) = &reaction.product_distribution {
+        let external_product_charge = reaction
+            .external_products
+            .iter()
+            .filter_map(|requirement| {
+                requirement
+                    .charge
+                    .map(|charge| charge as f64 * requirement.moles_per_reaction)
+            })
+            .sum::<f64>();
         return distribution
             .variants
             .iter()
@@ -947,11 +956,20 @@ fn product_charge(reaction: &Reaction, registry: &ChemistryRegistry) -> Chemistr
                             })
                     })
                     .sum::<ChemistryResult<f64>>()?;
-                Ok(charge * variant.fraction)
+                Ok((charge + external_product_charge) * variant.fraction)
             })
             .sum();
     }
-    reaction
+    let external_product_charge = reaction
+        .external_products
+        .iter()
+        .filter_map(|requirement| {
+            requirement
+                .charge
+                .map(|charge| charge as f64 * requirement.moles_per_reaction)
+        })
+        .sum::<f64>();
+    let product_charge = reaction
         .products
         .iter()
         .map(|term| {
@@ -965,7 +983,8 @@ fn product_charge(reaction: &Reaction, registry: &ChemistryRegistry) -> Chemistr
                     substance_id: term.substance_id.to_string(),
                 })
         })
-        .sum()
+        .sum::<ChemistryResult<f64>>()?;
+    Ok(product_charge + external_product_charge)
 }
 
 fn product_mass(reaction: &Reaction, registry: &ChemistryRegistry) -> ChemistryResult<f64> {
@@ -1026,6 +1045,15 @@ fn product_mass(reaction: &Reaction, registry: &ChemistryRegistry) -> ChemistryR
         return Ok(first_channel_mass.unwrap_or(0.0));
     }
     if let Some(distribution) = &reaction.product_distribution {
+        let external_product_mass = reaction
+            .external_products
+            .iter()
+            .filter_map(|requirement| {
+                requirement
+                    .molar_mass_grams
+                    .map(|mass| mass * requirement.moles_per_reaction)
+            })
+            .sum::<f64>();
         return distribution
             .variants
             .iter()
@@ -1039,11 +1067,20 @@ fn product_mass(reaction: &Reaction, registry: &ChemistryRegistry) -> ChemistryR
                             .map(|substance| substance.molar_mass_grams * term.coefficient as f64)
                     })
                     .sum::<ChemistryResult<f64>>()?;
-                Ok(mass * variant.fraction)
+                Ok((mass + external_product_mass) * variant.fraction)
             })
             .sum();
     }
-    reaction
+    let external_product_mass = reaction
+        .external_products
+        .iter()
+        .filter_map(|requirement| {
+            requirement
+                .molar_mass_grams
+                .map(|mass| mass * requirement.moles_per_reaction)
+        })
+        .sum::<f64>();
+    let product_mass = reaction
         .products
         .iter()
         .map(|term| {
@@ -1051,7 +1088,8 @@ fn product_mass(reaction: &Reaction, registry: &ChemistryRegistry) -> ChemistryR
                 .substance(&term.substance_id)
                 .map(|substance| substance.molar_mass_grams * term.coefficient as f64)
         })
-        .sum()
+        .sum::<ChemistryResult<f64>>()?;
+    Ok(product_mass + external_product_mass)
 }
 
 fn build_substance_properties_table(substances: &[Substance]) -> SubstancePropertiesTable {

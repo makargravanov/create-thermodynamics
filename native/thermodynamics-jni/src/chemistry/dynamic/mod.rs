@@ -6,8 +6,9 @@ use super::frowns::{parse_frowns, write_frowns};
 use super::functional_group::{FunctionalGroup, FunctionalGroupType};
 use super::kinetics::EnergyModel;
 use super::molecule::{MolecularEditor, MolecularStructure, Stereochemistry};
-use super::organic::{self, GroupParticipant, OrganicGenerationSpace};
+use super::organic::{self, OrganicGenerationSpace};
 use super::reaction::{Reaction, ReactionId};
+use super::reactive_site::find_reactive_sites;
 use super::registry::{ChemistryRegistry, ChemistryRegistryBuilder, SubstanceIndex};
 use super::solution::AcidBaseSpec;
 use super::substance::{
@@ -911,6 +912,15 @@ impl DynamicChemistryRegistry {
             return Ok(first_channel_charge.unwrap_or(0.0));
         }
         if let Some(distribution) = &reaction.product_distribution {
+            let external_product_charge = reaction
+                .external_products
+                .iter()
+                .filter_map(|requirement| {
+                    requirement
+                        .charge
+                        .map(|charge| charge as f64 * requirement.moles_per_reaction)
+                })
+                .sum::<f64>();
             return distribution
                 .variants
                 .iter()
@@ -923,18 +933,28 @@ impl DynamicChemistryRegistry {
                                 .map(|substance| substance.charge as f64 * term.coefficient as f64)
                         })
                         .sum::<ChemistryResult<f64>>()?;
-                    Ok(charge * variant.fraction)
+                    Ok((charge + external_product_charge) * variant.fraction)
                 })
                 .sum();
         }
-        reaction
+        let external_product_charge = reaction
+            .external_products
+            .iter()
+            .filter_map(|requirement| {
+                requirement
+                    .charge
+                    .map(|charge| charge as f64 * requirement.moles_per_reaction)
+            })
+            .sum::<f64>();
+        let product_charge = reaction
             .products
             .iter()
             .map(|term| {
                 self.substance(&term.substance_id)
                     .map(|substance| substance.charge as f64 * term.coefficient as f64)
             })
-            .sum()
+            .sum::<ChemistryResult<f64>>()?;
+        Ok(product_charge + external_product_charge)
     }
 
     fn dynamic_product_mass(&self, reaction: &Reaction) -> ChemistryResult<f64> {
@@ -993,6 +1013,15 @@ impl DynamicChemistryRegistry {
             return Ok(first_channel_mass.unwrap_or(0.0));
         }
         if let Some(distribution) = &reaction.product_distribution {
+            let external_product_mass = reaction
+                .external_products
+                .iter()
+                .filter_map(|requirement| {
+                    requirement
+                        .molar_mass_grams
+                        .map(|mass| mass * requirement.moles_per_reaction)
+                })
+                .sum::<f64>();
             return distribution
                 .variants
                 .iter()
@@ -1006,18 +1035,28 @@ impl DynamicChemistryRegistry {
                             })
                         })
                         .sum::<ChemistryResult<f64>>()?;
-                    Ok(mass * variant.fraction)
+                    Ok((mass + external_product_mass) * variant.fraction)
                 })
                 .sum();
         }
-        reaction
+        let external_product_mass = reaction
+            .external_products
+            .iter()
+            .filter_map(|requirement| {
+                requirement
+                    .molar_mass_grams
+                    .map(|mass| mass * requirement.moles_per_reaction)
+            })
+            .sum::<f64>();
+        let product_mass = reaction
             .products
             .iter()
             .map(|term| {
                 self.substance(&term.substance_id)
                     .map(|substance| substance.molar_mass_grams * term.coefficient as f64)
             })
-            .sum()
+            .sum::<ChemistryResult<f64>>()?;
+        Ok(product_mass + external_product_mass)
     }
 
     fn validated_substance_indices(
@@ -1036,7 +1075,9 @@ impl DynamicChemistryRegistry {
         &self,
         substance_index: KnownSubstanceIndex,
     ) -> ChemistryResult<Vec<(usize, usize, u64)>> {
-        let Some(group_types) = self.generation_group_types_for_substance(substance_index)? else {
+        let Some((group_types, has_reactive_sites)) =
+            self.generation_group_types_for_substance(substance_index)?
+        else {
             return Ok(Vec::new());
         };
         let slot = known_substance_slot(self.static_registry.substance_count(), substance_index);
@@ -1059,6 +1100,19 @@ impl DynamicChemistryRegistry {
                 updates.push((slot, group_index, next_mask));
             }
         }
+        if has_reactive_sites {
+            let site_slot = group_types.len();
+            let current_mask = self
+                .processed_generation_masks
+                .get(slot)
+                .and_then(|groups| groups.get(site_slot))
+                .copied()
+                .unwrap_or(0);
+            let site_mask = 1_u64 << 63;
+            if current_mask & site_mask == 0 {
+                updates.push((slot, site_slot, current_mask | site_mask));
+            }
+        }
         Ok(updates)
     }
 
@@ -1078,18 +1132,20 @@ impl DynamicChemistryRegistry {
     fn generation_group_types_for_substance(
         &self,
         substance_index: KnownSubstanceIndex,
-    ) -> ChemistryResult<Option<Vec<FunctionalGroupType>>> {
+    ) -> ChemistryResult<Option<(Vec<FunctionalGroupType>, bool)>> {
         let substance = self.substance_by_known_index(substance_index)?;
-        if substance.molecular_structure.is_none() {
+        let Some(structure) = substance.molecular_structure.as_ref() else {
             return Ok(None);
-        }
-        Ok(Some(
+        };
+        let has_reactive_sites = !find_reactive_sites(structure).is_empty();
+        Ok(Some((
             substance
                 .functional_groups
                 .iter()
                 .map(|group| group.group_type.clone())
                 .collect(),
-        ))
+            has_reactive_sites,
+        )))
     }
 
     fn generate_organic_for_known_substances(
@@ -1097,57 +1153,27 @@ impl DynamicChemistryRegistry {
         seeds: &[KnownSubstanceIndex],
         scope: &[bool],
     ) -> ChemistryResult<organic::GeneratedOrganicCatalog> {
-        let seed_participants = seeds
+        let seed_ids = seeds
             .iter()
-            .flat_map(|seed| self.group_handles_for_substance(*seed))
-            .map(|handle| self.group_participant(handle))
-            .collect::<ChemistryResult<Vec<_>>>()?;
-        let mut participants_by_group = BTreeMap::new();
-        for bucket in &self.group_index {
-            let mut participants = Vec::new();
-            for handle in &bucket.handles {
-                let slot =
-                    known_substance_slot(self.static_registry.substance_count(), handle.substance);
-                if scope.get(slot).copied().unwrap_or(false) {
-                    participants.push(self.group_participant(*handle)?);
-                }
-            }
-            if !participants.is_empty() {
-                participants_by_group.insert(bucket.group_type.clone(), participants);
+            .map(|seed| self.known_substance_id(*seed).cloned())
+            .collect::<ChemistryResult<std::collections::BTreeSet<_>>>()?;
+        let mut scope_ids = std::collections::BTreeSet::new();
+        let mut scoped_substances = Vec::new();
+        for substance in self.all_known_substance_indices() {
+            let slot = known_substance_slot(self.static_registry.substance_count(), substance);
+            if scope.get(slot).copied().unwrap_or(false) {
+                let substance = self.substance_by_known_index(substance)?;
+                scope_ids.insert(substance.id.clone());
+                scoped_substances.push(substance);
             }
         }
-        let space = OrganicGenerationSpace::from_participants(participants_by_group);
-        organic::generate_organic_reactions_for_seed_participants(
+        let space =
+            OrganicGenerationSpace::from_substances_for_scope(scoped_substances, &scope_ids)?;
+        organic::generate_organic_reactions_for_seed_substances(
             &space,
-            seed_participants,
+            &seed_ids,
             self.canonical_to_id.clone(),
         )
-    }
-
-    fn group_handles_for_substance(
-        &self,
-        substance: KnownSubstanceIndex,
-    ) -> impl Iterator<Item = GroupHandle> + '_ {
-        let slot = known_substance_slot(self.static_registry.substance_count(), substance);
-        self.group_handles_by_substance
-            .get(slot)
-            .into_iter()
-            .flat_map(|handles| handles.iter().copied())
-    }
-
-    fn group_participant(&self, handle: GroupHandle) -> ChemistryResult<GroupParticipant<'_>> {
-        let substance = self.substance_by_known_index(handle.substance)?;
-        let structure = substance.molecular_structure.as_ref().ok_or_else(|| {
-            ChemistryError::InvalidSubstance {
-                substance_id: substance.id.to_string(),
-                reason: "group-indexed substance has no structure".to_string(),
-            }
-        })?;
-        Ok(GroupParticipant {
-            substance,
-            structure,
-            group_index: handle.group_index,
-        })
     }
 
     fn add_group_handles_for_substance(&mut self, substance: KnownSubstanceIndex) {

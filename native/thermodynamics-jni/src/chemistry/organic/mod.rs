@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::condition::{AcidityCondition, ReactionCondition};
+use super::condition::{AcidityCondition, AtmosphereCondition, ReactionCondition};
 use super::error::{ChemistryError, ChemistryResult};
 use super::functional_group::{FunctionalGroup, FunctionalGroupType};
 use super::kinetics::ReactionChannel;
@@ -9,6 +9,7 @@ use super::molecule::{
     TetrahedralStereo,
 };
 use super::reaction::{Reaction, StoichiometricTerm};
+use super::reactive_site::{find_reactive_sites, ReactiveSite, ReactiveSiteKind};
 use super::registry::{ChemistryRegistry, ChemistryRegistryBuilder};
 use super::substance::{Substance, SubstanceId};
 
@@ -88,9 +89,23 @@ impl<'a> GroupParticipant<'a> {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct SiteParticipant<'a> {
+    pub(crate) substance: &'a Substance,
+    pub(crate) structure: &'a MolecularStructure,
+    pub(crate) site: ReactiveSite,
+}
+
+impl<'a> SiteParticipant<'a> {
+    fn is_seed(&self, seeds: Option<&BTreeSet<SubstanceId>>) -> bool {
+        seeds.is_none_or(|seeds| seeds.contains(&self.substance.id))
+    }
+}
+
 pub(crate) struct OrganicGenerationSpace<'a> {
     all_substances: Vec<&'a Substance>,
     participants_by_group: BTreeMap<FunctionalGroupType, Vec<GroupParticipant<'a>>>,
+    participants_by_site: BTreeMap<ReactiveSiteKind, Vec<SiteParticipant<'a>>>,
 }
 
 impl<'a> OrganicGenerationSpace<'a> {
@@ -100,6 +115,8 @@ impl<'a> OrganicGenerationSpace<'a> {
     ) -> ChemistryResult<Self> {
         let mut all_substances = Vec::new();
         let mut participants_by_group: BTreeMap<FunctionalGroupType, Vec<GroupParticipant<'a>>> =
+            BTreeMap::new();
+        let mut participants_by_site: BTreeMap<ReactiveSiteKind, Vec<SiteParticipant<'a>>> =
             BTreeMap::new();
 
         for substance in substances {
@@ -120,21 +137,35 @@ impl<'a> OrganicGenerationSpace<'a> {
                         group_index,
                     });
             }
+            for site in find_reactive_sites(structure) {
+                participants_by_site
+                    .entry(site.kind.clone())
+                    .or_default()
+                    .push(SiteParticipant {
+                        substance,
+                        structure,
+                        site,
+                    });
+            }
         }
 
         Ok(Self {
             all_substances,
             participants_by_group,
+            participants_by_site,
         })
     }
 
-    pub(crate) fn from_participants(
-        participants_by_group: BTreeMap<FunctionalGroupType, Vec<GroupParticipant<'a>>>,
-    ) -> Self {
-        Self {
-            all_substances: Vec::new(),
-            participants_by_group,
-        }
+    pub(crate) fn from_substances_for_scope(
+        substances: impl IntoIterator<Item = &'a Substance>,
+        scope: &BTreeSet<SubstanceId>,
+    ) -> ChemistryResult<Self> {
+        Self::new(
+            substances,
+            &GenerationScope {
+                substances: scope.clone(),
+            },
+        )
     }
 
     fn participants(&self) -> impl Iterator<Item = GroupParticipant<'a>> + '_ {
@@ -151,6 +182,19 @@ impl<'a> OrganicGenerationSpace<'a> {
             .get(group_type)
             .into_iter()
             .flat_map(|participants| participants.iter().copied())
+    }
+
+    fn site_participants(&self) -> impl Iterator<Item = SiteParticipant<'a>> + '_ {
+        self.participants_by_site
+            .values()
+            .flat_map(|participants| participants.iter().cloned())
+    }
+
+    fn sites_of(&self, kind: &ReactiveSiteKind) -> impl Iterator<Item = SiteParticipant<'a>> + '_ {
+        self.participants_by_site
+            .get(kind)
+            .into_iter()
+            .flat_map(|participants| participants.iter().cloned())
     }
 }
 
@@ -230,11 +274,14 @@ fn generate_organic_reactions_with_space(
     seeds: Option<&BTreeSet<SubstanceId>>,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
     let canonical_to_id = canonical_to_id_from_substances(space.all_substances.iter().copied())?;
-    let seed_participants = space
-        .participants()
-        .filter(|participant| participant.is_seed(seeds))
-        .collect::<Vec<_>>();
-    generate_organic_reactions_for_seed_participants(space, seed_participants, canonical_to_id)
+    let seed_ids = seeds.cloned().unwrap_or_else(|| {
+        space
+            .all_substances
+            .iter()
+            .map(|substance| substance.id.clone())
+            .collect()
+    });
+    generate_organic_reactions_for_seed_substances(space, &seed_ids, canonical_to_id)
 }
 
 pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
@@ -419,6 +466,58 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
     })
 }
 
+pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
+    space: &OrganicGenerationSpace<'a>,
+    seeds: &BTreeSet<SubstanceId>,
+    canonical_to_id: BTreeMap<String, SubstanceId>,
+) -> ChemistryResult<GeneratedOrganicCatalog> {
+    let seed_participants = space
+        .participants()
+        .filter(|participant| participant.is_seed(Some(seeds)))
+        .collect::<Vec<_>>();
+    let mut generated = generate_organic_reactions_for_seed_participants(
+        space,
+        seed_participants,
+        canonical_to_id,
+    )?;
+    let canonical_to_id = canonical_to_id_from_generated(space, &generated)?;
+    let mut resolver = DerivedSubstanceResolver::new_from_canonical_to_id(canonical_to_id);
+    let mut reaction_ids = generated
+        .reactions
+        .iter()
+        .map(|reaction| reaction.id.to_string())
+        .collect::<BTreeSet<_>>();
+    let seed_site_participants = space
+        .site_participants()
+        .filter(|participant| participant.is_seed(Some(seeds)))
+        .collect::<Vec<_>>();
+    generate_site_reactions_for_seed_participants(
+        space,
+        seed_site_participants,
+        &mut resolver,
+        &mut generated.reactions,
+        &mut reaction_ids,
+    )?;
+    generated.substances.extend(resolver.substances);
+    Ok(generated)
+}
+
+fn canonical_to_id_from_generated(
+    space: &OrganicGenerationSpace<'_>,
+    generated: &GeneratedOrganicCatalog,
+) -> ChemistryResult<BTreeMap<String, SubstanceId>> {
+    let mut canonical_to_id =
+        canonical_to_id_from_substances(space.all_substances.iter().copied())?;
+    for substance in &generated.substances {
+        if let Some(structure) = &substance.molecular_structure {
+            canonical_to_id
+                .entry(super::frowns::write_frowns(structure)?)
+                .or_insert_with(|| substance.id.clone());
+        }
+    }
+    Ok(canonical_to_id)
+}
+
 fn is_unknown_stereo_distribution(error: &ChemistryError) -> bool {
     matches!(
         error,
@@ -585,6 +684,79 @@ fn generate_pair_reactions_for_seed(
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+fn generate_site_reactions_for_seed_participants<'a>(
+    space: &OrganicGenerationSpace<'a>,
+    seed_sites: impl IntoIterator<Item = SiteParticipant<'a>>,
+    resolver: &mut DerivedSubstanceResolver,
+    reactions: &mut Vec<Reaction>,
+    reaction_ids: &mut BTreeSet<String>,
+) -> ChemistryResult<()> {
+    for seed in seed_sites {
+        match seed.site.kind {
+            ReactiveSiteKind::Aldehyde | ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl => {
+                for organometallic_kind in [
+                    ReactiveSiteKind::Organomagnesium,
+                    ReactiveSiteKind::Organolithium,
+                    ReactiveSiteKind::Organocopper,
+                ] {
+                    for organometallic in space.sites_of(&organometallic_kind) {
+                        let reaction = generate_organometallic_carbonyl_addition(
+                            seed.clone(),
+                            organometallic,
+                            resolver,
+                        )?;
+                        push_unique_reaction(reactions, reaction_ids, reaction)?;
+                    }
+                }
+                for enol in space.sites_of(&ReactiveSiteKind::Enol) {
+                    let reaction = generate_aldol_addition(enol, seed.clone(), resolver)?;
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
+            ReactiveSiteKind::Organomagnesium
+            | ReactiveSiteKind::Organolithium
+            | ReactiveSiteKind::Organocopper => {
+                for carbonyl_kind in [
+                    ReactiveSiteKind::Aldehyde,
+                    ReactiveSiteKind::Ketone,
+                    ReactiveSiteKind::Carbonyl,
+                ] {
+                    for carbonyl in space.sites_of(&carbonyl_kind) {
+                        let reaction = generate_organometallic_carbonyl_addition(
+                            carbonyl,
+                            seed.clone(),
+                            resolver,
+                        )?;
+                        push_unique_reaction(reactions, reaction_ids, reaction)?;
+                    }
+                }
+            }
+            ReactiveSiteKind::Enol => {
+                for carbonyl_kind in [
+                    ReactiveSiteKind::Aldehyde,
+                    ReactiveSiteKind::Ketone,
+                    ReactiveSiteKind::Carbonyl,
+                ] {
+                    for carbonyl in space.sites_of(&carbonyl_kind) {
+                        let reaction = generate_aldol_addition(seed.clone(), carbonyl, resolver)?;
+                        push_unique_reaction(reactions, reaction_ids, reaction)?;
+                    }
+                }
+            }
+            ReactiveSiteKind::AromaticRing => {
+                let reaction = generate_aromatic_nitration(seed, resolver)?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+            ReactiveSiteKind::Epoxide => {
+                let reaction = generate_epoxide_hydrolysis(seed, resolver)?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+            _ => {}
+        }
     }
     Ok(())
 }
@@ -899,6 +1071,218 @@ fn generate_imine_formation(
             .max_water_activity(0.5),
     )
     .build())
+}
+
+fn generate_organometallic_carbonyl_addition(
+    carbonyl: SiteParticipant<'_>,
+    organometallic: SiteParticipant<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let (carbonyl_carbon, carbonyl_oxygen) = carbonyl_atoms_from_site(
+        carbonyl.structure,
+        &carbonyl.site,
+        "organometallic addition",
+    )?;
+    let (organo_carbon, metal, residue_atoms) =
+        organometallic_atoms(organometallic.structure, &organometallic.site)?;
+
+    let mut carbonyl_editor = MolecularEditor::new(carbonyl.structure);
+    carbonyl_editor.set_bond_order(carbonyl_carbon, carbonyl_oxygen, 1.0)?;
+    carbonyl_editor.add_atom(carbonyl_oxygen, "H", 0.0, 1.0)?;
+    let carbonyl_fragment = carbonyl_editor.finish()?;
+
+    let mut organo_editor = MolecularEditor::new(organometallic.structure);
+    let mapping = organo_editor.remove_atoms(&residue_atoms)?;
+    let organo_carbon = mapped_atom(&mapping, organo_carbon, "organometallic carbon")?;
+    let organo_fragment = organo_editor.finish()?;
+
+    let product = resolver.resolve(MolecularEditor::join_structures(
+        &carbonyl_fragment,
+        carbonyl_carbon,
+        &organo_fragment,
+        organo_carbon,
+        1.0,
+    )?)?;
+    let residue_mass = atom_mass_sum(organometallic.structure, &residue_atoms)?;
+    let residue_charge = atom_charge_sum(organometallic.structure, &residue_atoms)?;
+    Ok(Reaction::builder(generated_pair_site_reaction_id(
+        "organometallic_carbonyl_addition",
+        &carbonyl,
+        &organometallic,
+    ))
+    .reactant(carbonyl.substance.id.clone(), 1, 1)
+    .reactant(organometallic.substance.id.clone(), 1, 1)
+    .chemical_external_reactant("proton donor hydrogen", 1.0, 1.01, 0)
+    .chemical_external_product(
+        format!(
+            "{} salt residue",
+            organometallic.structure.atoms[metal].element
+        ),
+        1.0,
+        residue_mass,
+        residue_charge,
+    )
+    .product(product, 1)
+    .condition(
+        ReactionCondition::new("organometallic carbonyl addition requires dry inert conditions")
+            .max_water_activity(0.02)
+            .max_oxygen_activity(0.02)
+            .atmosphere(AtmosphereCondition::Inert),
+    )
+    .build())
+}
+
+fn generate_aldol_addition(
+    enol: SiteParticipant<'_>,
+    acceptor: SiteParticipant<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let (_, alpha_carbon) = enol_atoms(enol.structure, &enol.site)?;
+    let alpha_hydrogen = first_bonded_hydrogen(enol.structure, alpha_carbon).ok_or_else(|| {
+        ChemistryError::InvalidReaction {
+            reaction_id: generated_site_reaction_id("aldol_addition", &enol),
+            reason: "aldol donor alpha carbon has no explicit hydrogen".to_string(),
+        }
+    })?;
+    let (acceptor_carbon, acceptor_oxygen) =
+        carbonyl_atoms_from_site(acceptor.structure, &acceptor.site, "aldol addition")?;
+
+    let mut donor_editor = MolecularEditor::new(enol.structure);
+    let donor_mapping = donor_editor.remove_atoms(&[alpha_hydrogen])?;
+    let alpha_carbon = mapped_atom(&donor_mapping, alpha_carbon, "aldol alpha carbon")?;
+    let donor_fragment = donor_editor.finish()?;
+
+    let mut acceptor_editor = MolecularEditor::new(acceptor.structure);
+    acceptor_editor.set_bond_order(acceptor_carbon, acceptor_oxygen, 1.0)?;
+    acceptor_editor.add_atom(acceptor_oxygen, "H", 0.0, 1.0)?;
+    let acceptor_fragment = acceptor_editor.finish()?;
+
+    let product = resolver.resolve(MolecularEditor::join_structures(
+        &donor_fragment,
+        alpha_carbon,
+        &acceptor_fragment,
+        acceptor_carbon,
+        1.0,
+    )?)?;
+    Ok(Reaction::builder(generated_pair_site_reaction_id(
+        "aldol_addition",
+        &enol,
+        &acceptor,
+    ))
+    .reactant(enol.substance.id.clone(), 1, 1)
+    .reactant(acceptor.substance.id.clone(), 1, 1)
+    .catalyst_order("destroy:hydroxide", 1)
+    .product(product, 1)
+    .condition(
+        ReactionCondition::new("aldol addition requires basic carbonyl enolization")
+            .acidity(AcidityCondition::Basic)
+            .max_temperature_kelvin(323.15),
+    )
+    .build())
+}
+
+fn generate_aromatic_nitration(
+    aromatic: SiteParticipant<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let mut variants = Vec::new();
+    for carbon in aromatic_substitution_carbons(aromatic.structure, &aromatic.site) {
+        let Some(hydrogen) = first_bonded_hydrogen(aromatic.structure, carbon) else {
+            continue;
+        };
+        let mut editor = MolecularEditor::new(aromatic.structure);
+        let mapping = editor.remove_atoms(&[hydrogen])?;
+        let carbon = mapped_atom(&mapping, carbon, "aromatic nitration carbon")?;
+        let nitrogen = editor.add_atom(carbon, "N", 0.0, 1.0)?;
+        editor.add_atom(nitrogen, "O", 0.0, 1.5)?;
+        editor.add_atom(nitrogen, "O", 0.0, 1.5)?;
+        let product = resolver.resolve(editor.finish()?)?;
+        variants.push((
+            product,
+            aromatic_activation_delta(aromatic.structure, carbon),
+        ));
+    }
+    if variants.is_empty() {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: generated_site_reaction_id("aromatic_nitration", &aromatic),
+            reason: "aromatic nitration found no aromatic carbon with explicit hydrogen"
+                .to_string(),
+        });
+    }
+    let mut builder =
+        Reaction::builder(generated_site_reaction_id("aromatic_nitration", &aromatic))
+            .reactant(aromatic.substance.id.clone(), 1, 1)
+            .reactant("destroy:nitric_acid", 1, 1)
+            .catalyst_order("destroy:sulfuric_acid", 1)
+            .condition(
+                ReactionCondition::new("aromatic nitration requires strongly acidic conditions")
+                    .acidity(AcidityCondition::Acidic)
+                    .max_water_activity(0.65),
+            );
+    if variants.len() == 1 {
+        builder = builder
+            .product(variants[0].0.clone(), 1)
+            .product("destroy:water", 1);
+    } else {
+        for (index, (product, activation_delta)) in variants.into_iter().enumerate() {
+            builder = builder.channel(ReactionChannel::new(
+                format!("aromatic_nitration:position_{index}"),
+                [
+                    StoichiometricTerm::new(product, 1),
+                    StoichiometricTerm::new("destroy:water", 1),
+                ],
+                30.0 + activation_delta,
+            ));
+        }
+    }
+    Ok(builder.build())
+}
+
+fn generate_epoxide_hydrolysis(
+    epoxide: SiteParticipant<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let oxygen = epoxide
+        .site
+        .atoms
+        .iter()
+        .copied()
+        .find(|atom| epoxide.structure.atoms[*atom].element == "O")
+        .ok_or_else(|| ChemistryError::InvalidReaction {
+            reaction_id: generated_site_reaction_id("epoxide_hydrolysis", &epoxide),
+            reason: "epoxide site has no oxygen atom".to_string(),
+        })?;
+    let carbons = epoxide
+        .site
+        .atoms
+        .iter()
+        .copied()
+        .filter(|atom| epoxide.structure.atoms[*atom].element == "C")
+        .collect::<Vec<_>>();
+    if carbons.len() != 2 {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: generated_site_reaction_id("epoxide_hydrolysis", &epoxide),
+            reason: "epoxide site must contain exactly two carbon atoms".to_string(),
+        });
+    }
+    let mut editor = MolecularEditor::new(epoxide.structure);
+    editor.remove_bond(oxygen, carbons[0])?;
+    add_hydroxyl(&mut editor, carbons[0])?;
+    editor.add_atom(oxygen, "H", 0.0, 1.0)?;
+    let product = resolver.resolve(editor.finish()?)?;
+    Ok(
+        Reaction::builder(generated_site_reaction_id("epoxide_hydrolysis", &epoxide))
+            .reactant(epoxide.substance.id.clone(), 1, 1)
+            .reactant("destroy:water", 1, 1)
+            .catalyst_order("destroy:proton", 1)
+            .product(product, 1)
+            .condition(
+                ReactionCondition::new("epoxide hydrolysis requires aqueous acid")
+                    .acidity(AcidityCondition::Acidic)
+                    .min_water_activity(0.1),
+            )
+            .build(),
+    )
 }
 
 fn deprotonated_alcohol_fragment(
@@ -2215,6 +2599,155 @@ fn halide_ion(
     }
 }
 
+fn carbonyl_atoms_from_site(
+    structure: &MolecularStructure,
+    site: &ReactiveSite,
+    role: &str,
+) -> ChemistryResult<(usize, usize)> {
+    for carbon in site
+        .atoms
+        .iter()
+        .copied()
+        .filter(|atom| structure.atoms[*atom].element == "C")
+    {
+        if let Some((oxygen, _)) =
+            structure
+                .neighbors(carbon)
+                .into_iter()
+                .find(|(neighbor, order)| {
+                    structure.atoms[*neighbor].element == "O"
+                        && super::molecule::bond_order_matches(*order, 2.0)
+                })
+        {
+            return Ok((carbon, oxygen));
+        }
+    }
+    Err(ChemistryError::InvalidReaction {
+        reaction_id: "<generated-organic>".to_string(),
+        reason: format!("{role} site does not contain a carbonyl bond"),
+    })
+}
+
+fn enol_atoms(
+    structure: &MolecularStructure,
+    site: &ReactiveSite,
+) -> ChemistryResult<(usize, usize)> {
+    let (carbonyl, _) = carbonyl_atoms_from_site(structure, site, "enol")?;
+    let alpha = site
+        .atoms
+        .iter()
+        .copied()
+        .find(|atom| {
+            *atom != carbonyl
+                && structure.atoms[*atom].element == "C"
+                && structure
+                    .neighbors(carbonyl)
+                    .iter()
+                    .any(|(neighbor, order)| {
+                        *neighbor == *atom && super::molecule::bond_order_matches(*order, 1.0)
+                    })
+        })
+        .ok_or_else(|| ChemistryError::InvalidReaction {
+            reaction_id: "<generated-organic>".to_string(),
+            reason: "enol site does not contain an alpha carbon".to_string(),
+        })?;
+    Ok((carbonyl, alpha))
+}
+
+fn organometallic_atoms(
+    structure: &MolecularStructure,
+    site: &ReactiveSite,
+) -> ChemistryResult<(usize, usize, Vec<usize>)> {
+    let mut organo_carbon = None;
+    let mut metal = None;
+    for atom in &site.atoms {
+        match structure.atoms[*atom].element.as_str() {
+            "C" => organo_carbon = Some(*atom),
+            "Mg" | "Li" | "Cu" => metal = Some(*atom),
+            _ => {}
+        }
+    }
+    let organo_carbon = organo_carbon.ok_or_else(|| ChemistryError::InvalidReaction {
+        reaction_id: "<generated-organic>".to_string(),
+        reason: "organometallic site has no carbon atom".to_string(),
+    })?;
+    let metal = metal.ok_or_else(|| ChemistryError::InvalidReaction {
+        reaction_id: "<generated-organic>".to_string(),
+        reason: "organometallic site has no metal atom".to_string(),
+    })?;
+    let mut residue_atoms = vec![metal];
+    for (neighbor, order) in structure.neighbors(metal) {
+        if neighbor != organo_carbon && super::molecule::bond_order_matches(order, 1.0) {
+            residue_atoms.push(neighbor);
+        }
+    }
+    residue_atoms.sort_unstable();
+    residue_atoms.dedup();
+    Ok((organo_carbon, metal, residue_atoms))
+}
+
+fn atom_mass_sum(structure: &MolecularStructure, atoms: &[usize]) -> ChemistryResult<f64> {
+    atoms.iter().try_fold(0.0, |sum, atom| {
+        Ok(sum + super::molecule::element_mass(&structure.atoms[*atom].element)?)
+    })
+}
+
+fn atom_charge_sum(structure: &MolecularStructure, atoms: &[usize]) -> ChemistryResult<i32> {
+    let charge = atoms
+        .iter()
+        .map(|atom| structure.atoms[*atom].charge)
+        .sum::<f64>();
+    if (charge - charge.round()).abs() > 1.0e-9 {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: "<generated-organic>".to_string(),
+            reason: "external residue has non-integral charge".to_string(),
+        });
+    }
+    Ok(charge.round() as i32)
+}
+
+fn aromatic_substitution_carbons(
+    structure: &MolecularStructure,
+    site: &ReactiveSite,
+) -> Vec<usize> {
+    site.atoms
+        .iter()
+        .copied()
+        .filter(|atom| {
+            structure.atoms[*atom].element == "C"
+                && first_bonded_hydrogen(structure, *atom).is_some()
+                && structure
+                    .neighbors(*atom)
+                    .iter()
+                    .filter(|(_, order)| super::molecule::bond_order_matches(*order, 1.5))
+                    .count()
+                    >= 2
+        })
+        .collect()
+}
+
+fn aromatic_activation_delta(structure: &MolecularStructure, carbon: usize) -> f64 {
+    let mut delta: f64 = 10.0;
+    for (neighbor, order) in structure.neighbors(carbon) {
+        if !super::molecule::bond_order_matches(order, 1.5) {
+            continue;
+        }
+        for (substituent, substituent_order) in structure.neighbors(neighbor) {
+            if substituent == carbon || super::molecule::bond_order_matches(substituent_order, 1.5)
+            {
+                continue;
+            }
+            delta = delta.min(match structure.atoms[substituent].element.as_str() {
+                "O" | "N" => 0.0,
+                "C" => 2.5,
+                "Cl" | "Br" | "I" | "F" => 4.0,
+                _ => 8.0,
+            });
+        }
+    }
+    delta
+}
+
 fn first_bonded_hydrogen(structure: &MolecularStructure, atom: usize) -> Option<usize> {
     structure
         .neighbors(atom)
@@ -2270,6 +2803,62 @@ fn generated_pair_group_reaction_id(
         atom_suffix(first_group),
         atom_suffix(second_group)
     )
+}
+
+fn generated_site_reaction_id(prefix: &str, participant: &SiteParticipant<'_>) -> String {
+    format!(
+        "{}/{}/{}",
+        prefix,
+        sanitize_id(participant.substance.id.as_str()),
+        participant
+            .site
+            .atoms
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join("_")
+    )
+}
+
+fn generated_pair_site_reaction_id(
+    prefix: &str,
+    first: &SiteParticipant<'_>,
+    second: &SiteParticipant<'_>,
+) -> String {
+    format!(
+        "{}/{}/{}/{}",
+        generated_pair_reaction_id(prefix, first.substance, second.substance),
+        first
+            .site
+            .atoms
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join("_"),
+        second
+            .site
+            .atoms
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join("_"),
+        site_kind_suffix(&first.site.kind)
+    )
+}
+
+fn site_kind_suffix(kind: &ReactiveSiteKind) -> &'static str {
+    match kind {
+        ReactiveSiteKind::Aldehyde => "aldehyde",
+        ReactiveSiteKind::Ketone => "ketone",
+        ReactiveSiteKind::Carbonyl => "carbonyl",
+        ReactiveSiteKind::Enol => "enol",
+        ReactiveSiteKind::Organomagnesium => "organomagnesium",
+        ReactiveSiteKind::Organolithium => "organolithium",
+        ReactiveSiteKind::Organocopper => "organocopper",
+        ReactiveSiteKind::AromaticRing => "aromatic_ring",
+        ReactiveSiteKind::Epoxide => "epoxide",
+        _ => "site",
+    }
 }
 
 fn atom_suffix(group: &FunctionalGroup) -> String {
@@ -2413,6 +3002,71 @@ mod tests {
             .iter()
             .any(|condition| condition.max_water_activity.is_some()));
         assert!(imine.products.len() >= 2);
+    }
+
+    #[test]
+    fn reactive_site_generators_add_aromatic_nitration_and_epoxide_hydrolysis() {
+        let registry = generated_registry();
+        let nitration = reaction_with_prefix(&registry, "aromatic_nitration/destroy_benzene/");
+        assert!(nitration
+            .conditions
+            .iter()
+            .any(|condition| condition.acidity == Some(AcidityCondition::Acidic)));
+        assert!(!nitration.channels.is_empty() || !nitration.products.is_empty());
+
+        let mut dynamic =
+            super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let epoxide = dynamic
+            .resolve_frowns(
+                "destroy:graph:atoms=C.C.O.H.H.H.H;bonds=0-s-1,0-s-2,1-s-2,0-s-3,0-s-4,1-s-5,1-s-6",
+            )
+            .unwrap();
+        let report = dynamic.generate_reactions_for(&epoxide, 1).unwrap();
+        assert!(report.added_reactions > 0);
+        assert!(dynamic
+            .reactions()
+            .any(|reaction| reaction.id.as_str().starts_with("epoxide_hydrolysis/")));
+    }
+
+    #[test]
+    fn organometallic_and_aldol_generators_create_carbon_carbon_bonds() {
+        let mut dynamic =
+            super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let methyl_magnesium_chloride = dynamic.resolve_frowns("CMgCl").unwrap();
+        dynamic
+            .generate_reactions_for_substances(
+                [
+                    SubstanceId::from("destroy:acetone"),
+                    methyl_magnesium_chloride,
+                ],
+                1,
+            )
+            .unwrap();
+        let organometallic = dynamic
+            .reactions()
+            .find(|reaction| {
+                reaction
+                    .id
+                    .as_str()
+                    .starts_with("organometallic_carbonyl_addition/")
+            })
+            .unwrap();
+        assert!(organometallic
+            .conditions
+            .iter()
+            .any(|condition| condition.atmosphere == Some(AtmosphereCondition::Inert)));
+        assert!(!organometallic.external_products.is_empty());
+
+        let acetaldehyde = dynamic.resolve_frowns("CC=O").unwrap();
+        dynamic
+            .generate_reactions_for_substances(
+                [SubstanceId::from("destroy:acetone"), acetaldehyde],
+                1,
+            )
+            .unwrap();
+        assert!(dynamic
+            .reactions()
+            .any(|reaction| reaction.id.as_str().starts_with("aldol_addition/")));
     }
 
     #[test]

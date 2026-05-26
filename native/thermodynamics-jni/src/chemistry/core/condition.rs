@@ -16,6 +16,12 @@ pub enum RedoxCondition {
     Reducing,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum AtmosphereCondition {
+    Air,
+    Inert,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReactionCondition {
     pub phases: Vec<MixturePhase>,
@@ -25,6 +31,9 @@ pub struct ReactionCondition {
     pub max_temperature_kelvin: Option<f64>,
     pub min_water_activity: Option<f64>,
     pub max_water_activity: Option<f64>,
+    pub max_oxygen_activity: Option<f64>,
+    pub gas_pressure_atm: Option<f64>,
+    pub atmosphere: Option<AtmosphereCondition>,
     pub redox: Option<RedoxCondition>,
     pub redox_strength: f64,
     pub rate_multiplier: f64,
@@ -48,6 +57,9 @@ impl ReactionCondition {
             max_temperature_kelvin: None,
             min_water_activity: None,
             max_water_activity: None,
+            max_oxygen_activity: None,
+            gas_pressure_atm: None,
+            atmosphere: None,
             redox: None,
             redox_strength: 0.0,
             rate_multiplier: 1.0,
@@ -89,6 +101,21 @@ impl ReactionCondition {
 
     pub fn max_water_activity(mut self, value: f64) -> Self {
         self.max_water_activity = Some(value);
+        self
+    }
+
+    pub fn max_oxygen_activity(mut self, value: f64) -> Self {
+        self.max_oxygen_activity = Some(value);
+        self
+    }
+
+    pub fn gas_pressure_atm(mut self, value: f64) -> Self {
+        self.gas_pressure_atm = Some(value);
+        self
+    }
+
+    pub fn atmosphere(mut self, atmosphere: AtmosphereCondition) -> Self {
+        self.atmosphere = Some(atmosphere);
         self
     }
 
@@ -138,6 +165,12 @@ impl ReactionCondition {
             reaction_id,
             "maximum water activity",
         )?;
+        validate_optional_unit(
+            self.max_oxygen_activity,
+            reaction_id,
+            "maximum oxygen activity",
+        )?;
+        validate_optional_positive(self.gas_pressure_atm, reaction_id, "gas pressure")?;
         if let (Some(min), Some(max)) = (self.min_water_activity, self.max_water_activity) {
             if min > max {
                 return Err(ChemistryError::InvalidReaction {
@@ -222,6 +255,31 @@ pub fn evaluate_reaction_conditions(
                 .is_some_and(|max| water_activity > max)
         {
             blocked = true;
+        }
+        if condition.max_oxygen_activity.is_some()
+            || condition.atmosphere == Some(AtmosphereCondition::Inert)
+        {
+            let oxygen = SubstanceId::from("destroy:oxygen");
+            registry.substance(&oxygen)?;
+            let oxygen_activity = mixture.activity_of(registry, &oxygen, MixturePhase::Gas)?;
+            if condition
+                .max_oxygen_activity
+                .is_some_and(|max| oxygen_activity > max)
+            {
+                blocked = true;
+            }
+            if condition.atmosphere == Some(AtmosphereCondition::Inert)
+                && oxygen_activity > TRACE_CONCENTRATION_MOL_PER_BUCKET
+            {
+                blocked = true;
+            }
+        }
+        if condition.gas_pressure_atm.is_some() {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: "<condition-evaluation>".to_string(),
+                reason: "gas pressure conditions require a pressure field in ReactionContext"
+                    .to_string(),
+            });
         }
         if condition.redox.is_some() {
             return Err(ChemistryError::InvalidReaction {
