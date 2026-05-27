@@ -1154,6 +1154,7 @@ impl DynamicChemistryRegistry {
             &space,
             &seed_ids,
             self.canonical_to_id.clone(),
+            &crate::chemistry::selectivity::types::SelectivityContext::default(),
         )
     }
 

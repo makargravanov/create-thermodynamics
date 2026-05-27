@@ -41,6 +41,9 @@ pub mod solution;
 pub mod substance;
 pub mod synthesis;
 
+#[path = "kinetics/mod.rs"]
+pub mod selectivity;
+
 pub use error::{ChemistryError, ChemistryResult};
 pub use reactions::{DESTROY_EXPLICIT_REACTION_COUNT, DESTROY_REGISTERED_REACTION_COUNT};
 pub use registry::{ChemistryRegistry, ChemistryRegistryBuilder};

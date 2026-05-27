@@ -9,6 +9,7 @@ use crate::chemistry::reaction::Reaction;
 use crate::chemistry::reactive_site::ReactiveSiteKind;
 use crate::chemistry::registry::{ChemistryRegistry, ChemistryRegistryBuilder};
 use crate::chemistry::substance::{Substance, SubstanceId};
+use crate::chemistry::selectivity::types::SelectivityContext;
 
 pub fn destroy_registry_with_generated_reactions_builder(
 ) -> ChemistryResult<ChemistryRegistryBuilder> {
@@ -29,7 +30,7 @@ pub(crate) fn generate_organic_reactions(
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
     let scope = GenerationScope::all(registry);
     let space = OrganicGenerationSpace::new(registry.substances(), &scope)?;
-    generate_organic_reactions_with_space(&space, None)
+    generate_organic_reactions_with_space(&space, None, &SelectivityContext::default())
 }
 
 #[cfg(test)]
@@ -40,12 +41,13 @@ pub(crate) fn generate_organic_reactions_for_substances(
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
     let scope = GenerationScope::from_substances(scope);
     let space = OrganicGenerationSpace::new(substances.iter().copied(), &scope)?;
-    generate_organic_reactions_with_space(&space, Some(seeds))
+    generate_organic_reactions_with_space(&space, Some(seeds), &SelectivityContext::default())
 }
 
 fn generate_organic_reactions_with_space(
     space: &OrganicGenerationSpace<'_>,
     seeds: Option<&BTreeSet<SubstanceId>>,
+    context: &SelectivityContext,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
     let canonical_to_id = canonical_to_id_from_substances(space.all_substances.iter().copied())?;
     let seed_ids = seeds.cloned().unwrap_or_else(|| {
@@ -55,13 +57,14 @@ fn generate_organic_reactions_with_space(
             .map(|substance| substance.id.clone())
             .collect()
     });
-    generate_organic_reactions_for_seed_substances(space, &seed_ids, canonical_to_id)
+    generate_organic_reactions_for_seed_substances(space, &seed_ids, canonical_to_id, context)
 }
 
 pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
     space: &OrganicGenerationSpace<'a>,
     seed_participants: impl IntoIterator<Item = SiteParticipant<'a>>,
     canonical_to_id: BTreeMap<String, SubstanceId>,
+    context: &SelectivityContext,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
     let mut resolver = DerivedSubstanceResolver::new_from_canonical_to_id(canonical_to_id);
     let mut reactions = Vec::new();
@@ -72,14 +75,16 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
             ReactiveSiteKind::Halide => {
                 let site = participant.clone().halide_site()?;
                 if let Some(reaction) =
-                    generate_halide_hydroxide_substitution(&site, &mut resolver)?
+                    generate_halide_hydroxide_substitution(&site, &mut resolver, context)?
                 {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
-                let reaction = generate_halide_ammonia_substitution(&site, &mut resolver)?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-                let reaction = generate_halide_cyanide_substitution(&site, &mut resolver)?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                if let Some(reaction) = generate_halide_ammonia_substitution(&site, &mut resolver, context)? {
+                    push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                }
+                if let Some(reaction) = generate_halide_cyanide_substitution(&site, &mut resolver, context)? {
+                    push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                }
             }
             ReactiveSiteKind::Alcohol => {
                 let site = participant.clone().alcohol_site()?;
@@ -124,9 +129,9 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 if let Some(reaction) = generate_aldehyde_oxidation(&site, &mut resolver)? {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
-                let reaction = generate_cyanide_nucleophilic_addition(&site, &mut resolver)?;
+                let reaction = generate_cyanide_nucleophilic_addition(&site, &mut resolver, context)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
-                let reaction = generate_wolff_kishner_reduction(&site, &mut resolver)?;
+                let reaction = generate_wolff_kishner_reduction(&site, &mut resolver, context)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             ReactiveSiteKind::Amide => {
@@ -192,6 +197,7 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
             &mut resolver,
             &mut reactions,
             &mut reaction_ids,
+            context,
         )?;
     }
 
@@ -205,6 +211,7 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
     space: &OrganicGenerationSpace<'a>,
     seeds: &BTreeSet<SubstanceId>,
     canonical_to_id: BTreeMap<String, SubstanceId>,
+    context: &SelectivityContext,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
     let seed_participants = space
         .site_participants()
@@ -215,6 +222,7 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
         space,
         seed_participants,
         canonical_to_id,
+        context,
     )?;
     let canonical_to_id = canonical_to_id_from_generated(space, &generated)?;
     let mut resolver = DerivedSubstanceResolver::new_from_canonical_to_id(canonical_to_id);
@@ -232,6 +240,7 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
         &mut resolver,
         &mut generated.reactions,
         &mut reaction_ids,
+        context,
     )?;
     generated.substances.extend(resolver.substances);
     Ok(generated)
@@ -306,24 +315,29 @@ fn generate_pair_reactions_for_seed(
     resolver: &mut DerivedSubstanceResolver,
     reactions: &mut Vec<Reaction>,
     reaction_ids: &mut BTreeSet<String>,
+    context: &SelectivityContext,
 ) -> ChemistryResult<()> {
     match seed.site.kind {
         ReactiveSiteKind::CarboxylicAcid => {
             let acid_site = seed.clone().carboxylic_acid_site()?;
             for alcohol in space.sites_of(&ReactiveSiteKind::Alcohol) {
                 let alcohol_site = alcohol.alcohol_site()?;
-                let reaction =
-                    generate_carboxylic_acid_esterification(&acid_site, &alcohol_site, resolver)?;
-                push_unique_reaction(reactions, reaction_ids, reaction)?;
+                if let Some(reaction) =
+                    generate_carboxylic_acid_esterification(&acid_site, &alcohol_site, resolver, context)?
+                {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
             }
         }
         ReactiveSiteKind::Alcohol => {
             let alcohol_site = seed.clone().alcohol_site()?;
             for acid in space.sites_of(&ReactiveSiteKind::CarboxylicAcid) {
                 let acid_site = acid.carboxylic_acid_site()?;
-                let reaction =
-                    generate_carboxylic_acid_esterification(&acid_site, &alcohol_site, resolver)?;
-                push_unique_reaction(reactions, reaction_ids, reaction)?;
+                if let Some(reaction) =
+                    generate_carboxylic_acid_esterification(&acid_site, &alcohol_site, resolver, context)?
+                {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
             }
             for acyl_chloride in space.sites_of(&ReactiveSiteKind::AcylChloride) {
                 let acyl_chloride_site = acyl_chloride.acyl_chloride_site()?;
@@ -338,7 +352,7 @@ fn generate_pair_reactions_for_seed(
                 for carbonyl in space.sites_of(&carbonyl_kind) {
                     let carbonyl_site = carbonyl.carbonyl_site()?;
                     let reaction =
-                        generate_acetal_formation(&carbonyl_site, &alcohol_site, resolver)?;
+                        generate_acetal_formation(&carbonyl_site, &alcohol_site, resolver, context)?;
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
@@ -359,30 +373,34 @@ fn generate_pair_reactions_for_seed(
             let halide_site = seed.clone().halide_site()?;
             for amine in space.sites_of(&ReactiveSiteKind::NonTertiaryAmine) {
                 let amine_site = amine.amine_site()?;
-                let reaction =
-                    generate_halide_amine_substitution(&halide_site, &amine_site, resolver)?;
-                push_unique_reaction(reactions, reaction_ids, reaction)?;
+                if let Some(reaction) =
+                    generate_halide_amine_substitution(&halide_site, &amine_site, resolver, context)?
+                {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
             }
         }
         ReactiveSiteKind::NonTertiaryAmine => {
             let amine_site = seed.clone().amine_site()?;
             for halide in space.sites_of(&ReactiveSiteKind::Halide) {
                 let halide_site = halide.halide_site()?;
-                let reaction =
-                    generate_halide_amine_substitution(&halide_site, &amine_site, resolver)?;
-                push_unique_reaction(reactions, reaction_ids, reaction)?;
+                if let Some(reaction) =
+                    generate_halide_amine_substitution(&halide_site, &amine_site, resolver, context)?
+                {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
             }
         }
         ReactiveSiteKind::Aldehyde | ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl => {
             let carbonyl_site = seed.clone().carbonyl_site()?;
             for alcohol in space.sites_of(&ReactiveSiteKind::Alcohol) {
                 let alcohol_site = alcohol.alcohol_site()?;
-                let reaction = generate_acetal_formation(&carbonyl_site, &alcohol_site, resolver)?;
+                let reaction = generate_acetal_formation(&carbonyl_site, &alcohol_site, resolver, context)?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
             for amine in space.sites_of(&ReactiveSiteKind::PrimaryAmine) {
                 let amine_site = amine.amine_site()?;
-                let reaction = generate_imine_formation(&carbonyl_site, &amine_site, resolver)?;
+                let reaction = generate_imine_formation(&carbonyl_site, &amine_site, resolver, context)?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
@@ -391,7 +409,7 @@ fn generate_pair_reactions_for_seed(
             for carbonyl_kind in carbonyl_site_kinds() {
                 for carbonyl in space.sites_of(&carbonyl_kind) {
                     let carbonyl_site = carbonyl.carbonyl_site()?;
-                    let reaction = generate_imine_formation(&carbonyl_site, &amine_site, resolver)?;
+                    let reaction = generate_imine_formation(&carbonyl_site, &amine_site, resolver, context)?;
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
@@ -415,6 +433,7 @@ fn generate_site_reactions_for_seed_participants<'a>(
     resolver: &mut DerivedSubstanceResolver,
     reactions: &mut Vec<Reaction>,
     reaction_ids: &mut BTreeSet<String>,
+    context: &SelectivityContext,
 ) -> ChemistryResult<()> {
     for seed in seed_sites {
         match seed.site.kind {
@@ -429,6 +448,7 @@ fn generate_site_reactions_for_seed_participants<'a>(
                             seed.clone(),
                             organometallic,
                             resolver,
+                            context,
                         )?;
                         push_unique_reaction(reactions, reaction_ids, reaction)?;
                     }
@@ -451,6 +471,7 @@ fn generate_site_reactions_for_seed_participants<'a>(
                             carbonyl,
                             seed.clone(),
                             resolver,
+                            context,
                         )?;
                         push_unique_reaction(reactions, reaction_ids, reaction)?;
                     }

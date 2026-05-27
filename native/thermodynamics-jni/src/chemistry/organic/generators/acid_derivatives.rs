@@ -4,11 +4,32 @@ use super::common::*;
 use crate::chemistry::error::{ChemistryError, ChemistryResult};
 use crate::chemistry::molecule::MolecularEditor;
 use crate::chemistry::reaction::Reaction;
+use crate::chemistry::selectivity::{
+    engine::{SelectivityEngine, SiteDescriptorBuilder},
+    types::{SelectivityContext, SelectivityRecommendation},
+};
+
 pub(crate) fn generate_carboxylic_acid_esterification(
     acid_site: &CarboxylicAcidSite<'_>,
     alcohol_site: &AlcoholSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
-) -> ChemistryResult<Reaction> {
+    context: &SelectivityContext,
+) -> ChemistryResult<Option<Reaction>> {
+    let acid_desc = SiteDescriptorBuilder::from_carboxylic_acid_site(acid_site);
+    let alcohol_desc = SiteDescriptorBuilder::from_alcohol_site(alcohol_site);
+    
+    let evaluation = SelectivityEngine::fischer_esterification(&acid_desc, &alcohol_desc, context);
+    
+    if matches!(
+        evaluation.recommendation,
+        SelectivityRecommendation::Suppressed | SelectivityRecommendation::None
+    ) {
+        return Ok(None);
+    }
+
+    let base_ea = 25.0;
+    let adjusted_ea = base_ea + evaluation.primary.activation_delta;
+
     let acid = acid_site.participant.substance;
     let acid_structure = acid_site.participant.structure;
     let alcohol = alcohol_site.participant.substance;
@@ -37,7 +58,7 @@ pub(crate) fn generate_carboxylic_acid_esterification(
         1.0,
     )?;
     let product = resolver.resolve(product_structure)?;
-    Ok(Reaction::builder(generated_pair_site_reaction_id(
+    Ok(Some(Reaction::builder(generated_pair_site_reaction_id(
         "carboxylic_acid_esterification",
         &acid_site.participant,
         &alcohol_site.participant,
@@ -47,7 +68,8 @@ pub(crate) fn generate_carboxylic_acid_esterification(
     .catalyst_order("destroy:sulfuric_acid", 1)
     .product(product, 1)
     .product("destroy:water", 1)
-    .build())
+    .activation_energy_kj_per_mol(adjusted_ea)
+    .build()))
 }
 
 pub(crate) fn generate_acyl_chloride_formation(

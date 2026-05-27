@@ -493,3 +493,66 @@ fn heteroatom_generators_are_registered() {
     reaction_with_prefix(&registry, "thionyl_chloride_substitution/destroy_ethanol/");
     reaction_with_prefix(&registry, "wolff_kishner_reduction/destroy_acetone/");
 }
+
+#[test]
+fn selectivity_engine_integration_prevents_tertiary_reactions() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    
+    // 1. Esterification test
+    let acetic_acid = SubstanceId::from("destroy:acetic_acid");
+    let tert_butanol = dynamic.resolve_frowns("CC(C)(C)O").unwrap(); // 3° alcohol
+    let ethanol = SubstanceId::from("destroy:ethanol"); // 1° alcohol
+
+    // Generate reactions for acetic acid + tert-butanol (3° alcohol)
+    dynamic
+        .generate_reactions_for_substances([acetic_acid.clone(), tert_butanol], 1)
+        .unwrap();
+    
+    // There should NOT be an esterification reaction for tert-butanol
+    let tert_esterification_exists = dynamic.reactions().any(|reaction| {
+        reaction.id.as_str().contains("carboxylic_acid_esterification")
+            && !reaction.id.as_str().contains("ethanol")
+    });
+    assert!(!tert_esterification_exists, "Esterification must be suppressed for tertiary alcohols");
+
+    // Generate reactions for acetic acid + ethanol (1° alcohol)
+    dynamic
+        .generate_reactions_for_substances([acetic_acid, ethanol], 1)
+        .unwrap();
+    
+    // There SHOULD be an esterification reaction for ethanol
+    let eth_esterification_exists = dynamic.reactions().any(|reaction| {
+        reaction.id.as_str().contains("carboxylic_acid_esterification")
+            && reaction.id.as_str().contains("ethanol")
+    });
+    assert!(eth_esterification_exists, "Esterification should proceed for primary alcohols");
+
+    // 2. SN2 Halide Substitution test
+    let tert_butyl_chloride = dynamic.resolve_frowns("CC(C)(C)Cl").unwrap(); // 3° halide
+    let chloroethane = SubstanceId::from("destroy:chloroethane"); // 1° halide
+
+    // Generate reactions for tert-butyl chloride (3° halide)
+    dynamic
+        .generate_reactions_for_substances([tert_butyl_chloride], 1)
+        .unwrap();
+
+    // There should NOT be an SN2 hydroxide substitution for 3° halide
+    let tert_substitution_exists = dynamic.reactions().any(|reaction| {
+        reaction.id.as_str().contains("halide_hydroxide_substitution")
+            && !reaction.id.as_str().contains("chloroethane")
+    });
+    assert!(!tert_substitution_exists, "SN2 substitution must be suppressed for tertiary halides");
+
+    // Generate reactions for chloroethane (1° halide)
+    dynamic
+        .generate_reactions_for_substances([chloroethane], 1)
+        .unwrap();
+
+    // There SHOULD be an SN2 hydroxide substitution for 1° halide
+    let eth_substitution_exists = dynamic.reactions().any(|reaction| {
+        reaction.id.as_str().contains("halide_hydroxide_substitution")
+            && reaction.id.as_str().contains("chloroethane")
+    });
+    assert!(eth_substitution_exists, "SN2 substitution should proceed for primary halides");
+}
