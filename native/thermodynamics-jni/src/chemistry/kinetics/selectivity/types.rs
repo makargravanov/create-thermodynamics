@@ -150,10 +150,6 @@ impl SelectivityContext {
     }
 }
 
-/// Legacy alias for compatibility during transition
-/// 
-/// TODO: Remove this after all code is updated to use SelectivityContext
-pub type ReactionContext = SelectivityContext;
 
 /// Solvent classification for selectivity
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
