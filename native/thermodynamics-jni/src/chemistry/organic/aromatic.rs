@@ -60,6 +60,16 @@ pub(crate) struct AromaticSubstituent {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct AromaticPosition {
+    pub(crate) atom: usize,
+    pub(crate) has_h: bool,
+    pub(crate) substituents: Vec<usize>,
+    pub(crate) steric_penalty: f64,
+    pub(crate) electronic_delta: f64,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct AromaticRingDescriptor<'a> {
     pub(crate) structure: &'a MolecularStructure,
     pub(crate) ring_atoms: Vec<usize>,
@@ -136,17 +146,9 @@ impl<'a> AromaticRingDescriptor<'a> {
     }
 
     pub(crate) fn compute_eas_activation_delta(&self, target_carbon: usize) -> f64 {
-        let mut total_delta = 0.0;
-        for sub in self.substituents() {
-            if let Some(dist) = self.ring_distance(sub.ring_carbon, target_carbon) {
-                let mut effect = sub.class.effect_for_distance(dist);
-                if dist == 1 && is_substituent_bulky(self.structure, sub.substituent_atom) {
-                    effect += 3.0;
-                }
-                total_delta += effect;
-            }
-        }
-        total_delta
+        self.position(target_carbon)
+            .map(|pos| pos.electronic_delta + pos.steric_penalty)
+            .unwrap_or(0.0)
     }
 
     pub(crate) fn compute_snar_activation_delta(&self, halogen_carbon: usize) -> f64 {
@@ -180,6 +182,89 @@ impl<'a> AromaticRingDescriptor<'a> {
         }
         false
     }
+
+    pub(crate) fn position(&self, carbon: usize) -> Option<AromaticPosition> {
+        if !self.ring_atoms.contains(&carbon) {
+            return None;
+        }
+
+        let has_h = self.structure.neighbors(carbon).iter().any(|(n, _)| {
+            self.structure.atoms[*n].element == "H"
+        });
+
+        let mut substituents = Vec::new();
+        for (neighbor, order) in self.structure.neighbors(carbon) {
+            if !self.ring_atoms.contains(&neighbor)
+                && self.structure.atoms[neighbor].element != "H"
+                && !bond_order_matches(order, 1.5)
+            {
+                substituents.push(neighbor);
+            }
+        }
+
+        let mut electronic_delta = 0.0;
+        let mut steric_penalty = 0.0;
+        for sub in self.substituents() {
+            if let Some(dist) = self.ring_distance(sub.ring_carbon, carbon) {
+                let effect = sub.class.effect_for_distance(dist);
+                electronic_delta += effect;
+                if dist == 1 && is_substituent_bulky(self.structure, sub.substituent_atom) {
+                    steric_penalty += 3.0;
+                }
+            }
+        }
+
+        Some(AromaticPosition {
+            atom: carbon,
+            has_h,
+            substituents,
+            steric_penalty,
+            electronic_delta,
+        })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn positions(&self) -> Vec<AromaticPosition> {
+        self.ring_atoms.iter().filter_map(|&c| self.position(c)).collect()
+    }
+}
+
+pub(crate) fn is_aromatic_ring_preserved(
+    original_descriptor: &AromaticRingDescriptor<'_>,
+    product_structure: &MolecularStructure,
+    mapping: &[Option<usize>],
+) -> bool {
+    let mut mapped_ring = Vec::new();
+    for &orig_car in &original_descriptor.ring_atoms {
+        match mapping.get(orig_car).and_then(|m| *m) {
+            Some(idx) => mapped_ring.push(idx),
+            None => return false,
+        }
+    }
+
+    for i in 0..original_descriptor.ring_atoms.len() {
+        let c1 = original_descriptor.ring_atoms[i];
+        for j in (i + 1)..original_descriptor.ring_atoms.len() {
+            let c2 = original_descriptor.ring_atoms[j];
+            let orig_bond = original_descriptor.structure.neighbors(c1).iter()
+                .find(|(n, _)| *n == c2)
+                .map(|(_, order)| *order);
+            if let Some(order) = orig_bond {
+                if bond_order_matches(order, 1.5) {
+                    let mc1 = mapped_ring[i];
+                    let mc2 = mapped_ring[j];
+                    let prod_bond = product_structure.neighbors(mc1).iter()
+                        .find(|(n, _)| *n == mc2)
+                        .map(|(_, order)| *order);
+                    match prod_bond {
+                        Some(p_order) if bond_order_matches(p_order, 1.5) => {}
+                        _ => return false,
+                    }
+                }
+            }
+        }
+    }
+    true
 }
 
 fn classify_substituent(

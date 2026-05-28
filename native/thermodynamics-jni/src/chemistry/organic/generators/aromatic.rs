@@ -1,4 +1,4 @@
-use super::super::aromatic::AromaticRingDescriptor;
+use super::super::aromatic::{AromaticRingDescriptor, is_aromatic_ring_preserved};
 use super::super::resolver::DerivedSubstanceResolver;
 use super::super::space::SiteParticipant;
 use super::common::*;
@@ -41,7 +41,11 @@ where
         let mapping = editor.remove_atoms(&[hydrogen])?;
         let carbon_mapped = mapped_atom(&mapping, carbon, "aromatic substitution carbon")?;
         editor_transform(&mut editor, carbon_mapped)?;
-        let product = resolver.resolve(editor.finish()?)?;
+        let product_structure = editor.finish()?;
+        if !is_aromatic_ring_preserved(&descriptor, &product_structure, &mapping) {
+            continue;
+        }
+        let product = resolver.resolve(product_structure)?;
         let activation_delta = descriptor.compute_eas_activation_delta(carbon);
         variants.push((product, activation_delta));
     }
@@ -229,6 +233,9 @@ pub(crate) fn generate_fc_alkylation(
             alkyl_carbon_mapped,
             1.0,
         )?;
+        if !is_aromatic_ring_preserved(&descriptor, &product_structure, &aromatic_mapping) {
+            continue;
+        }
         let product = resolver.resolve(product_structure)?;
         let activation_delta = descriptor.compute_eas_activation_delta(carbon);
         variants.push((product, activation_delta));
@@ -309,6 +316,9 @@ pub(crate) fn generate_fc_acylation(
             acyl_carbon_mapped,
             1.0,
         )?;
+        if !is_aromatic_ring_preserved(&descriptor, &product_structure, &aromatic_mapping) {
+            continue;
+        }
         let product = resolver.resolve(product_structure)?;
         let activation_delta = descriptor.compute_eas_activation_delta(carbon);
         variants.push((product, activation_delta));
@@ -370,7 +380,11 @@ pub(crate) fn generate_aryl_halide_hydroxide_substitution(
     let carbon = mapped_atom(&mapping, site.carbon, "aryl halide carbon")?;
     let oxygen = editor.add_atom(carbon, "O", 0.0, 1.0)?;
     editor.add_atom(oxygen, "H", 0.0, 1.0)?;
-    let product = resolver.resolve(editor.finish()?)?;
+    let product_structure = editor.finish()?;
+    if !is_aromatic_ring_preserved(&descriptor, &product_structure, &mapping) {
+        return Ok(None);
+    }
+    let product = resolver.resolve(product_structure)?;
 
     let halide_name = match structure.atoms[site.halogen].element.as_str() {
         "Cl" => "destroy:chloride",
@@ -417,7 +431,11 @@ pub(crate) fn generate_aryl_halide_ammonia_substitution(
     let nitrogen = editor.add_atom(carbon, "N", 0.0, 1.0)?;
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
-    let product = resolver.resolve(editor.finish()?)?;
+    let product_structure = editor.finish()?;
+    if !is_aromatic_ring_preserved(&descriptor, &product_structure, &mapping) {
+        return Ok(None);
+    }
+    let product = resolver.resolve(product_structure)?;
 
     let halide_name = match structure.atoms[site.halogen].element.as_str() {
         "Cl" => "destroy:chloride",
