@@ -1,3 +1,4 @@
+mod aromatic;
 mod catalog;
 pub(crate) mod centers;
 mod engine;
