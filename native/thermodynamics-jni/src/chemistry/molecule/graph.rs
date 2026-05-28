@@ -143,13 +143,18 @@ impl MolecularStructure {
                 "structure is disconnected",
             ));
         }
-        let bond_orders = self.bond_orders_by_atom();
+        let mut valency_orders = vec![0.0; self.atoms.len()];
+        for bond in &self.bonds {
+            let v = if bond_order_matches(bond.order, 1.5) { 1.0 } else { bond.order };
+            valency_orders[bond.from] += v;
+            valency_orders[bond.to] += v;
+        }
         for (index, atom) in self.atoms.iter().enumerate() {
             if atom.element == "R" {
                 continue;
             }
             let max_valency = max_valency(&atom.element);
-            if bond_orders[index] - atom.charge.abs() > max_valency + 1.0e-6 {
+            if valency_orders[index] - atom.charge.abs() > max_valency + 1.0e-6 {
                 return Err(invalid_structure(
                     &self.source_code,
                     &format!("atom {index} exceeds valency for {}", atom.element),
@@ -961,7 +966,7 @@ impl MolecularEditor {
     }
 
     pub fn finish(self) -> ChemistryResult<MolecularStructure> {
-        let structure = MolecularStructure {
+        let mut structure = MolecularStructure {
             source_code: if self.modified {
                 "generated".to_string()
             } else {
@@ -971,6 +976,8 @@ impl MolecularEditor {
             bonds: self.bonds,
             stereochemistry: self.stereochemistry,
         };
+        structure.validate()?;
+        structure = aromatize(structure)?;
         structure.validate()?;
         Ok(structure)
     }
@@ -1193,12 +1200,14 @@ impl StructureBuilder {
         if normalize_hydrogens {
             self.add_missing_hydrogens();
         }
-        let structure = MolecularStructure {
+        let mut structure = MolecularStructure {
             source_code: self.source_code,
             atoms: self.atoms,
             bonds: self.bonds,
             stereochemistry: self.stereochemistry,
         };
+        structure.validate()?;
+        structure = aromatize(structure)?;
         structure.validate()?;
         Ok(structure)
     }

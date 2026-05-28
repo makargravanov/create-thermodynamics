@@ -1,7 +1,7 @@
 use super::error::{ChemistryError, ChemistryResult};
 use super::molecule::{
-    parse_legacy_structure, DoubleBondStereo, MolecularAtom, MolecularBond, MolecularStructure,
-    StereoDescriptor, StereoMixtureKind, Stereochemistry, TetrahedralStereo,
+    aromatize, parse_legacy_structure, DoubleBondStereo, MolecularAtom, MolecularBond,
+    MolecularStructure, StereoDescriptor, StereoMixtureKind, Stereochemistry, TetrahedralStereo,
 };
 
 const DESTROY_NAMESPACE: &str = "destroy";
@@ -24,11 +24,13 @@ pub fn parse_frowns(input: &str) -> ChemistryResult<MolecularStructure> {
         format!("{DESTROY_NAMESPACE}:linear:{trimmed}")
     };
     let parts = full_code.splitn(3, ':').collect::<Vec<_>>();
-    if parts[1] == "graph" {
-        parse_graph_structure(&full_code, parts[2])
+    let mut structure = if parts[1] == "graph" {
+        parse_graph_structure(&full_code, parts[2])?
     } else {
-        parse_legacy_structure(&full_code)
-    }
+        parse_legacy_structure(&full_code)?
+    };
+    structure = aromatize(structure)?;
+    Ok(structure)
 }
 
 pub fn write_frowns(structure: &MolecularStructure) -> ChemistryResult<String> {

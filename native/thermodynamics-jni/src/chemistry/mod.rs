@@ -19,7 +19,7 @@ pub mod functional_group;
 pub mod kinetics;
 #[path = "core/mixture.rs"]
 pub mod mixture;
-#[path = "molecule/graph.rs"]
+#[path = "molecule/mod.rs"]
 pub mod molecule;
 #[path = "organic/mod.rs"]
 pub mod organic;
