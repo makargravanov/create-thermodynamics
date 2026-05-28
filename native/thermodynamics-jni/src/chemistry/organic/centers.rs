@@ -110,6 +110,13 @@ pub(crate) struct IsocyanateSite<'a> {
     pub(crate) oxygen: usize,
 }
 
+#[derive(Clone)]
+pub(crate) struct ArylHalideSite<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) carbon: usize,
+    pub(crate) halogen: usize,
+}
+
 impl<'a> SiteParticipant<'a> {
     pub(crate) fn require_kind(&self, expected: ReactiveSiteKind) -> ChemistryResult<()> {
         if self.site.kind == expected {
@@ -378,6 +385,29 @@ impl<'a> SiteParticipant<'a> {
             nitrogen,
             functional_carbon,
             oxygen,
+        })
+    }
+
+    pub(crate) fn aryl_halide_site(self) -> ChemistryResult<ArylHalideSite<'a>> {
+        self.require_kind(ReactiveSiteKind::ArylHalide)?;
+        let carbon = self.site_atom_by_element("C", "aryl halide carbon")?;
+        let halogen = self
+            .structure
+            .neighbors(carbon)
+            .into_iter()
+            .find_map(|(neighbor, order)| {
+                (crate::chemistry::molecule::bond_order_matches(order, 1.0)
+                    && matches!(
+                        self.structure.atoms[neighbor].element.as_str(),
+                        "F" | "Cl" | "Br" | "I"
+                    ))
+                .then_some(neighbor)
+            })
+            .ok_or_else(|| self.site_error("aryl halide carbon has no halogen neighbor"))?;
+        Ok(ArylHalideSite {
+            participant: self,
+            carbon,
+            halogen,
         })
     }
 

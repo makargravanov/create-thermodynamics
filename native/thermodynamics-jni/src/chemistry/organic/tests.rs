@@ -647,3 +647,63 @@ fn test_aromatic_eas_directing_groups_and_deactivation() {
     });
     assert!(!nitro_fc_exists, "Friedel-Crafts alkylation must be completely blocked on deactivated nitrobenzene");
 }
+
+#[test]
+fn toluene_can_be_nitrated_dynamically() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+
+    let toluene = dynamic.resolve_frowns(
+        "destroy:graph:atoms=C.C.C.C.C.C.C.H.H.H.H.H.H.H.H;bonds=0-a-1,1-a-2,2-a-3,3-a-4,4-a-5,5-a-0,0-s-6,6-s-7,6-s-8,6-s-9,1-s-10,2-s-11,3-s-12,4-s-13,5-s-14"
+    ).unwrap();
+
+    dynamic.generate_reactions_for_substances([toluene.clone()], 1).unwrap();
+
+    let nitration = dynamic.reactions().find(|r| {
+        r.id.as_str().starts_with("aromatic_nitration/")
+            && r.reactants.first().is_some_and(|t| t.substance_id == toluene)
+    })
+    .expect("Toluene must undergo nitration");
+
+    assert!(nitration.channels.len() >= 2, "Toluene should have multiple regioselective nitration channels");
+    assert!(nitration.reactants.iter().any(|t| t.substance_id == toluene));
+    // Products are stored in channels when there are multiple regioselective positions
+    assert!(nitration.channels.iter().any(|c| !c.products.is_empty()), "Nitration channels should contain products");
+}
+
+#[test]
+fn snar_on_nitrochlorobenzene() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+
+    // o-Nitrochlorobenzene: NO₂ ortho to Cl (strongest SNAr activation)
+    // Ring: C0(NO₂)-C1(Cl)-C2-C3-C4-C5
+    // NO₂ represented as zwitterion N⁺—O⁻ and N⁺=O
+    let o_nitrochlorobenzene = dynamic.resolve_frowns(
+        "destroy:graph:atoms=C.C.C.C.C.C.N^1.O.O^-1.Cl.H.H.H.H;bonds=0-a-1,1-a-2,2-a-3,3-a-4,4-a-5,5-a-0,0-s-6,6-d-7,6-s-8,1-s-9,2-s-10,3-s-11,4-s-12,5-s-13"
+    ).unwrap();
+
+    dynamic.generate_reactions_for_substances([o_nitrochlorobenzene.clone()], 1).unwrap();
+
+    // SNAr with hydroxide should exist (NO₂ activates the ring)
+    let snar_oh = dynamic.reactions().find(|r| {
+        r.id.as_str().starts_with("aryl_halide_hydroxide_substitution/")
+            && r.reactants.first().is_some_and(|t| t.substance_id == o_nitrochlorobenzene)
+    })
+    .expect("Nitrochlorobenzene must undergo SNAr with hydroxide");
+
+    assert!(snar_oh.reactants.iter().any(|t| t.substance_id.as_str() == "destroy:hydroxide"),
+        "Hydroxide must be a reactant in SNAr");
+    assert!(snar_oh.products.len() > 0,
+        "SNAr must produce a substituted product");
+
+    // SNAr with ammonia should also exist
+    let snar_nh3 = dynamic.reactions().find(|r| {
+        r.id.as_str().starts_with("aryl_halide_ammonia_substitution/")
+            && r.reactants.first().is_some_and(|t| t.substance_id == o_nitrochlorobenzene)
+    })
+    .expect("Nitrochlorobenzene must undergo SNAr with ammonia");
+
+    assert!(snar_nh3.reactants.iter().any(|t| t.substance_id.as_str() == "destroy:ammonia"),
+        "Ammonia must be a reactant in SNAr");
+}

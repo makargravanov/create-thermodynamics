@@ -267,6 +267,7 @@ fn is_generator_seed_site(kind: &ReactiveSiteKind) -> bool {
             | ReactiveSiteKind::BorateEster
             | ReactiveSiteKind::Alkene
             | ReactiveSiteKind::Alkyne
+            | ReactiveSiteKind::ArylHalide
     )
 }
 
@@ -528,6 +529,14 @@ fn generate_site_reactions_for_seed_participants<'a>(
             ReactiveSiteKind::Epoxide => {
                 let reaction = generate_epoxide_hydrolysis(seed, resolver)?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+            ReactiveSiteKind::ArylHalide => {
+                if let Some(reaction) = generate_aryl_halide_hydroxide_substitution(seed.clone(), resolver)? {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+                if let Some(reaction) = generate_aryl_halide_ammonia_substitution(seed, resolver)? {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
             }
             _ => {}
         }

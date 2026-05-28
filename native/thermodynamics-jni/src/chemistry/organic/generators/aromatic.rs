@@ -560,3 +560,146 @@ pub(crate) fn generate_fc_acylation(
     }
     Ok(Some(builder.build()))
 }
+
+/// Collects all ring atoms reachable via aromatic (order 1.5) bonds from a starting atom.
+fn collect_aromatic_ring(structure: &MolecularStructure, start: usize) -> Vec<usize> {
+    let mut visited = std::collections::BTreeSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(start);
+    visited.insert(start);
+    while let Some(curr) = queue.pop_front() {
+        for (neighbor, order) in structure.neighbors(curr) {
+            if crate::chemistry::molecule::bond_order_matches(order, 1.5) && visited.insert(neighbor) {
+                queue.push_back(neighbor);
+            }
+        }
+    }
+    visited.into_iter().collect()
+}
+
+/// Computes the SNAr activation lowering from EWGs ortho/para to the halogen-bearing carbon.
+/// Returns negative delta (lower EA) when activating groups are present.
+fn snar_activation_delta(
+    structure: &MolecularStructure,
+    ring_atoms: &[usize],
+    halogen_carbon: usize,
+) -> f64 {
+    use crate::chemistry::molecule::bond_order_matches;
+    let mut delta = 0.0;
+    for &ring_car in ring_atoms {
+        for (neighbor, order) in structure.neighbors(ring_car) {
+            if !ring_atoms.contains(&neighbor)
+                && structure.atoms[neighbor].element != "H"
+                && !bond_order_matches(order, 1.5)
+            {
+                let sub_class = classify_substituent(structure, ring_car, neighbor);
+                if matches!(sub_class, SubstituentClass::ModeratelyDeactivating | SubstituentClass::StronglyDeactivating) {
+                    if let Some(dist) = ring_distance(structure, ring_atoms, ring_car, halogen_carbon) {
+                        if dist == 1 || dist == 3 {
+                            delta -= match sub_class {
+                                SubstituentClass::StronglyDeactivating => 12.0,
+                                SubstituentClass::ModeratelyDeactivating => 6.0,
+                                _ => 0.0,
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
+    delta
+}
+
+pub(crate) fn generate_aryl_halide_hydroxide_substitution(
+    participant: SiteParticipant<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    let site = participant.aryl_halide_site()?;
+    let ring_atoms = collect_aromatic_ring(site.participant.structure, site.carbon);
+    if ring_atoms.len() < 5 {
+        return Ok(None);
+    }
+    let activation = snar_activation_delta(site.participant.structure, &ring_atoms, site.carbon);
+    if activation >= 0.0 {
+        return Ok(None);
+    }
+    let base_ea = 35.0;
+    let adjusted_ea = (base_ea + activation).max(10.0);
+
+    let structure = site.participant.structure;
+    let mut editor = MolecularEditor::new(structure);
+    let mapping = editor.remove_atoms(&[site.halogen])?;
+    let carbon = mapped_atom(&mapping, site.carbon, "aryl halide carbon")?;
+    let oxygen = editor.add_atom(carbon, "O", 0.0, 1.0)?;
+    editor.add_atom(oxygen, "H", 0.0, 1.0)?;
+    let product = resolver.resolve(editor.finish()?)?;
+
+    let halide_name = match structure.atoms[site.halogen].element.as_str() {
+        "Cl" => "destroy:chloride",
+        "F" => "destroy:fluoride",
+        "Br" => "destroy:bromide",
+        "I" => "destroy:iodide",
+        _ => return Ok(None),
+    };
+
+    Ok(Some(
+        Reaction::builder(generated_site_reaction_id(
+            "aryl_halide_hydroxide_substitution",
+            &site.participant,
+        ))
+        .reactant(site.participant.substance.id.clone(), 1, 1)
+        .reactant("destroy:hydroxide", 1, 1)
+        .product(product, 1)
+        .product(halide_name, 1)
+        .activation_energy_kj_per_mol(adjusted_ea)
+        .build(),
+    ))
+}
+
+pub(crate) fn generate_aryl_halide_ammonia_substitution(
+    participant: SiteParticipant<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    let site = participant.aryl_halide_site()?;
+    let ring_atoms = collect_aromatic_ring(site.participant.structure, site.carbon);
+    if ring_atoms.len() < 5 {
+        return Ok(None);
+    }
+    let activation = snar_activation_delta(site.participant.structure, &ring_atoms, site.carbon);
+    if activation >= 0.0 {
+        return Ok(None);
+    }
+    let base_ea = 35.0;
+    let adjusted_ea = (base_ea + activation).max(10.0);
+
+    let structure = site.participant.structure;
+    let mut editor = MolecularEditor::new(structure);
+    let mapping = editor.remove_atoms(&[site.halogen])?;
+    let carbon = mapped_atom(&mapping, site.carbon, "aryl halide carbon")?;
+    let nitrogen = editor.add_atom(carbon, "N", 0.0, 1.0)?;
+    editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
+    editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
+    let product = resolver.resolve(editor.finish()?)?;
+
+    let halide_name = match structure.atoms[site.halogen].element.as_str() {
+        "Cl" => "destroy:chloride",
+        "F" => "destroy:fluoride",
+        "Br" => "destroy:bromide",
+        "I" => "destroy:iodide",
+        _ => return Ok(None),
+    };
+
+    Ok(Some(
+        Reaction::builder(generated_site_reaction_id(
+            "aryl_halide_ammonia_substitution",
+            &site.participant,
+        ))
+        .reactant(site.participant.substance.id.clone(), 1, 1)
+        .reactant("destroy:ammonia", 2, 2)
+        .product(product, 1)
+        .product(halide_name, 1)
+        .product("destroy:ammonium", 1)
+        .activation_energy_kj_per_mol(adjusted_ea)
+        .build(),
+    ))
+}
