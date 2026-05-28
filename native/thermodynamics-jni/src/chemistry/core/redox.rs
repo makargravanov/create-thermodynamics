@@ -540,6 +540,7 @@ fn electronegativity(element: &str) -> ChemistryResult<f64> {
         "N" => 3.04,
         "O" => 3.44,
         "F" => 3.98,
+        "Al" => 1.61,
         "Li" => 0.98,
         "Na" => 0.93,
         "Mg" => 1.31,

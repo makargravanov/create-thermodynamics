@@ -368,6 +368,11 @@ fn generate_pair_reactions_for_seed(
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
+            for aromatic in space.sites_of(&ReactiveSiteKind::AromaticRing) {
+                if let Some(reaction) = generate_fc_acylation(aromatic, seed.clone(), resolver)? {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
         }
         ReactiveSiteKind::Halide => {
             let halide_site = seed.clone().halide_site()?;
@@ -376,6 +381,11 @@ fn generate_pair_reactions_for_seed(
                 if let Some(reaction) =
                     generate_halide_amine_substitution(&halide_site, &amine_site, resolver, context)?
                 {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
+            for aromatic in space.sites_of(&ReactiveSiteKind::AromaticRing) {
+                if let Some(reaction) = generate_fc_alkylation(aromatic, seed.clone(), resolver)? {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
@@ -410,6 +420,18 @@ fn generate_pair_reactions_for_seed(
                 for carbonyl in space.sites_of(&carbonyl_kind) {
                     let carbonyl_site = carbonyl.carbonyl_site()?;
                     let reaction = generate_imine_formation(&carbonyl_site, &amine_site, resolver, context)?;
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
+        }
+        ReactiveSiteKind::AromaticRing => {
+            for halide in space.sites_of(&ReactiveSiteKind::Halide) {
+                if let Some(reaction) = generate_fc_alkylation(seed.clone(), halide, resolver)? {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
+            for acyl in space.sites_of(&ReactiveSiteKind::AcylChloride) {
+                if let Some(reaction) = generate_fc_acylation(seed.clone(), acyl, resolver)? {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
@@ -490,8 +512,18 @@ fn generate_site_reactions_for_seed_participants<'a>(
                 }
             }
             ReactiveSiteKind::AromaticRing => {
-                let reaction = generate_aromatic_nitration(seed, resolver)?;
-                push_unique_reaction(reactions, reaction_ids, reaction)?;
+                if let Some(reaction) = generate_aromatic_nitration(seed.clone(), resolver)? {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+                if let Some(reaction) = generate_aromatic_chlorination(seed.clone(), resolver)? {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+                if let Some(reaction) = generate_aromatic_bromination(seed.clone(), resolver)? {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+                if let Some(reaction) = generate_aromatic_sulfonation(seed, resolver)? {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
             }
             ReactiveSiteKind::Epoxide => {
                 let reaction = generate_epoxide_hydrolysis(seed, resolver)?;

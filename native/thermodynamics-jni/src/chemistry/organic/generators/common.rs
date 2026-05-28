@@ -171,50 +171,6 @@ pub(crate) fn atom_charge_sum(
     Ok(charge.round() as i32)
 }
 
-pub(crate) fn aromatic_substitution_carbons(
-    structure: &MolecularStructure,
-    site: &ReactiveSite,
-) -> Vec<usize> {
-    site.atoms
-        .iter()
-        .copied()
-        .filter(|atom| {
-            structure.atoms[*atom].element == "C"
-                && first_bonded_hydrogen(structure, *atom).is_some()
-                && structure
-                    .neighbors(*atom)
-                    .iter()
-                    .filter(|(_, order)| {
-                        crate::chemistry::molecule::bond_order_matches(*order, 1.5)
-                    })
-                    .count()
-                    >= 2
-        })
-        .collect()
-}
-
-pub(crate) fn aromatic_activation_delta(structure: &MolecularStructure, carbon: usize) -> f64 {
-    let mut delta: f64 = 10.0;
-    for (neighbor, order) in structure.neighbors(carbon) {
-        if !crate::chemistry::molecule::bond_order_matches(order, 1.5) {
-            continue;
-        }
-        for (substituent, substituent_order) in structure.neighbors(neighbor) {
-            if substituent == carbon
-                || crate::chemistry::molecule::bond_order_matches(substituent_order, 1.5)
-            {
-                continue;
-            }
-            delta = delta.min(match structure.atoms[substituent].element.as_str() {
-                "O" | "N" => 0.0,
-                "C" => 2.5,
-                "Cl" | "Br" | "I" | "F" => 4.0,
-                _ => 8.0,
-            });
-        }
-    }
-    delta
-}
 
 pub(crate) fn first_bonded_hydrogen(structure: &MolecularStructure, atom: usize) -> Option<usize> {
     structure

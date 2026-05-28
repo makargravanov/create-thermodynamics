@@ -2430,6 +2430,97 @@ const DESTROY_SUBSTANCES: &[RawSubstance] = &[
         color_argb: 0,
         tags: &[],
     },
+    RawSubstance {
+        id: "bromine",
+        structure_code: Some(r#"destroy:linear:BrBr"#),
+        java_structure_code: None,
+        translation_key: None,
+        boiling_point_celsius: Some(58.8),
+        boiling_point_kelvin: None,
+        density: Some(3102.8),
+        molar_heat_capacity: Some(75.69),
+        specific_heat_capacity: None,
+        color_argb: 0,
+        tags: &[],
+    },
+    RawSubstance {
+        id: "hydrobromic_acid",
+        structure_code: Some(r#"destroy:linear:BrH"#),
+        java_structure_code: None,
+        translation_key: None,
+        boiling_point_celsius: Some(122.0),
+        boiling_point_kelvin: None,
+        density: Some(1490.0),
+        molar_heat_capacity: Some(100.0),
+        specific_heat_capacity: None,
+        color_argb: 0,
+        tags: &[],
+    },
+    RawSubstance {
+        id: "hydroiodic_acid",
+        structure_code: Some(r#"destroy:linear:IH"#),
+        java_structure_code: None,
+        translation_key: None,
+        boiling_point_celsius: Some(127.0),
+        boiling_point_kelvin: None,
+        density: Some(1700.0),
+        molar_heat_capacity: Some(100.0),
+        specific_heat_capacity: None,
+        color_argb: 0,
+        tags: &[],
+    },
+    RawSubstance {
+        id: "ferric_chloride",
+        structure_code: None,
+        java_structure_code: Some(r#"LegacyMolecularStructure.atom(LegacyElement.IRON, 3)"#),
+        translation_key: None,
+        boiling_point_celsius: None,
+        boiling_point_kelvin: None,
+        density: None,
+        molar_heat_capacity: None,
+        specific_heat_capacity: None,
+        color_argb: 0,
+        tags: &[],
+    },
+    RawSubstance {
+        id: "ferric_bromide",
+        structure_code: None,
+        java_structure_code: Some(r#"LegacyMolecularStructure.atom(LegacyElement.IRON, 3)"#),
+        translation_key: None,
+        boiling_point_celsius: None,
+        boiling_point_kelvin: None,
+        density: None,
+        molar_heat_capacity: None,
+        specific_heat_capacity: None,
+        color_argb: 0,
+        tags: &[],
+    },
+    RawSubstance {
+        id: "aluminum_trichloride",
+        structure_code: Some(r#"destroy:linear:Al(Cl)(Cl)Cl"#),
+        java_structure_code: None,
+        translation_key: None,
+        boiling_point_celsius: None,
+        boiling_point_kelvin: None,
+        density: None,
+        molar_heat_capacity: None,
+        specific_heat_capacity: None,
+        color_argb: 0,
+        tags: &[],
+    },
+    RawSubstance {
+        id: "acetyl_chloride",
+        structure_code: Some(r#"destroy:linear:CC(=O)Cl"#),
+        java_structure_code: None,
+        translation_key: None,
+        boiling_point_celsius: Some(52.0),
+        boiling_point_kelvin: None,
+        density: Some(1104.0),
+        molar_heat_capacity: Some(100.0),
+        specific_heat_capacity: None,
+        color_argb: 0,
+        tags: &[],
+    },
 ];
 
 #[cfg(test)]
@@ -2443,8 +2534,8 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(DESTROY_SUBSTANCE_COUNT, 152);
-        assert_eq!(registry.substance_count(), 155);
+        assert_eq!(DESTROY_SUBSTANCE_COUNT, 159);
+        assert_eq!(registry.substance_count(), 162);
     }
 
     #[test]
