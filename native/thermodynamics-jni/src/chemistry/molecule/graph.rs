@@ -1709,6 +1709,7 @@ fn max_valency(element: &str) -> f64 {
         "Au" => 4.0,
         "Pb" => 4.0,
         "Ar" => 0.0,
+        "Si" => 4.0,
         _ => 0.0,
     }
 }
@@ -1740,6 +1741,7 @@ pub fn element_mass(symbol: &str) -> ChemistryResult<f64> {
         "Br" => 79.90,
         "I" => 126.90,
         "Pt" => 195.08,
+        "Si" => 28.09,
         "Au" => 196.97,
         "Hg" => 200.59,
         "Pb" => 207.20,

@@ -370,6 +370,13 @@ mod tests {
     use crate::chemistry::molecule::bond_order_matches;
     use crate::chemistry::canonical::canonical_structure_code;
 
+    fn count_aromatic_bonds(structure: &MolecularStructure, ring_indices: &[usize]) -> usize {
+        structure.bonds.iter()
+            .filter(|b| ring_indices.contains(&b.from) && ring_indices.contains(&b.to)
+                    && bond_order_matches(b.order, 1.5))
+            .count()
+    }
+
     #[test]
     fn aromatizes_benzene_from_alternating_bonds() {
         let structure = parse_frowns(
@@ -378,11 +385,7 @@ mod tests {
                    0-s-6,1-s-7,2-s-8,3-s-9,4-s-10,5-s-11"
         ).unwrap();
 
-        let aromatic_ring_bonds = structure.bonds.iter()
-            .filter(|b| b.from < 6 && b.to < 6 && bond_order_matches(b.order, 1.5))
-            .count();
-
-        assert_eq!(aromatic_ring_bonds, 6);
+        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5]), 6);
     }
 
     #[test]
@@ -393,11 +396,7 @@ mod tests {
                    0-s-4,1-s-5,2-s-6,3-s-7"
         ).unwrap();
 
-        let aromatic_ring_bonds = structure.bonds.iter()
-            .filter(|b| b.from < 4 && b.to < 4 && bond_order_matches(b.order, 1.5))
-            .count();
-
-        assert_eq!(aromatic_ring_bonds, 0);
+        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3]), 0);
     }
 
     #[test]
@@ -408,11 +407,7 @@ mod tests {
                    1-s-6,2-s-7,3-s-8,4-s-9,5-s-10"
         ).unwrap();
 
-        let aromatic_ring_bonds = structure.bonds.iter()
-            .filter(|b| b.from < 6 && b.to < 6 && bond_order_matches(b.order, 1.5))
-            .count();
-
-        assert_eq!(aromatic_ring_bonds, 6);
+        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5]), 6);
     }
 
     #[test]
@@ -423,11 +418,7 @@ mod tests {
                    0-s-5,1-s-6,2-s-7,3-s-8,4-s-9"
         ).unwrap();
 
-        let aromatic_ring_bonds = structure.bonds.iter()
-            .filter(|b| b.from < 5 && b.to < 5 && bond_order_matches(b.order, 1.5))
-            .count();
-
-        assert_eq!(aromatic_ring_bonds, 5);
+        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4]), 5);
     }
 
     #[test]
@@ -438,11 +429,18 @@ mod tests {
                    1-s-5,2-s-6,3-s-7,4-s-8"
         ).unwrap();
 
-        let aromatic_ring_bonds = structure.bonds.iter()
-            .filter(|b| b.from < 5 && b.to < 5 && bond_order_matches(b.order, 1.5))
-            .count();
+        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4]), 5);
+    }
 
-        assert_eq!(aromatic_ring_bonds, 5);
+    #[test]
+    fn aromatizes_thiophene() {
+        let structure = parse_frowns(
+            "destroy:graph:atoms=S.C.C.C.C.H.H.H.H;\
+             bonds=0-s-1,1-d-2,2-s-3,3-d-4,4-s-0,\
+                   1-s-5,2-s-6,3-s-7,4-s-8"
+        ).unwrap();
+
+        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4]), 5);
     }
 
     #[test]
@@ -454,11 +452,105 @@ mod tests {
                    0-s-10,1-s-11,2-s-12,3-s-13,6-s-14,7-s-15,8-s-16,9-s-17"
         ).unwrap();
 
-        let aromatic_ring_bonds = structure.bonds.iter()
-            .filter(|b| b.from < 10 && b.to < 10 && bond_order_matches(b.order, 1.5))
-            .count();
+        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5,6,7,8,9]), 11);
+    }
 
-        assert!(aromatic_ring_bonds >= 11);
+    #[test]
+    fn aromatizes_anthracene() {
+        let structure = parse_frowns(
+            "destroy:graph:atoms=C.C.C.C.C.C.C.C.C.C.C.C.C.C.H.H.H.H.H.H.H.H.H.H;\
+             bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-d-5,5-s-0,\
+                   5-s-6,6-d-7,7-s-8,8-d-9,9-s-4,\
+                   9-s-10,10-d-11,11-s-12,12-d-13,13-s-8,\
+                   0-s-14,1-s-15,2-s-16,3-s-17,\
+                   6-s-18,7-s-19,10-s-20,11-s-21,12-s-22,13-s-23"
+        ).unwrap();
+
+        let rings: Vec<usize> = (0..14).collect();
+        let count = count_aromatic_bonds(&structure, &rings);
+        assert_eq!(count, 16);
+    }
+
+    #[test]
+    fn aromatizes_phenanthrene() {
+        let structure = parse_frowns(
+            "destroy:graph:atoms=C.C.C.C.C.C.C.C.C.C.C.C.C.C.H.H.H.H.H.H.H.H.H.H;\
+             bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-d-5,5-s-0,\
+                   3-s-6,6-d-7,7-s-8,8-d-9,9-s-2,\
+                   5-s-10,10-d-11,11-s-12,12-d-13,13-s-0,\
+                   0-s-14,1-s-15,2-s-16,4-s-17,6-s-18,7-s-19,8-s-20,9-s-21,\
+                   10-s-22,11-s-23"
+        ).unwrap();
+
+        let rings: Vec<usize> = (0..14).collect();
+        let count = count_aromatic_bonds(&structure, &rings);
+        assert_eq!(count, 16);
+    }
+
+    #[test]
+    fn aromatizes_cyclopentadienyl_anion() {
+        let structure = parse_frowns(
+            "destroy:graph:atoms=C.C.C.C.C^-1.H.H.H.H;\
+             bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-s-0,\
+                   0-s-5,1-s-6,2-s-7,3-s-8"
+        ).unwrap();
+
+        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4]), 5);
+    }
+
+    #[test]
+    fn aromatizes_tropylium_cation() {
+        let structure = parse_frowns(
+            "destroy:graph:atoms=C.C.C.C.C.C.C^1.H.H.H.H.H.H.H;\
+             bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-d-5,5-s-6,6-s-0,\
+                   0-s-7,1-s-8,2-s-9,3-s-10,4-s-11,5-s-12,6-s-13"
+        ).unwrap();
+
+        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5,6]), 7);
+    }
+
+    #[test]
+    fn does_not_aromatize_cyclooctatetraene() {
+        let structure = parse_frowns(
+            "destroy:graph:atoms=C.C.C.C.C.C.C.C.H.H.H.H.H.H.H.H;\
+             bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-d-5,5-s-6,6-d-7,7-s-0,\
+                   0-s-8,1-s-9,2-s-10,3-s-11,4-s-12,5-s-13,6-s-14,7-s-15"
+        ).unwrap();
+
+        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5,6,7]), 0);
+    }
+
+    #[test]
+    fn does_not_aromatize_cyclopentadienyl_cation() {
+        let structure = parse_frowns(
+            "destroy:graph:atoms=C.C.C.C.C^1.H.H.H.H;\
+             bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-s-0,\
+                   0-s-5,1-s-6,2-s-7,3-s-8"
+        ).unwrap();
+
+        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4]), 0);
+    }
+
+    #[test]
+    fn does_not_aromatize_non_conjugated_cyclohexadiene() {
+        let structure = parse_frowns(
+            "destroy:graph:atoms=C.C.C.C.C.C.H.H.H.H.H.H;\
+             bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-s-5,5-s-0,\
+                   0-s-6,1-s-7,2-s-8,3-s-9,4-s-10,5-s-11"
+        ).unwrap();
+
+        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5]), 0);
+    }
+
+    #[test]
+    fn does_not_aromatize_ring_with_silicon() {
+        let structure = parse_frowns(
+            "destroy:graph:atoms=Si.C.C.C.C.C.H.H.H.H.H;\
+             bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-d-5,5-s-0,\
+                   1-s-6,2-s-7,3-s-8,4-s-9,5-s-10"
+        ).unwrap();
+
+        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5]), 0);
     }
 
     #[test]

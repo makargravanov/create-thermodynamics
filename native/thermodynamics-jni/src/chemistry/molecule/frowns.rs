@@ -30,6 +30,7 @@ pub fn parse_frowns(input: &str) -> ChemistryResult<MolecularStructure> {
         parse_legacy_structure(&full_code)?
     };
     structure = aromatize(structure)?;
+    structure.validate()?;
     Ok(structure)
 }
 
@@ -75,14 +76,13 @@ fn parse_graph_structure(source_code: &str, body: &str) -> ChemistryResult<Molec
             .map(|token| parse_graph_bond(source_code, token, atoms.len()))
             .collect::<ChemistryResult<Vec<_>>>()?
     };
-    let structure = MolecularStructure {
+    let molecule = MolecularStructure {
         source_code: source_code.to_string(),
         atoms,
         bonds,
         stereochemistry: parse_graph_stereochemistry(source_code, stereo_part)?,
     };
-    structure.validate()?;
-    Ok(structure)
+    Ok(molecule)
 }
 
 fn parse_graph_atom(token: &str) -> ChemistryResult<MolecularAtom> {
