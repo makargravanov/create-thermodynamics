@@ -6,12 +6,28 @@ use super::molecule::{
 
 const DESTROY_NAMESPACE: &str = "destroy";
 
+/// Parse a FROWNS string into a `MolecularStructure`.
+///
+/// Parsing path depends on the namespace:
+///
+/// - `graph` FROWNS is parsed directly into a raw MolecularStructure, then
+///   validated for structural integrity, aromatised, and finally validated
+///   for valency. This two‑phase validation ensures bad input (e.g. out‑of‑
+///   range bond indices) is rejected before aromatic perception touches the
+///   graph, while still allowing alternating‑bond aromatic precursors that
+///   temporarily exceed valency.
+///
+/// - `legacy` / `linear` / `topology` FROWNS goes through
+///   `StructureBuilder::finish_with_normalization()` which already performs
+///   the full validate → aromatize → validate pipeline.
 pub fn parse_frowns(input: &str) -> ChemistryResult<MolecularStructure> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(invalid_frowns(input, "FROWNS code must not be empty"));
     }
+
     validate_branch_balance(trimmed)?;
+
     let explicit_parts = trimmed.splitn(3, ':').collect::<Vec<_>>();
     let full_code = if explicit_parts.len() == 3 {
         trimmed.to_string()
@@ -23,15 +39,24 @@ pub fn parse_frowns(input: &str) -> ChemistryResult<MolecularStructure> {
     } else {
         format!("{DESTROY_NAMESPACE}:linear:{trimmed}")
     };
+
     let parts = full_code.splitn(3, ':').collect::<Vec<_>>();
-    let mut structure = if parts[1] == "graph" {
-        parse_graph_structure(&full_code, parts[2])?
+
+    if parts[1] == "graph" {
+        // Graph FROWNS is parsed directly into MolecularStructure, so it must be
+        // validated before aromatic perception touches graph topology.
+        let raw = parse_graph_structure(&full_code, parts[2])?;
+        raw.validate_structure()?;
+
+        let normalized = aromatize(raw)?;
+        normalized.validate()?;
+
+        Ok(normalized)
     } else {
-        parse_legacy_structure(&full_code)?
-    };
-    structure = aromatize(structure)?;
-    structure.validate()?;
-    Ok(structure)
+        // Legacy/linear/topology parsing goes through StructureBuilder,
+        // which already performs validate -> aromatize -> validate.
+        parse_legacy_structure(&full_code)
+    }
 }
 
 pub fn write_frowns(structure: &MolecularStructure) -> ChemistryResult<String> {
@@ -402,5 +427,18 @@ mod tests {
         assert!(parse_frowns("C(").is_err());
         assert!(parse_frowns("C^bad").is_err());
         assert!(parse_frowns("C(C)(C)(C)(C)(C)").is_err());
+    }
+
+    #[test]
+    fn graph_frowns_with_invalid_bond_index_returns_error_before_aromatize() {
+        let result = std::panic::catch_unwind(|| {
+            parse_frowns("destroy:graph:atoms=C.C;bonds=0-s-2")
+        });
+
+        assert!(result.is_ok(), "invalid graph FROWNS must not panic");
+        assert!(
+            result.unwrap().is_err(),
+            "invalid graph bond index must return ChemistryError before aromatize"
+        );
     }
 }

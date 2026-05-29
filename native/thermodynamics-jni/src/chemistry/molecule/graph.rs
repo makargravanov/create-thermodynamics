@@ -100,7 +100,9 @@ impl MolecularStructure {
         super::frowns::canonical_structure_code(self)
     }
 
-    pub fn validate(&self) -> ChemistryResult<()> {
+    /// Structural integrity check: indices, elements, charges, connectivity.
+    /// Does NOT check valency — used as pre-validate before aromatize.
+    pub fn validate_structure(&self) -> ChemistryResult<()> {
         if self.atoms.is_empty() {
             return Err(invalid_structure(
                 &self.source_code,
@@ -143,6 +145,11 @@ impl MolecularStructure {
                 "structure is disconnected",
             ));
         }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> ChemistryResult<()> {
+        self.validate_structure()?;
         let mut valency_orders = vec![0.0; self.atoms.len()];
         for bond in &self.bonds {
             let v = if bond_order_matches(bond.order, 1.5) { 1.0 } else { bond.order };
