@@ -8,7 +8,7 @@ const DESTROY_NAMESPACE: &str = "destroy";
 
 /// Parse a FROWNS string into a `MolecularStructure`.
 ///
-/// Parsing path depends on the namespace:
+/// Parsing path depends on the FROWNS topology/format segment:
 ///
 /// - `graph` FROWNS is parsed directly into a raw MolecularStructure, then
 ///   validated for structural integrity, aromatised, and finally validated
@@ -431,9 +431,8 @@ mod tests {
 
     #[test]
     fn graph_frowns_with_invalid_bond_index_returns_error_before_aromatize() {
-        let result = std::panic::catch_unwind(|| {
-            parse_frowns("destroy:graph:atoms=C.C;bonds=0-s-2")
-        });
+        let result =
+            std::panic::catch_unwind(|| parse_frowns("destroy:graph:atoms=C.C;bonds=0-s-2"));
 
         assert!(result.is_ok(), "invalid graph FROWNS must not panic");
         assert!(
