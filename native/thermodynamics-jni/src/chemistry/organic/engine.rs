@@ -154,6 +154,54 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 let reaction = generate_cyanamide_addition(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
+            ReactiveSiteKind::PhosphoniumSalt => {
+                let site = participant.clone().phosphonium_salt_site()?;
+                if let Some(reaction) = generate_phosphonium_ylide_formation(&site, &mut resolver)?
+                {
+                    push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                }
+            }
+            ReactiveSiteKind::PhosphorusYlide => {
+                let ylide_site = participant.clone().phosphorus_ylide_site()?;
+                for carbonyl_kind in carbonyl_site_kinds() {
+                    for carbonyl in space.sites_of(&carbonyl_kind) {
+                        let carbonyl_site = carbonyl.carbonyl_site()?;
+                        if let Some(reaction) =
+                            generate_wittig_olefination(&ylide_site, &carbonyl_site, &mut resolver)?
+                        {
+                            push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                        }
+                    }
+                }
+            }
+            ReactiveSiteKind::PhosphonateCarbanion => {
+                let phosphonate_site = participant.clone().phosphonate_carbanion_site()?;
+                for carbonyl_kind in carbonyl_site_kinds() {
+                    for carbonyl in space.sites_of(&carbonyl_kind) {
+                        let carbonyl_site = carbonyl.carbonyl_site()?;
+                        if let Some(reaction) = generate_horner_wadsworth_emmons_olefination(
+                            &phosphonate_site,
+                            &carbonyl_site,
+                            &mut resolver,
+                        )? {
+                            push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                        }
+                    }
+                }
+            }
+            ReactiveSiteKind::SulfoneCarbanion => {
+                let sulfone_site = participant.clone().sulfone_carbanion_site()?;
+                for carbonyl_kind in carbonyl_site_kinds() {
+                    for carbonyl in space.sites_of(&carbonyl_kind) {
+                        let carbonyl_site = carbonyl.carbonyl_site()?;
+                        if let Some(reaction) =
+                            generate_julia_olefination(&sulfone_site, &carbonyl_site, &mut resolver)?
+                        {
+                            push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                        }
+                    }
+                }
+            }
             ReactiveSiteKind::Isocyanate => {
                 let site = participant.clone().isocyanate_site()?;
                 let reaction = generate_isocyanate_hydrolysis(&site, &mut resolver)?;
@@ -276,6 +324,11 @@ fn is_generator_seed_site(kind: &ReactiveSiteKind) -> bool {
             | ReactiveSiteKind::Amide
             | ReactiveSiteKind::PrimaryAmine
             | ReactiveSiteKind::NonTertiaryAmine
+            | ReactiveSiteKind::Phosphine
+            | ReactiveSiteKind::PhosphoniumSalt
+            | ReactiveSiteKind::PhosphorusYlide
+            | ReactiveSiteKind::PhosphonateCarbanion
+            | ReactiveSiteKind::SulfoneCarbanion
             | ReactiveSiteKind::Isocyanate
             | ReactiveSiteKind::Borane
             | ReactiveSiteKind::BorateEster
@@ -424,6 +477,20 @@ fn generate_pair_reactions_for_seed(
             }
             for aromatic in space.sites_of(&ReactiveSiteKind::AromaticRing) {
                 if let Some(reaction) = generate_fc_alkylation(aromatic, seed.clone(), resolver)? {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
+        }
+        ReactiveSiteKind::Phosphine => {
+            let phosphine_site = seed.clone().phosphine_site()?;
+            for halide in space.sites_of(&ReactiveSiteKind::Halide) {
+                let halide_site = halide.halide_site()?;
+                if let Some(reaction) = generate_phosphonium_salt_formation(
+                    &halide_site,
+                    &phosphine_site,
+                    resolver,
+                    context,
+                )? {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }

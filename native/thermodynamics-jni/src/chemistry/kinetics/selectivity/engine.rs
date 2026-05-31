@@ -38,6 +38,27 @@ impl SelectivityEngine {
                     .unwrap_or(NucleophileStrength::Moderate),
                 context,
             ),
+            ReactionType::WittigOlefination
+            | ReactionType::HornerWadsworthEmmonsOlefination
+            | ReactionType::JuliaOlefination => {
+                let Some(olefination_reagent) = profile.secondary_site.as_ref() else {
+                    return missing_secondary_site(profile);
+                };
+                let mut score = evaluate_carbonyl_addition(
+                    &profile.primary_site,
+                    profile
+                        .nucleophile_strength
+                        .unwrap_or(NucleophileStrength::VeryStrong),
+                    context,
+                );
+                score.value *= olefination_reagent.steric_accessibility().max(0.2);
+                if olefination_reagent.electronics.resonance_stabilization {
+                    score.value *= 0.85;
+                    score.activation_delta += 1.5;
+                }
+                score.reason = format!("carbonyl olefination: {}", score.reason);
+                score
+            }
             ReactionType::ElectrophilicAddition => ReactivityScore::new(
                 1.0,
                 "electrophilic addition has no specialized selectivity profile yet",
@@ -48,7 +69,11 @@ impl SelectivityEngine {
             | ReactionType::EnamineFormation
             | ReactionType::EnolateAlkylation
             | ReactionType::MichaelAddition
-            | ReactionType::ClaisenCondensation => evaluate_alpha_carbon_profile(profile, context),
+            | ReactionType::ClaisenCondensation
+            | ReactionType::PhosphoniumSaltFormation
+            | ReactionType::PhosphoniumYlideFormation => {
+                evaluate_alpha_carbon_profile(profile, context)
+            }
         };
         let recommendation = if matches!(profile.mechanism, ReactionType::SN2) {
             evaluate_sn2(&profile.primary_site, context).recommendation
@@ -446,6 +471,68 @@ impl SiteDescriptorBuilder {
             site.carbon,
             site.degree,
         )
+    }
+
+    pub(crate) fn from_phosphonium_salt_site(
+        site: &crate::chemistry::organic::centers::PhosphoniumSaltSite,
+    ) -> SiteDescriptor {
+        descriptor_from_carbon(
+            site.participant.structure,
+            ReactiveSiteKind::PhosphoniumSalt,
+            site.alpha_carbon,
+            site
+                .participant
+                .structure
+                .carbon_degree(site.alpha_carbon),
+        )
+    }
+
+    pub(crate) fn from_phosphorus_ylide_site(
+        site: &crate::chemistry::organic::centers::PhosphorusYlideSite,
+    ) -> SiteDescriptor {
+        descriptor_from_carbon(
+            site.participant.structure,
+            ReactiveSiteKind::PhosphorusYlide,
+            site.alpha_carbon,
+            site
+                .participant
+                .structure
+                .carbon_degree(site.alpha_carbon),
+        )
+    }
+
+    pub(crate) fn from_phosphonate_carbanion_site(
+        site: &crate::chemistry::organic::centers::PhosphonateCarbanionSite,
+    ) -> SiteDescriptor {
+        let mut descriptor = descriptor_from_carbon(
+            site.participant.structure,
+            ReactiveSiteKind::PhosphonateCarbanion,
+            site.alpha_carbon,
+            site
+                .participant
+                .structure
+                .carbon_degree(site.alpha_carbon),
+        );
+        descriptor.electronics.electron_withdrawing_groups += 1;
+        descriptor.electronics.resonance_stabilization = true;
+        descriptor
+    }
+
+    pub(crate) fn from_sulfone_carbanion_site(
+        site: &crate::chemistry::organic::centers::SulfoneCarbanionSite,
+    ) -> SiteDescriptor {
+        let mut descriptor = descriptor_from_carbon(
+            site.participant.structure,
+            ReactiveSiteKind::SulfoneCarbanion,
+            site.alpha_carbon,
+            site
+                .participant
+                .structure
+                .carbon_degree(site.alpha_carbon),
+        );
+        descriptor.electronics.electron_withdrawing_groups += 2;
+        descriptor.electronics.resonance_stabilization = true;
+        descriptor
     }
 }
 

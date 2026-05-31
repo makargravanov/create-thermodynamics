@@ -356,6 +356,9 @@ fn estimate_phase_properties(
     if tags.contains(&"solvent") {
         return SubstancePhaseProperties::organic_unlimited(0.1);
     }
+    if id == "trimethylphosphine" {
+        return SubstancePhaseProperties::organic_solute(0.0);
+    }
     if id.ends_with("_acid") || id.contains("acid") || id == "ammonia" {
         return SubstancePhaseProperties {
             preferred_liquid_phase: LiquidPhasePreference::Aqueous,
@@ -2065,6 +2068,19 @@ const DESTROY_SUBSTANCES: &[RawSubstance] = &[
         tags: &["acutely_toxic", "ozone_depleter", "smelly"],
     },
     RawSubstance {
+        id: "trimethylphosphine",
+        structure_code: Some(r#"destroy:linear:CP(C)C"#),
+        java_structure_code: None,
+        translation_key: Some("destroy.chemical.trimethylphosphine"),
+        boiling_point_celsius: Some(38.0),
+        boiling_point_kelvin: None,
+        density: Some(750.0),
+        molar_heat_capacity: Some(180.0),
+        specific_heat_capacity: None,
+        color_argb: 0,
+        tags: &["acutely_toxic", "smelly"],
+    },
+    RawSubstance {
         id: "phthalic_anhydride",
         structure_code: Some(r#"destroy:isohydrobenzofuran:,,,O,O,"#),
         java_structure_code: None,
@@ -2534,8 +2550,8 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(DESTROY_SUBSTANCE_COUNT, 159);
-        assert_eq!(registry.substance_count(), 162);
+        assert_eq!(DESTROY_SUBSTANCE_COUNT, 160);
+        assert_eq!(registry.substance_count(), 163);
     }
 
     #[test]

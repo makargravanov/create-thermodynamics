@@ -233,6 +233,16 @@ pub enum ReactionType {
     MichaelAddition,
     /// Condensation of an ester enolate with an ester
     ClaisenCondensation,
+    /// Formation of a phosphonium salt from phosphine and an alkyl halide
+    PhosphoniumSaltFormation,
+    /// Base-induced phosphonium ylide formation
+    PhosphoniumYlideFormation,
+    /// Carbonyl olefination through a phosphonium ylide
+    WittigOlefination,
+    /// Carbonyl olefination through a phosphonate carbanion
+    HornerWadsworthEmmonsOlefination,
+    /// Carbonyl olefination through a sulfone carbanion
+    JuliaOlefination,
 }
 
 /// Nucleophile strength classification for selectivity models.

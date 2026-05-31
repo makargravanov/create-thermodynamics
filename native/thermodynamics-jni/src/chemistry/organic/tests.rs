@@ -621,6 +621,108 @@ fn heteroatom_generators_are_registered() {
 }
 
 #[test]
+fn phosphorus_generators_are_registered() {
+    let mut dynamic = super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog()
+        .expect("destroy catalog must load");
+    let phosphine = SubstanceId::from("destroy:trimethylphosphine");
+    let chloroethane = SubstanceId::from("destroy:chloroethane");
+    let ethoxide = SubstanceId::from("destroy:ethoxide");
+    let acetone = SubstanceId::from("destroy:acetone");
+
+    dynamic
+        .generate_reactions_for_substances([phosphine.clone(), chloroethane.clone()], 1)
+        .expect("phosphorus path must generate");
+
+    let salt = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("phosphonium_salt_formation/"))
+        .expect("phosphonium salt formation must be registered");
+    assert!(salt
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:chloride"));
+    let salt_product = salt
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:chloride")
+        .expect("phosphonium salt must produce a phosphonium cation")
+        .substance_id
+        .clone();
+
+    dynamic
+        .generate_reactions_for_substances([salt_product.clone(), ethoxide.clone()], 1)
+        .expect("ylide path must generate");
+
+    let registry = dynamic.to_registry().expect("dynamic registry must convert");
+    let ylide = reaction_for_reactants(
+        &registry,
+        "phosphonium_ylide_formation",
+        &[salt_product.clone(), ethoxide.clone()],
+    )
+    .expect("phosphonium ylide formation must be registered");
+    assert!(ylide
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:ethanol"));
+    let ylide_product = ylide
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:ethanol")
+        .expect("phosphonium ylide must produce the ylide substance")
+        .substance_id
+        .clone();
+
+    dynamic
+        .generate_reactions_for_substances([ylide_product.clone(), acetone.clone()], 1)
+        .expect("wittig path must generate");
+    let registry = dynamic.to_registry().expect("dynamic registry must convert");
+    let wittig = reaction_for_reactants(
+        &registry,
+        "wittig_olefination",
+        &[ylide_product, acetone.clone()],
+    )
+    .expect("wittig olefination must be registered");
+    assert!(wittig.products.len() >= 2);
+    assert!(wittig
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() != "destroy:ethanol"));
+}
+
+#[test]
+fn hwe_and_julia_olefinations_use_concrete_anionic_reagents() {
+    let mut dynamic = super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog()
+        .expect("destroy catalog must load");
+    let acetone = SubstanceId::from("destroy:acetone");
+    let phosphonate = dynamic
+        .resolve_frowns("O=P(OC)(OC)C^-1")
+        .expect("phosphonate carbanion must parse");
+    let sulfone = dynamic
+        .resolve_frowns("CS(=O)(=O)C^-1")
+        .expect("sulfone carbanion must parse");
+
+    dynamic
+        .generate_reactions_for_substances(
+            [phosphonate.clone(), sulfone.clone(), acetone.clone()],
+            1,
+        )
+        .expect("olefination generators must run");
+    let registry = dynamic.to_registry().expect("dynamic registry must convert");
+
+    let hwe = reaction_for_reactants(
+        &registry,
+        "horner_wadsworth_emmons_olefination",
+        &[phosphonate, acetone.clone()],
+    )
+    .expect("Horner-Wadsworth-Emmons olefination must be registered");
+    assert!(hwe.channels.len() >= 2 || hwe.products.len() >= 2);
+
+    let julia = reaction_for_reactants(&registry, "julia_olefination", &[sulfone, acetone])
+        .expect("Julia olefination must be registered");
+    assert!(julia.channels.len() >= 2 || julia.products.len() >= 2);
+}
+
+#[test]
 fn selectivity_engine_integration_keeps_reactions_but_suppresses_runtime_rate() {
     let mut dynamic =
         super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();

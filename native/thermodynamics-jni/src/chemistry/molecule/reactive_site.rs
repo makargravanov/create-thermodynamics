@@ -41,6 +41,11 @@ pub enum ReactiveSiteKind {
     Organomagnesium,
     Phenol,
     PrimaryAmine,
+    Phosphine,
+    PhosphonateCarbanion,
+    PhosphoniumSalt,
+    PhosphorusYlide,
+    SulfoneCarbanion,
     Sulfide,
     SulfonylChloride,
     Thiol,
@@ -278,6 +283,25 @@ pub fn try_find_reactive_sites(
                 ReactiveSiteKind::PrimaryAmine,
                 vec![ReactiveRole::Nucleophile],
             ),
+            FunctionalGroupType::Phosphine => {
+                (ReactiveSiteKind::Phosphine, vec![ReactiveRole::Nucleophile])
+            }
+            FunctionalGroupType::PhosphonateCarbanion => (
+                ReactiveSiteKind::PhosphonateCarbanion,
+                vec![ReactiveRole::Nucleophile],
+            ),
+            FunctionalGroupType::PhosphoniumSalt => (
+                ReactiveSiteKind::PhosphoniumSalt,
+                vec![ReactiveRole::AcidicProton],
+            ),
+            FunctionalGroupType::PhosphorusYlide => (
+                ReactiveSiteKind::PhosphorusYlide,
+                vec![ReactiveRole::Nucleophile],
+            ),
+            FunctionalGroupType::SulfoneCarbanion => (
+                ReactiveSiteKind::SulfoneCarbanion,
+                vec![ReactiveRole::Nucleophile],
+            ),
             FunctionalGroupType::UnsubstitutedAmide => {
                 (ReactiveSiteKind::Amide, vec![ReactiveRole::Electrophile])
             }
@@ -409,6 +433,28 @@ fn add_sulfur_sites(structure: &MolecularStructure, sites: &mut Vec<ReactiveSite
                 [sulfur],
                 [ReactiveRole::Electrophile, ReactiveRole::LeavingGroup],
             ));
+        }
+        for (carbon, order) in &neighbors {
+            if bond_order_matches(*order, 1.0)
+                && structure.atoms[*carbon].element == "C"
+                && structure.atoms[*carbon].charge < -0.1
+                && oxygens >= 2
+            {
+                let mut atoms = vec![sulfur, *carbon];
+                atoms.extend(
+                    neighbors
+                        .iter()
+                        .filter(|(neighbor, order)| {
+                            structure.atoms[*neighbor].element == "O" && *order >= 1.5
+                        })
+                        .map(|(neighbor, _)| *neighbor),
+                );
+                sites.push(ReactiveSite::new(
+                    ReactiveSiteKind::SulfoneCarbanion,
+                    atoms,
+                    [ReactiveRole::Nucleophile],
+                ));
+            }
         }
         if neighbors
             .iter()

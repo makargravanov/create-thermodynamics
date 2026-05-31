@@ -88,6 +88,11 @@ enum OrganicGeneratorKind {
     EnolateAlkylation,
     MichaelAddition,
     ClaisenCondensation,
+    PhosphoniumSaltFormation,
+    PhosphoniumYlideFormation,
+    WittigOlefination,
+    HornerWadsworthEmmonsOlefination,
+    JuliaOlefination,
 }
 
 impl OrganicGeneratorKind {
@@ -147,6 +152,11 @@ impl OrganicGeneratorKind {
             OrganicGeneratorKind::EnolateAlkylation => 47,
             OrganicGeneratorKind::MichaelAddition => 48,
             OrganicGeneratorKind::ClaisenCondensation => 49,
+            OrganicGeneratorKind::PhosphoniumSaltFormation => 50,
+            OrganicGeneratorKind::PhosphoniumYlideFormation => 51,
+            OrganicGeneratorKind::WittigOlefination => 52,
+            OrganicGeneratorKind::HornerWadsworthEmmonsOlefination => 53,
+            OrganicGeneratorKind::JuliaOlefination => 54,
         }
     }
 }
@@ -1302,6 +1312,13 @@ fn generators_for_site(
         ],
         ReactiveSiteKind::Amide => &[OrganicGeneratorKind::AmideHydrolysis],
         ReactiveSiteKind::PrimaryAmine => &[OrganicGeneratorKind::AminePhosgenation],
+        ReactiveSiteKind::Phosphine => &[OrganicGeneratorKind::PhosphoniumSaltFormation],
+        ReactiveSiteKind::PhosphoniumSalt => &[OrganicGeneratorKind::PhosphoniumYlideFormation],
+        ReactiveSiteKind::PhosphorusYlide => &[OrganicGeneratorKind::WittigOlefination],
+        ReactiveSiteKind::PhosphonateCarbanion => {
+            &[OrganicGeneratorKind::HornerWadsworthEmmonsOlefination]
+        }
+        ReactiveSiteKind::SulfoneCarbanion => &[OrganicGeneratorKind::JuliaOlefination],
         ReactiveSiteKind::NonTertiaryAmine => &[
             OrganicGeneratorKind::CyanamideAddition,
             OrganicGeneratorKind::HalideAmineSubstitution,

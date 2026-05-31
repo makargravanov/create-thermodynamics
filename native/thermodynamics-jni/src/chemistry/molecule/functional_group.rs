@@ -23,6 +23,11 @@ pub enum FunctionalGroupType {
     NonTertiaryAmine,
     NonTertiaryBorane,
     PrimaryAmine,
+    Phosphine,
+    PhosphonateCarbanion,
+    PhosphoniumSalt,
+    PhosphorusYlide,
+    SulfoneCarbanion,
     UnsubstitutedAmide,
 }
 
@@ -323,6 +328,75 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
                     vec![boron, oxygen, hydrogens[0]],
                 ));
             }
+        }
+    }
+
+    for phosphorus in 0..structure.atoms.len() {
+        if structure.atoms[phosphorus].element != "P" {
+            continue;
+        }
+        let hydrogens = bonded(structure, phosphorus, "H", Some(1.0));
+        let carbons = bonded(structure, phosphorus, "C", Some(1.0));
+        let double_oxygens = bonded(structure, phosphorus, "O", Some(2.0));
+        let positive = structure.atoms[phosphorus].charge > 0.1;
+        let negative_carbon = carbons
+            .iter()
+            .copied()
+            .find(|carbon| structure.atoms[*carbon].charge < -0.1);
+
+        if !positive && !double_oxygens.is_empty() {
+            if let Some(alpha_carbon) = negative_carbon {
+                let mut atoms = vec![phosphorus, alpha_carbon];
+                atoms.extend(double_oxygens.iter().copied());
+                atoms.extend(carbons.iter().copied().filter(|atom| *atom != alpha_carbon));
+                atoms.sort_unstable();
+                atoms.dedup();
+                groups.push(FunctionalGroup::new(
+                    FunctionalGroupType::PhosphonateCarbanion,
+                    atoms,
+                ));
+                continue;
+            }
+        }
+
+        if positive {
+            if let Some(alpha_carbon) = negative_carbon {
+                let mut atoms = vec![phosphorus, alpha_carbon];
+                atoms.extend(bonded(structure, alpha_carbon, "H", Some(1.0)));
+                atoms.extend(carbons.iter().copied().filter(|atom| *atom != alpha_carbon));
+                atoms.extend(hydrogens.iter().copied());
+                atoms.sort_unstable();
+                atoms.dedup();
+                groups.push(FunctionalGroup::new(FunctionalGroupType::PhosphorusYlide, atoms));
+                continue;
+            }
+            if let Some(alpha_carbon) = carbons
+                .iter()
+                .copied()
+                .find(|carbon| !bonded(structure, *carbon, "H", Some(1.0)).is_empty())
+            {
+                let mut atoms = vec![phosphorus, alpha_carbon];
+                atoms.extend(bonded(structure, alpha_carbon, "H", Some(1.0)));
+                atoms.extend(carbons.iter().copied().filter(|atom| *atom != alpha_carbon));
+                atoms.extend(hydrogens.iter().copied());
+                atoms.sort_unstable();
+                atoms.dedup();
+                groups.push(FunctionalGroup::new(FunctionalGroupType::PhosphoniumSalt, atoms));
+                continue;
+            }
+        }
+
+        if !positive
+            && structure.atoms[phosphorus].charge.abs() < 0.1
+            && hydrogens.is_empty()
+            && double_oxygens.is_empty()
+            && carbons.len() == 3
+        {
+            let mut atoms = vec![phosphorus];
+            atoms.extend(carbons.iter().copied());
+            atoms.sort_unstable();
+            atoms.dedup();
+            groups.push(FunctionalGroup::new(FunctionalGroupType::Phosphine, atoms));
         }
     }
 
