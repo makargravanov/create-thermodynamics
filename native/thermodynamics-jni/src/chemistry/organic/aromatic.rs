@@ -48,7 +48,10 @@ impl SubstituentClass {
     }
 
     pub(crate) fn is_deactivating(self) -> bool {
-        matches!(self, Self::ModeratelyDeactivating | Self::StronglyDeactivating)
+        matches!(
+            self,
+            Self::ModeratelyDeactivating | Self::StronglyDeactivating
+        )
     }
 }
 
@@ -188,9 +191,11 @@ impl<'a> AromaticRingDescriptor<'a> {
             return None;
         }
 
-        let has_h = self.structure.neighbors(carbon).iter().any(|(n, _)| {
-            self.structure.atoms[*n].element == "H"
-        });
+        let has_h = self
+            .structure
+            .neighbors(carbon)
+            .iter()
+            .any(|(n, _)| self.structure.atoms[*n].element == "H");
 
         let mut substituents = Vec::new();
         for (neighbor, order) in self.structure.neighbors(carbon) {
@@ -225,7 +230,10 @@ impl<'a> AromaticRingDescriptor<'a> {
 
     #[allow(dead_code)]
     pub(crate) fn positions(&self) -> Vec<AromaticPosition> {
-        self.ring_atoms.iter().filter_map(|&c| self.position(c)).collect()
+        self.ring_atoms
+            .iter()
+            .filter_map(|&c| self.position(c))
+            .collect()
     }
 }
 
@@ -246,14 +254,19 @@ pub(crate) fn is_aromatic_ring_preserved(
         let c1 = original_descriptor.ring_atoms[i];
         for j in (i + 1)..original_descriptor.ring_atoms.len() {
             let c2 = original_descriptor.ring_atoms[j];
-            let orig_bond = original_descriptor.structure.neighbors(c1).iter()
+            let orig_bond = original_descriptor
+                .structure
+                .neighbors(c1)
+                .iter()
                 .find(|(n, _)| *n == c2)
                 .map(|(_, order)| *order);
             if let Some(order) = orig_bond {
                 if bond_order_matches(order, 1.5) {
                     let mc1 = mapped_ring[i];
                     let mc2 = mapped_ring[j];
-                    let prod_bond = product_structure.neighbors(mc1).iter()
+                    let prod_bond = product_structure
+                        .neighbors(mc1)
+                        .iter()
                         .find(|(n, _)| *n == mc2)
                         .map(|(_, order)| *order);
                     match prod_bond {
@@ -275,9 +288,10 @@ fn classify_substituent(
     let atom_element = structure.atoms[sub_atom].element.as_str();
     match atom_element {
         "O" => {
-            let has_h = structure.neighbors(sub_atom).iter().any(|(n, _)| {
-                structure.atoms[*n].element == "H"
-            });
+            let has_h = structure
+                .neighbors(sub_atom)
+                .iter()
+                .any(|(n, _)| structure.atoms[*n].element == "H");
             if has_h {
                 SubstituentClass::StronglyActivating
             } else {

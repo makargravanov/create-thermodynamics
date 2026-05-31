@@ -9,8 +9,8 @@ use crate::chemistry::kinetics::ReactionChannel;
 use crate::chemistry::molecule::MolecularEditor;
 use crate::chemistry::reaction::{Reaction, StoichiometricTerm};
 use crate::chemistry::selectivity::{
-    engine::{SelectivityEngine, SiteDescriptorBuilder},
-    types::SelectivityContext,
+    engine::SiteDescriptorBuilder,
+    types::{ReactionType, SelectivityContext, SelectivityProfile},
     NucleophileStrength,
 };
 
@@ -18,12 +18,10 @@ pub(crate) fn generate_acetal_formation(
     carbonyl_site: &CarbonylSite<'_>,
     alcohol_site: &AlcoholSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
-    context: &SelectivityContext,
+    _context: &SelectivityContext,
 ) -> ChemistryResult<Reaction> {
     let carbonyl_desc = SiteDescriptorBuilder::from_carbonyl_site(carbonyl_site);
-    let score = SelectivityEngine::carbonyl_addition(&carbonyl_desc, NucleophileStrength::Moderate, context);
     let base_ea = 25.0;
-    let adjusted_ea = base_ea + score.activation_delta;
 
     let carbonyl = carbonyl_site.participant.substance;
     let carbonyl_structure = carbonyl_site.participant.structure;
@@ -65,17 +63,27 @@ pub(crate) fn generate_acetal_formation(
         )?;
         builder = builder.product(product, 1);
         builder = builder.product("destroy:water", 1);
-        builder = builder.activation_energy_kj_per_mol(adjusted_ea);
+        builder = builder.activation_energy_kj_per_mol(base_ea);
+        builder = builder.selectivity_profile(
+            SelectivityProfile::new(ReactionType::CarbonylAddition, carbonyl_desc)
+                .with_nucleophile_strength(NucleophileStrength::Weak),
+        );
     } else {
         for variant in product_variants {
-            builder = builder.channel(ReactionChannel::new(
-                format!("acetal_formation:stereo:{}", variant.channel_suffix),
-                [
-                    StoichiometricTerm::new(resolver.resolve(variant.structure)?, 1),
-                    StoichiometricTerm::new("destroy:water", 1),
-                ],
-                adjusted_ea + variant.activation_delta_kj_per_mol,
-            ));
+            builder = builder.channel(
+                ReactionChannel::new(
+                    format!("acetal_formation:stereo:{}", variant.channel_suffix),
+                    [
+                        StoichiometricTerm::new(resolver.resolve(variant.structure)?, 1),
+                        StoichiometricTerm::new("destroy:water", 1),
+                    ],
+                    base_ea + variant.activation_delta_kj_per_mol,
+                )
+                .with_selectivity_profile(
+                    SelectivityProfile::new(ReactionType::CarbonylAddition, carbonyl_desc.clone())
+                        .with_nucleophile_strength(NucleophileStrength::Weak),
+                ),
+            );
         }
         return Ok(builder.build());
     }
@@ -86,12 +94,10 @@ pub(crate) fn generate_imine_formation(
     carbonyl_site: &CarbonylSite<'_>,
     amine_site: &AmineSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
-    context: &SelectivityContext,
+    _context: &SelectivityContext,
 ) -> ChemistryResult<Reaction> {
     let carbonyl_desc = SiteDescriptorBuilder::from_carbonyl_site(carbonyl_site);
-    let score = SelectivityEngine::carbonyl_addition(&carbonyl_desc, NucleophileStrength::Moderate, context);
     let base_ea = 25.0;
-    let adjusted_ea = base_ea + score.activation_delta;
 
     let carbonyl = carbonyl_site.participant.substance;
     let carbonyl_structure = carbonyl_site.participant.structure;
@@ -146,7 +152,11 @@ pub(crate) fn generate_imine_formation(
             .acidity(AcidityCondition::Acidic)
             .max_water_activity(0.5),
     )
-    .activation_energy_kj_per_mol(adjusted_ea)
+    .activation_energy_kj_per_mol(base_ea)
+    .selectivity_profile(
+        SelectivityProfile::new(ReactionType::CarbonylAddition, carbonyl_desc)
+            .with_nucleophile_strength(NucleophileStrength::Moderate),
+    )
     .build())
 }
 
@@ -154,13 +164,11 @@ pub(crate) fn generate_organometallic_carbonyl_addition(
     carbonyl: SiteParticipant<'_>,
     organometallic: SiteParticipant<'_>,
     resolver: &mut DerivedSubstanceResolver,
-    context: &SelectivityContext,
+    _context: &SelectivityContext,
 ) -> ChemistryResult<Reaction> {
     let carbonyl_site = carbonyl.clone().carbonyl_site()?;
     let carbonyl_desc = SiteDescriptorBuilder::from_carbonyl_site(&carbonyl_site);
-    let score = SelectivityEngine::organometallic_addition(&carbonyl_desc, context);
     let base_ea = 15.0;
-    let adjusted_ea = base_ea + score.activation_delta;
 
     let (carbonyl_carbon, carbonyl_oxygen) = carbonyl_atoms_from_site(
         carbonyl.structure,
@@ -213,7 +221,11 @@ pub(crate) fn generate_organometallic_carbonyl_addition(
             .max_oxygen_activity(0.02)
             .atmosphere(AtmosphereCondition::Inert),
     )
-    .activation_energy_kj_per_mol(adjusted_ea)
+    .activation_energy_kj_per_mol(base_ea)
+    .selectivity_profile(
+        SelectivityProfile::new(ReactionType::CarbonylAddition, carbonyl_desc)
+            .with_nucleophile_strength(NucleophileStrength::VeryStrong),
+    )
     .build())
 }
 
@@ -254,12 +266,10 @@ pub(crate) fn generate_aldehyde_oxidation(
 pub(crate) fn generate_cyanide_nucleophilic_addition(
     site: &CarbonylSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
-    context: &SelectivityContext,
+    _context: &SelectivityContext,
 ) -> ChemistryResult<Reaction> {
     let carbonyl_desc = SiteDescriptorBuilder::from_carbonyl_site(site);
-    let score = SelectivityEngine::carbonyl_addition(&carbonyl_desc, NucleophileStrength::Strong, context);
     let base_ea = 20.0;
-    let adjusted_ea = base_ea + score.activation_delta;
 
     let substance = site.participant.substance;
     let structure = site.participant.structure;
@@ -279,19 +289,21 @@ pub(crate) fn generate_cyanide_nucleophilic_addition(
     .reactant("destroy:hydrogen_cyanide", 1, 1)
     .catalyst_order("destroy:cyanide", 1)
     .product(product, 1)
-    .activation_energy_kj_per_mol(adjusted_ea)
+    .activation_energy_kj_per_mol(base_ea)
+    .selectivity_profile(
+        SelectivityProfile::new(ReactionType::CarbonylAddition, carbonyl_desc)
+            .with_nucleophile_strength(NucleophileStrength::Strong),
+    )
     .build())
 }
 
 pub(crate) fn generate_wolff_kishner_reduction(
     site: &CarbonylSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
-    context: &SelectivityContext,
+    _context: &SelectivityContext,
 ) -> ChemistryResult<Reaction> {
     let carbonyl_desc = SiteDescriptorBuilder::from_carbonyl_site(site);
-    let score = SelectivityEngine::carbonyl_addition(&carbonyl_desc, NucleophileStrength::Strong, context);
     let base_ea = 30.0;
-    let adjusted_ea = base_ea + score.activation_delta;
 
     let substance = site.participant.substance;
     let structure = site.participant.structure;
@@ -313,6 +325,10 @@ pub(crate) fn generate_wolff_kishner_reduction(
     .product(product, 1)
     .product("destroy:water", 1)
     .product("destroy:nitrogen", 1)
-    .activation_energy_kj_per_mol(adjusted_ea)
+    .activation_energy_kj_per_mol(base_ea)
+    .selectivity_profile(
+        SelectivityProfile::new(ReactionType::CarbonylAddition, carbonyl_desc)
+            .with_nucleophile_strength(NucleophileStrength::Strong),
+    )
     .build())
 }

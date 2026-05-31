@@ -10,6 +10,7 @@ use super::redox::RedoxEnvironment;
 use super::registry::{
     ChemistryRegistry, IndexedReaction, ReactionCandidateScratch, SubstanceIndex,
 };
+use super::selectivity::{SelectivityContext, SelectivityEngine};
 use super::solution::equilibrate_solution_equilibria;
 
 pub const TICKS_PER_SECOND: f64 = 20.0;
@@ -334,7 +335,7 @@ pub fn reaction_rate_mol_per_bucket_per_tick_with_context(
     let mut rate = if reaction.channels.is_empty() {
         reaction.rate_constant_per_second(mixture.temperature_kelvin())?
     } else {
-        channel_rate_sum_per_second(&reaction.id, &reaction.channels, mixture, context)?
+        channel_rate_sum_per_second(registry, &reaction.id, &reaction.channels, mixture, context)?
     } / TICKS_PER_SECOND;
     if !redox_environment_allows_reaction(registry, mixture, reaction)? {
         return Ok(0.0);
@@ -348,6 +349,7 @@ pub fn reaction_rate_mol_per_bucket_per_tick_with_context(
     if reaction.requires_uv {
         rate *= context.uv_power;
     }
+    rate *= reaction_selectivity_rate_factor(registry, mixture, reaction, context)?;
     rate *= surface_rate_factor(reaction, context)?;
     for (substance_id, order) in &reaction.orders {
         registry.substance(substance_id)?;
@@ -390,7 +392,7 @@ fn reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
             .iter()
             .map(|channel| channel.channel.clone())
             .collect::<Vec<_>>();
-        channel_rate_sum_per_second(&reaction.id, &channel_refs, mixture, context)?
+        channel_rate_sum_per_second(registry, &reaction.id, &channel_refs, mixture, context)?
     } / TICKS_PER_SECOND;
     if !redox_environment_allows_reaction(registry, mixture, reaction)? {
         return Ok(0.0);
@@ -404,6 +406,7 @@ fn reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
     if reaction.requires_uv {
         rate *= context.uv_power;
     }
+    rate *= reaction_selectivity_rate_factor(registry, mixture, reaction, context)?;
     rate *= surface_rate_factor(reaction, context)?;
     for (substance, order, phases) in &indexed_reaction.orders {
         let substance_id = &registry.substance_by_index(*substance)?.id;
@@ -533,6 +536,33 @@ fn surface_rate_factor(reaction: &Reaction, context: &ReactionContext) -> Chemis
             return Ok(0.0);
         }
         factor *= (surface.free_sites() / surface.total_sites_mol_per_bucket).clamp(0.0, 1.0);
+    }
+    Ok(factor)
+}
+
+fn reaction_selectivity_rate_factor(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    reaction: &Reaction,
+    context: &ReactionContext,
+) -> ChemistryResult<f64> {
+    let Some(profile) = reaction.selectivity_profile.as_ref() else {
+        return Ok(1.0);
+    };
+    let selectivity_context = SelectivityContext::from_mixture(registry, mixture, context)?;
+    let effect = SelectivityEngine::evaluate_profile(profile, &selectivity_context);
+    if effect.suppressed || effect.rate_multiplier <= 0.0 {
+        return Ok(0.0);
+    }
+    let arrhenius_delta = (-(effect.activation_delta_kj_per_mol * 1000.0)
+        / (super::reaction::GAS_CONSTANT_J_PER_MOL_KELVIN * mixture.temperature_kelvin()))
+    .exp();
+    let factor = effect.rate_multiplier * effect.pre_exp_multiplier.max(0.0) * arrhenius_delta;
+    if !factor.is_finite() || factor < 0.0 {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: reaction.id.to_string(),
+            reason: "selectivity rate factor must be non-negative and finite".to_string(),
+        });
     }
     Ok(factor)
 }
@@ -840,7 +870,7 @@ fn channel_products(
         .map(|channel| {
             Ok((
                 channel.channel.id.to_string(),
-                channel.channel.rate_weight(mixture, context)?,
+                channel.channel.rate_weight(_registry, mixture, context)?,
             ))
         })
         .collect::<ChemistryResult<Vec<_>>>()?;

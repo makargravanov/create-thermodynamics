@@ -5,27 +5,17 @@ use crate::chemistry::error::{ChemistryError, ChemistryResult};
 use crate::chemistry::molecule::MolecularEditor;
 use crate::chemistry::reaction::Reaction;
 use crate::chemistry::selectivity::{
-    engine::{SelectivityEngine, SiteDescriptorBuilder},
-    types::{SelectivityContext, SelectivityRecommendation},
+    engine::SiteDescriptorBuilder,
+    types::{ReactionType, SelectivityContext, SelectivityProfile},
 };
 
 pub(crate) fn generate_halide_hydroxide_substitution(
     site: &HalideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
-    context: &SelectivityContext,
+    _context: &SelectivityContext,
 ) -> ChemistryResult<Option<Reaction>> {
-    let halide_desc = SiteDescriptorBuilder::from_halide_site(site);
-    let evaluation = SelectivityEngine::sn2_with_competition(&halide_desc, context);
-
-    if matches!(
-        evaluation.recommendation,
-        SelectivityRecommendation::Suppressed | SelectivityRecommendation::None
-    ) {
-        return Ok(None);
-    }
-
     let base_ea = 25.0;
-    let adjusted_ea = base_ea + evaluation.primary.activation_delta;
+    let halide_desc = SiteDescriptorBuilder::from_halide_site(site);
 
     let substance = site.participant.substance;
     let structure = site.participant.structure;
@@ -60,7 +50,8 @@ pub(crate) fn generate_halide_hydroxide_substitution(
         .reactant("destroy:hydroxide", 1, 1)
         .product(product, 1)
         .product(halide_ion, 1)
-        .activation_energy_kj_per_mol(adjusted_ea)
+        .activation_energy_kj_per_mol(base_ea)
+        .selectivity_profile(SelectivityProfile::new(ReactionType::SN2, halide_desc))
         .build(),
     ))
 }
@@ -115,20 +106,10 @@ pub(crate) fn generate_thionyl_chloride_substitution(
 pub(crate) fn generate_halide_ammonia_substitution(
     site: &HalideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
-    context: &SelectivityContext,
+    _context: &SelectivityContext,
 ) -> ChemistryResult<Option<Reaction>> {
-    let halide_desc = SiteDescriptorBuilder::from_halide_site(site);
-    let evaluation = SelectivityEngine::sn2_with_competition(&halide_desc, context);
-
-    if matches!(
-        evaluation.recommendation,
-        SelectivityRecommendation::Suppressed | SelectivityRecommendation::None
-    ) {
-        return Ok(None);
-    }
-
     let base_ea = 25.0;
-    let adjusted_ea = base_ea + evaluation.primary.activation_delta;
+    let halide_desc = SiteDescriptorBuilder::from_halide_site(site);
 
     let substance = site.participant.substance;
     let structure = site.participant.structure;
@@ -141,44 +122,37 @@ pub(crate) fn generate_halide_ammonia_substitution(
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
     editor.add_atom(nitrogen, "H", 0.0, 1.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Some(Reaction::builder(generated_site_reaction_id(
-        "halide_ammonia_substitution",
-        &site.participant,
-    ))
-    .reactant(substance.id.clone(), 1, 1)
-    .reactant("destroy:ammonia", 2, 2)
-    .product(product, 1)
-    .product(
-        halide_ion(
-            structure,
-            halogen,
+    Ok(Some(
+        Reaction::builder(generated_site_reaction_id(
             "halide_ammonia_substitution",
             &site.participant,
-        )?,
-        1,
-    )
-    .product("destroy:ammonium", 1)
-    .activation_energy_kj_per_mol(adjusted_ea)
-    .build()))
+        ))
+        .reactant(substance.id.clone(), 1, 1)
+        .reactant("destroy:ammonia", 2, 2)
+        .product(product, 1)
+        .product(
+            halide_ion(
+                structure,
+                halogen,
+                "halide_ammonia_substitution",
+                &site.participant,
+            )?,
+            1,
+        )
+        .product("destroy:ammonium", 1)
+        .activation_energy_kj_per_mol(base_ea)
+        .selectivity_profile(SelectivityProfile::new(ReactionType::SN2, halide_desc))
+        .build(),
+    ))
 }
 
 pub(crate) fn generate_halide_cyanide_substitution(
     site: &HalideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
-    context: &SelectivityContext,
+    _context: &SelectivityContext,
 ) -> ChemistryResult<Option<Reaction>> {
-    let halide_desc = SiteDescriptorBuilder::from_halide_site(site);
-    let evaluation = SelectivityEngine::sn2_with_competition(&halide_desc, context);
-
-    if matches!(
-        evaluation.recommendation,
-        SelectivityRecommendation::Suppressed | SelectivityRecommendation::None
-    ) {
-        return Ok(None);
-    }
-
     let base_ea = 25.0;
-    let adjusted_ea = base_ea + evaluation.primary.activation_delta;
+    let halide_desc = SiteDescriptorBuilder::from_halide_site(site);
 
     let substance = site.participant.substance;
     let structure = site.participant.structure;
@@ -190,44 +164,37 @@ pub(crate) fn generate_halide_cyanide_substitution(
     let nitrile_carbon = editor.add_atom(carbon, "C", 0.0, 1.0)?;
     editor.add_atom(nitrile_carbon, "N", 0.0, 3.0)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Some(Reaction::builder(generated_site_reaction_id(
-        "halide_cyanide_substitution",
-        &site.participant,
-    ))
-    .reactant(substance.id.clone(), 1, 1)
-    .reactant("destroy:cyanide", 1, 1)
-    .product(product, 1)
-    .product(
-        halide_ion(
-            structure,
-            halogen,
+    Ok(Some(
+        Reaction::builder(generated_site_reaction_id(
             "halide_cyanide_substitution",
             &site.participant,
-        )?,
-        1,
-    )
-    .activation_energy_kj_per_mol(adjusted_ea)
-    .build()))
+        ))
+        .reactant(substance.id.clone(), 1, 1)
+        .reactant("destroy:cyanide", 1, 1)
+        .product(product, 1)
+        .product(
+            halide_ion(
+                structure,
+                halogen,
+                "halide_cyanide_substitution",
+                &site.participant,
+            )?,
+            1,
+        )
+        .activation_energy_kj_per_mol(base_ea)
+        .selectivity_profile(SelectivityProfile::new(ReactionType::SN2, halide_desc))
+        .build(),
+    ))
 }
 
 pub(crate) fn generate_halide_amine_substitution(
     halide_site: &HalideSite<'_>,
     amine_site: &AmineSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
-    context: &SelectivityContext,
+    _context: &SelectivityContext,
 ) -> ChemistryResult<Option<Reaction>> {
-    let halide_desc = SiteDescriptorBuilder::from_halide_site(halide_site);
-    let evaluation = SelectivityEngine::sn2_with_competition(&halide_desc, context);
-
-    if matches!(
-        evaluation.recommendation,
-        SelectivityRecommendation::Suppressed | SelectivityRecommendation::None
-    ) {
-        return Ok(None);
-    }
-
     let base_ea = 25.0;
-    let adjusted_ea = base_ea + evaluation.primary.activation_delta;
+    let halide_desc = SiteDescriptorBuilder::from_halide_site(halide_site);
 
     let halide = halide_site.participant.substance;
     let halide_structure = halide_site.participant.structure;
@@ -265,24 +232,27 @@ pub(crate) fn generate_halide_amine_substitution(
         amine_nitrogen,
         1.0,
     )?)?;
-    Ok(Some(Reaction::builder(generated_pair_site_reaction_id(
-        "halide_amine_substitution",
-        &halide_site.participant,
-        &amine_site.participant,
-    ))
-    .reactant(halide.id.clone(), 1, 1)
-    .reactant(amine.id.clone(), 1, 2)
-    .product(product, 1)
-    .product(
-        halide_ion(
-            halide_structure,
-            halogen,
+    Ok(Some(
+        Reaction::builder(generated_pair_site_reaction_id(
             "halide_amine_substitution",
             &halide_site.participant,
-        )?,
-        1,
-    )
-    .product("destroy:proton", 1)
-    .activation_energy_kj_per_mol(adjusted_ea)
-    .build()))
+            &amine_site.participant,
+        ))
+        .reactant(halide.id.clone(), 1, 1)
+        .reactant(amine.id.clone(), 1, 2)
+        .product(product, 1)
+        .product(
+            halide_ion(
+                halide_structure,
+                halogen,
+                "halide_amine_substitution",
+                &halide_site.participant,
+            )?,
+            1,
+        )
+        .product("destroy:proton", 1)
+        .activation_energy_kj_per_mol(base_ea)
+        .selectivity_profile(SelectivityProfile::new(ReactionType::SN2, halide_desc))
+        .build(),
+    ))
 }

@@ -8,8 +8,8 @@ use crate::chemistry::error::{ChemistryError, ChemistryResult};
 use crate::chemistry::reaction::Reaction;
 use crate::chemistry::reactive_site::ReactiveSiteKind;
 use crate::chemistry::registry::{ChemistryRegistry, ChemistryRegistryBuilder};
-use crate::chemistry::substance::{Substance, SubstanceId};
 use crate::chemistry::selectivity::types::SelectivityContext;
+use crate::chemistry::substance::{Substance, SubstanceId};
 
 pub fn destroy_registry_with_generated_reactions_builder(
 ) -> ChemistryResult<ChemistryRegistryBuilder> {
@@ -79,10 +79,14 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
-                if let Some(reaction) = generate_halide_ammonia_substitution(&site, &mut resolver, context)? {
+                if let Some(reaction) =
+                    generate_halide_ammonia_substitution(&site, &mut resolver, context)?
+                {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
-                if let Some(reaction) = generate_halide_cyanide_substitution(&site, &mut resolver, context)? {
+                if let Some(reaction) =
+                    generate_halide_cyanide_substitution(&site, &mut resolver, context)?
+                {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
             }
@@ -129,7 +133,8 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 if let Some(reaction) = generate_aldehyde_oxidation(&site, &mut resolver)? {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
-                let reaction = generate_cyanide_nucleophilic_addition(&site, &mut resolver, context)?;
+                let reaction =
+                    generate_cyanide_nucleophilic_addition(&site, &mut resolver, context)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 let reaction = generate_wolff_kishner_reduction(&site, &mut resolver, context)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
@@ -323,9 +328,12 @@ fn generate_pair_reactions_for_seed(
             let acid_site = seed.clone().carboxylic_acid_site()?;
             for alcohol in space.sites_of(&ReactiveSiteKind::Alcohol) {
                 let alcohol_site = alcohol.alcohol_site()?;
-                if let Some(reaction) =
-                    generate_carboxylic_acid_esterification(&acid_site, &alcohol_site, resolver, context)?
-                {
+                if let Some(reaction) = generate_carboxylic_acid_esterification(
+                    &acid_site,
+                    &alcohol_site,
+                    resolver,
+                    context,
+                )? {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
@@ -334,9 +342,12 @@ fn generate_pair_reactions_for_seed(
             let alcohol_site = seed.clone().alcohol_site()?;
             for acid in space.sites_of(&ReactiveSiteKind::CarboxylicAcid) {
                 let acid_site = acid.carboxylic_acid_site()?;
-                if let Some(reaction) =
-                    generate_carboxylic_acid_esterification(&acid_site, &alcohol_site, resolver, context)?
-                {
+                if let Some(reaction) = generate_carboxylic_acid_esterification(
+                    &acid_site,
+                    &alcohol_site,
+                    resolver,
+                    context,
+                )? {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
@@ -352,8 +363,12 @@ fn generate_pair_reactions_for_seed(
             for carbonyl_kind in carbonyl_site_kinds() {
                 for carbonyl in space.sites_of(&carbonyl_kind) {
                     let carbonyl_site = carbonyl.carbonyl_site()?;
-                    let reaction =
-                        generate_acetal_formation(&carbonyl_site, &alcohol_site, resolver, context)?;
+                    let reaction = generate_acetal_formation(
+                        &carbonyl_site,
+                        &alcohol_site,
+                        resolver,
+                        context,
+                    )?;
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
@@ -379,9 +394,12 @@ fn generate_pair_reactions_for_seed(
             let halide_site = seed.clone().halide_site()?;
             for amine in space.sites_of(&ReactiveSiteKind::NonTertiaryAmine) {
                 let amine_site = amine.amine_site()?;
-                if let Some(reaction) =
-                    generate_halide_amine_substitution(&halide_site, &amine_site, resolver, context)?
-                {
+                if let Some(reaction) = generate_halide_amine_substitution(
+                    &halide_site,
+                    &amine_site,
+                    resolver,
+                    context,
+                )? {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
@@ -395,9 +413,12 @@ fn generate_pair_reactions_for_seed(
             let amine_site = seed.clone().amine_site()?;
             for halide in space.sites_of(&ReactiveSiteKind::Halide) {
                 let halide_site = halide.halide_site()?;
-                if let Some(reaction) =
-                    generate_halide_amine_substitution(&halide_site, &amine_site, resolver, context)?
-                {
+                if let Some(reaction) = generate_halide_amine_substitution(
+                    &halide_site,
+                    &amine_site,
+                    resolver,
+                    context,
+                )? {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
@@ -406,12 +427,14 @@ fn generate_pair_reactions_for_seed(
             let carbonyl_site = seed.clone().carbonyl_site()?;
             for alcohol in space.sites_of(&ReactiveSiteKind::Alcohol) {
                 let alcohol_site = alcohol.alcohol_site()?;
-                let reaction = generate_acetal_formation(&carbonyl_site, &alcohol_site, resolver, context)?;
+                let reaction =
+                    generate_acetal_formation(&carbonyl_site, &alcohol_site, resolver, context)?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
             for amine in space.sites_of(&ReactiveSiteKind::PrimaryAmine) {
                 let amine_site = amine.amine_site()?;
-                let reaction = generate_imine_formation(&carbonyl_site, &amine_site, resolver, context)?;
+                let reaction =
+                    generate_imine_formation(&carbonyl_site, &amine_site, resolver, context)?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
@@ -420,7 +443,8 @@ fn generate_pair_reactions_for_seed(
             for carbonyl_kind in carbonyl_site_kinds() {
                 for carbonyl in space.sites_of(&carbonyl_kind) {
                     let carbonyl_site = carbonyl.carbonyl_site()?;
-                    let reaction = generate_imine_formation(&carbonyl_site, &amine_site, resolver, context)?;
+                    let reaction =
+                        generate_imine_formation(&carbonyl_site, &amine_site, resolver, context)?;
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
@@ -531,7 +555,9 @@ fn generate_site_reactions_for_seed_participants<'a>(
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
             ReactiveSiteKind::ArylHalide => {
-                if let Some(reaction) = generate_aryl_halide_hydroxide_substitution(seed.clone(), resolver)? {
+                if let Some(reaction) =
+                    generate_aryl_halide_hydroxide_substitution(seed.clone(), resolver)?
+                {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
                 if let Some(reaction) = generate_aryl_halide_ammonia_substitution(seed, resolver)? {

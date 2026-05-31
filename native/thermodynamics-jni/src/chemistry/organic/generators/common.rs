@@ -171,7 +171,6 @@ pub(crate) fn atom_charge_sum(
     Ok(charge.round() as i32)
 }
 
-
 pub(crate) fn first_bonded_hydrogen(structure: &MolecularStructure, atom: usize) -> Option<usize> {
     structure
         .neighbors(atom)

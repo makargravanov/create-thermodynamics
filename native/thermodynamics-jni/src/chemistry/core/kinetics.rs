@@ -8,6 +8,8 @@ use super::reaction::{
     ProductDistribution, ProductDistributionVariant, ReactionId, StoichiometricTerm,
     GAS_CONSTANT_J_PER_MOL_KELVIN,
 };
+use super::registry::ChemistryRegistry;
+use super::selectivity::{SelectivityContext, SelectivityEngine, SelectivityProfile};
 use super::simulation::ReactionContext;
 use super::substance::SubstanceId;
 
@@ -90,6 +92,7 @@ pub struct ReactionChannel {
     pub pre_exponential_factor: f64,
     pub mode: ReactionChannelMode,
     pub condition_effects: Vec<ChannelConditionEffect>,
+    pub selectivity_profile: Option<SelectivityProfile>,
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +137,7 @@ impl ReactionChannel {
             pre_exponential_factor: 10_000.0,
             mode: ReactionChannelMode::Kinetic,
             condition_effects: Vec::new(),
+            selectivity_profile: None,
         }
     }
 
@@ -149,6 +153,11 @@ impl ReactionChannel {
 
     pub fn with_condition_effect(mut self, effect: ChannelConditionEffect) -> Self {
         self.condition_effects.push(effect);
+        self
+    }
+
+    pub fn with_selectivity_profile(mut self, profile: SelectivityProfile) -> Self {
+        self.selectivity_profile = Some(profile);
         self
     }
 
@@ -202,13 +211,16 @@ impl ReactionChannel {
 
     pub fn rate_weight(
         &self,
+        registry: &ChemistryRegistry,
         mixture: &Mixture,
         context: &ReactionContext,
     ) -> ChemistryResult<f64> {
         channel_rate_weight(
+            registry,
             self.pre_exponential_factor,
             self.activation_gibbs_kj_per_mol,
             &self.condition_effects,
+            self.selectivity_profile.as_ref(),
             mixture,
             context,
         )
@@ -339,6 +351,7 @@ impl EnergyModel {
 }
 
 pub fn channel_product_distribution(
+    registry: &ChemistryRegistry,
     reaction_id: &ReactionId,
     channels: &[ReactionChannel],
     mixture: &Mixture,
@@ -349,7 +362,7 @@ pub fn channel_product_distribution(
         .map(|channel| {
             Ok((
                 channel.id.to_string(),
-                channel.rate_weight(mixture, context)?,
+                channel.rate_weight(registry, mixture, context)?,
             ))
         })
         .collect::<ChemistryResult<Vec<_>>>()?;
@@ -370,6 +383,7 @@ pub fn channel_product_distribution(
 }
 
 pub fn channel_rate_sum_per_second(
+    registry: &ChemistryRegistry,
     reaction_id: &ReactionId,
     channels: &[ReactionChannel],
     mixture: &Mixture,
@@ -377,7 +391,7 @@ pub fn channel_rate_sum_per_second(
 ) -> ChemistryResult<f64> {
     let mut total = 0.0;
     for channel in channels {
-        total += channel.rate_weight(mixture, context)?;
+        total += channel.rate_weight(registry, mixture, context)?;
     }
     if !total.is_finite() || total < 0.0 {
         return Err(ChemistryError::InvalidReaction {
@@ -389,17 +403,34 @@ pub fn channel_rate_sum_per_second(
 }
 
 fn channel_rate_weight(
+    registry: &ChemistryRegistry,
     pre_exponential_factor: f64,
     activation_gibbs_kj_per_mol: f64,
     condition_effects: &[ChannelConditionEffect],
+    selectivity_profile: Option<&SelectivityProfile>,
     mixture: &Mixture,
     context: &ReactionContext,
 ) -> ChemistryResult<f64> {
     validate_temperature(mixture.temperature_kelvin())?;
+    let mut pre_exponential_factor = pre_exponential_factor;
+    let mut activation_gibbs_kj_per_mol = activation_gibbs_kj_per_mol;
+    let mut explicit_multiplier = 1.0;
+    if let Some(profile) = selectivity_profile {
+        let selectivity_context = SelectivityContext::from_mixture(registry, mixture, context)?;
+        let effect = SelectivityEngine::evaluate_profile(profile, &selectivity_context);
+        if effect.suppressed || effect.rate_multiplier <= 0.0 {
+            return Ok(0.0);
+        }
+        pre_exponential_factor *= effect.pre_exp_multiplier.max(0.0);
+        activation_gibbs_kj_per_mol =
+            (activation_gibbs_kj_per_mol + effect.activation_delta_kj_per_mol).max(0.0);
+        explicit_multiplier *= effect.rate_multiplier;
+    }
     let mut weight = pre_exponential_factor
         * (-(activation_gibbs_kj_per_mol * 1000.0)
             / (GAS_CONSTANT_J_PER_MOL_KELVIN * mixture.temperature_kelvin()))
         .exp();
+    weight *= explicit_multiplier;
     for effect in condition_effects {
         weight *= condition_multiplier(effect, mixture, context)?;
         if weight == 0.0 {

@@ -7,6 +7,7 @@ use super::error::{ChemistryError, ChemistryResult};
 use super::kinetics::ReactionChannel;
 use super::mixture::MixturePhase;
 use super::redox::{RedoxAnnotation, ELECTRON_EXTERNAL_ID};
+use super::selectivity::SelectivityProfile;
 use super::substance::SubstanceId;
 
 pub const GAS_CONSTANT_J_PER_MOL_KELVIN: f64 = 8.314_462_618_153_24;
@@ -103,6 +104,7 @@ pub struct Reaction {
     pub surface_requirements: Vec<SurfaceRequirement>,
     pub surface_steps: Vec<SurfaceStep>,
     pub conditions: Vec<ReactionCondition>,
+    pub selectivity_profile: Option<SelectivityProfile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +187,7 @@ impl Reaction {
                 surface_requirements: Vec::new(),
                 surface_steps: Vec::new(),
                 conditions: Vec::new(),
+                selectivity_profile: None,
             },
         }
     }
@@ -505,6 +508,11 @@ impl ReactionBuilder {
 
     pub fn condition(mut self, condition: ReactionCondition) -> Self {
         self.reaction.conditions.push(condition);
+        self
+    }
+
+    pub fn selectivity_profile(mut self, profile: SelectivityProfile) -> Self {
+        self.reaction.selectivity_profile = Some(profile);
         self
     }
 

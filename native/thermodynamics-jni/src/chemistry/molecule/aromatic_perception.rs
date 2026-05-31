@@ -50,17 +50,22 @@ fn bond_order_at(structure: &MolecularStructure, a: usize, b: usize) -> Option<f
         .map(|bond| bond.order)
 }
 
-fn find_simple_cycles_up_to_len(
-    structure: &MolecularStructure,
-    max_len: usize,
-) -> Vec<Vec<usize>> {
+fn find_simple_cycles_up_to_len(structure: &MolecularStructure, max_len: usize) -> Vec<Vec<usize>> {
     let n = structure.atoms.len();
     let mut raw_cycles = Vec::new();
 
     for start in 0..n {
         let mut path = Vec::new();
         let mut visited = vec![false; n];
-        dfs_find_cycles(structure, start, start, max_len, &mut path, &mut visited, &mut raw_cycles);
+        dfs_find_cycles(
+            structure,
+            start,
+            start,
+            max_len,
+            &mut path,
+            &mut visited,
+            &mut raw_cycles,
+        );
     }
 
     dedupe_cycles(raw_cycles)
@@ -230,13 +235,11 @@ fn approx_eq(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1.0e-6
 }
 
-fn is_conjugated_ring_system(
-    structure: &MolecularStructure,
-    system: &RingSystem,
-) -> bool {
-    system.atoms.iter().all(|&atom_idx| {
-        has_p_orbital_in_system(structure, atom_idx, system)
-    })
+fn is_conjugated_ring_system(structure: &MolecularStructure, system: &RingSystem) -> bool {
+    system
+        .atoms
+        .iter()
+        .all(|&atom_idx| has_p_orbital_in_system(structure, atom_idx, system))
 }
 
 fn has_p_orbital_in_system(
@@ -254,27 +257,19 @@ fn has_p_orbital_in_system(
         .filter(|(n, _)| system.atoms.contains(n))
         .count();
 
-    let has_endocyclic_pi_bond = neighbors.iter().any(|(neighbor, order)| {
-        system.atoms.contains(neighbor) && *order >= 1.5
-    });
+    let has_endocyclic_pi_bond = neighbors
+        .iter()
+        .any(|(neighbor, order)| system.atoms.contains(neighbor) && *order >= 1.5);
 
     if has_endocyclic_pi_bond {
         return matches!(element, "C" | "N" | "O" | "S" | "B" | "P");
     }
 
     match element {
-        "C" => {
-            approx_eq(charge, 1.0) || approx_eq(charge, -1.0)
-        }
-        "B" => {
-            approx_eq(charge, 0.0) && ring_neighbors >= 2
-        }
-        "N" => {
-            (approx_eq(charge, 0.0) && ring_neighbors >= 2) || approx_eq(charge, -1.0)
-        }
-        "O" | "S" => {
-            approx_eq(charge, 0.0) && ring_neighbors >= 2
-        }
+        "C" => approx_eq(charge, 1.0) || approx_eq(charge, -1.0),
+        "B" => approx_eq(charge, 0.0) && ring_neighbors >= 2,
+        "N" => (approx_eq(charge, 0.0) && ring_neighbors >= 2) || approx_eq(charge, -1.0),
+        "O" | "S" => approx_eq(charge, 0.0) && ring_neighbors >= 2,
         _ => false,
     }
 }
@@ -289,9 +284,9 @@ fn pi_electron_contribution(
     let charge = atom.charge;
 
     let neighbors = structure.neighbors(atom_idx);
-    let has_endocyclic_pi_bond = neighbors.iter().any(|(neighbor, order)| {
-        system.atoms.contains(neighbor) && *order >= 1.5
-    });
+    let has_endocyclic_pi_bond = neighbors
+        .iter()
+        .any(|(neighbor, order)| system.atoms.contains(neighbor) && *order >= 1.5);
 
     match element {
         "C" => {
@@ -334,10 +329,7 @@ fn pi_electron_contribution(
     }
 }
 
-fn pi_electron_count(
-    structure: &MolecularStructure,
-    system: &RingSystem,
-) -> Option<u32> {
+fn pi_electron_count(structure: &MolecularStructure, system: &RingSystem) -> Option<u32> {
     let mut total = 0;
     for &atom_idx in &system.atoms {
         let contribution = pi_electron_contribution(structure, atom_idx, system)?;
@@ -351,10 +343,7 @@ fn follows_huckel_rule(pi_electrons: u32) -> bool {
 }
 
 #[allow(dead_code)]
-fn mark_system_aromatic(
-    structure: &mut MolecularStructure,
-    system: &RingSystem,
-) {
+fn mark_system_aromatic(structure: &mut MolecularStructure, system: &RingSystem) {
     for bond in &mut structure.bonds {
         let key = ordered_pair(bond.from, bond.to);
         if system.bonds.contains(&key) {
@@ -366,14 +355,19 @@ fn mark_system_aromatic(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chemistry::canonical::canonical_structure_code;
     use crate::chemistry::frowns::parse_frowns;
     use crate::chemistry::molecule::bond_order_matches;
-    use crate::chemistry::canonical::canonical_structure_code;
 
     fn count_aromatic_bonds(structure: &MolecularStructure, ring_indices: &[usize]) -> usize {
-        structure.bonds.iter()
-            .filter(|b| ring_indices.contains(&b.from) && ring_indices.contains(&b.to)
-                    && bond_order_matches(b.order, 1.5))
+        structure
+            .bonds
+            .iter()
+            .filter(|b| {
+                ring_indices.contains(&b.from)
+                    && ring_indices.contains(&b.to)
+                    && bond_order_matches(b.order, 1.5)
+            })
             .count()
     }
 
@@ -382,10 +376,11 @@ mod tests {
         let structure = parse_frowns(
             "destroy:graph:atoms=C.C.C.C.C.C.H.H.H.H.H.H;\
              bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-d-5,5-s-0,\
-                   0-s-6,1-s-7,2-s-8,3-s-9,4-s-10,5-s-11"
-        ).unwrap();
+                   0-s-6,1-s-7,2-s-8,3-s-9,4-s-10,5-s-11",
+        )
+        .unwrap();
 
-        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5]), 6);
+        assert_eq!(count_aromatic_bonds(&structure, &[0, 1, 2, 3, 4, 5]), 6);
     }
 
     #[test]
@@ -393,10 +388,11 @@ mod tests {
         let structure = parse_frowns(
             "destroy:graph:atoms=C.C.C.C.H.H.H.H;\
              bonds=0-d-1,1-s-2,2-d-3,3-s-0,\
-                   0-s-4,1-s-5,2-s-6,3-s-7"
-        ).unwrap();
+                   0-s-4,1-s-5,2-s-6,3-s-7",
+        )
+        .unwrap();
 
-        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3]), 0);
+        assert_eq!(count_aromatic_bonds(&structure, &[0, 1, 2, 3]), 0);
     }
 
     #[test]
@@ -404,10 +400,11 @@ mod tests {
         let structure = parse_frowns(
             "destroy:graph:atoms=N.C.C.C.C.C.H.H.H.H.H;\
              bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-d-5,5-s-0,\
-                   1-s-6,2-s-7,3-s-8,4-s-9,5-s-10"
-        ).unwrap();
+                   1-s-6,2-s-7,3-s-8,4-s-9,5-s-10",
+        )
+        .unwrap();
 
-        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5]), 6);
+        assert_eq!(count_aromatic_bonds(&structure, &[0, 1, 2, 3, 4, 5]), 6);
     }
 
     #[test]
@@ -415,10 +412,11 @@ mod tests {
         let structure = parse_frowns(
             "destroy:graph:atoms=N.C.C.C.C.H.H.H.H.H;\
              bonds=0-s-1,1-d-2,2-s-3,3-d-4,4-s-0,\
-                   0-s-5,1-s-6,2-s-7,3-s-8,4-s-9"
-        ).unwrap();
+                   0-s-5,1-s-6,2-s-7,3-s-8,4-s-9",
+        )
+        .unwrap();
 
-        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4]), 5);
+        assert_eq!(count_aromatic_bonds(&structure, &[0, 1, 2, 3, 4]), 5);
     }
 
     #[test]
@@ -426,10 +424,11 @@ mod tests {
         let structure = parse_frowns(
             "destroy:graph:atoms=O.C.C.C.C.H.H.H.H;\
              bonds=0-s-1,1-d-2,2-s-3,3-d-4,4-s-0,\
-                   1-s-5,2-s-6,3-s-7,4-s-8"
-        ).unwrap();
+                   1-s-5,2-s-6,3-s-7,4-s-8",
+        )
+        .unwrap();
 
-        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4]), 5);
+        assert_eq!(count_aromatic_bonds(&structure, &[0, 1, 2, 3, 4]), 5);
     }
 
     #[test]
@@ -437,10 +436,11 @@ mod tests {
         let structure = parse_frowns(
             "destroy:graph:atoms=S.C.C.C.C.H.H.H.H;\
              bonds=0-s-1,1-d-2,2-s-3,3-d-4,4-s-0,\
-                   1-s-5,2-s-6,3-s-7,4-s-8"
-        ).unwrap();
+                   1-s-5,2-s-6,3-s-7,4-s-8",
+        )
+        .unwrap();
 
-        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4]), 5);
+        assert_eq!(count_aromatic_bonds(&structure, &[0, 1, 2, 3, 4]), 5);
     }
 
     #[test]
@@ -449,10 +449,14 @@ mod tests {
             "destroy:graph:atoms=C.C.C.C.C.C.C.C.C.C.H.H.H.H.H.H.H.H;\
              bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-d-5,5-s-0,\
                    5-s-6,6-d-7,7-s-8,8-d-9,9-s-4,\
-                   0-s-10,1-s-11,2-s-12,3-s-13,6-s-14,7-s-15,8-s-16,9-s-17"
-        ).unwrap();
+                   0-s-10,1-s-11,2-s-12,3-s-13,6-s-14,7-s-15,8-s-16,9-s-17",
+        )
+        .unwrap();
 
-        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5,6,7,8,9]), 11);
+        assert_eq!(
+            count_aromatic_bonds(&structure, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            11
+        );
     }
 
     #[test]
@@ -463,8 +467,9 @@ mod tests {
                    5-s-6,6-d-7,7-s-8,8-d-9,9-s-4,\
                    9-s-10,10-d-11,11-s-12,12-d-13,13-s-8,\
                    0-s-14,1-s-15,2-s-16,3-s-17,\
-                   6-s-18,7-s-19,10-s-20,11-s-21,12-s-22,13-s-23"
-        ).unwrap();
+                   6-s-18,7-s-19,10-s-20,11-s-21,12-s-22,13-s-23",
+        )
+        .unwrap();
 
         let rings: Vec<usize> = (0..14).collect();
         let count = count_aromatic_bonds(&structure, &rings);
@@ -479,8 +484,9 @@ mod tests {
                    3-s-6,6-d-7,7-s-8,8-d-9,9-s-2,\
                    5-s-10,10-d-11,11-s-12,12-d-13,13-s-0,\
                    0-s-14,1-s-15,2-s-16,4-s-17,6-s-18,7-s-19,8-s-20,9-s-21,\
-                   10-s-22,11-s-23"
-        ).unwrap();
+                   10-s-22,11-s-23",
+        )
+        .unwrap();
 
         let rings: Vec<usize> = (0..14).collect();
         let count = count_aromatic_bonds(&structure, &rings);
@@ -492,10 +498,11 @@ mod tests {
         let structure = parse_frowns(
             "destroy:graph:atoms=C.C.C.C.C^-1.H.H.H.H;\
              bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-s-0,\
-                   0-s-5,1-s-6,2-s-7,3-s-8"
-        ).unwrap();
+                   0-s-5,1-s-6,2-s-7,3-s-8",
+        )
+        .unwrap();
 
-        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4]), 5);
+        assert_eq!(count_aromatic_bonds(&structure, &[0, 1, 2, 3, 4]), 5);
     }
 
     #[test]
@@ -503,10 +510,11 @@ mod tests {
         let structure = parse_frowns(
             "destroy:graph:atoms=C.C.C.C.C.C.C^1.H.H.H.H.H.H.H;\
              bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-d-5,5-s-6,6-s-0,\
-                   0-s-7,1-s-8,2-s-9,3-s-10,4-s-11,5-s-12,6-s-13"
-        ).unwrap();
+                   0-s-7,1-s-8,2-s-9,3-s-10,4-s-11,5-s-12,6-s-13",
+        )
+        .unwrap();
 
-        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5,6]), 7);
+        assert_eq!(count_aromatic_bonds(&structure, &[0, 1, 2, 3, 4, 5, 6]), 7);
     }
 
     #[test]
@@ -514,10 +522,14 @@ mod tests {
         let structure = parse_frowns(
             "destroy:graph:atoms=C.C.C.C.C.C.C.C.H.H.H.H.H.H.H.H;\
              bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-d-5,5-s-6,6-d-7,7-s-0,\
-                   0-s-8,1-s-9,2-s-10,3-s-11,4-s-12,5-s-13,6-s-14,7-s-15"
-        ).unwrap();
+                   0-s-8,1-s-9,2-s-10,3-s-11,4-s-12,5-s-13,6-s-14,7-s-15",
+        )
+        .unwrap();
 
-        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5,6,7]), 0);
+        assert_eq!(
+            count_aromatic_bonds(&structure, &[0, 1, 2, 3, 4, 5, 6, 7]),
+            0
+        );
     }
 
     #[test]
@@ -525,10 +537,11 @@ mod tests {
         let structure = parse_frowns(
             "destroy:graph:atoms=C.C.C.C.C^1.H.H.H.H;\
              bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-s-0,\
-                   0-s-5,1-s-6,2-s-7,3-s-8"
-        ).unwrap();
+                   0-s-5,1-s-6,2-s-7,3-s-8",
+        )
+        .unwrap();
 
-        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4]), 0);
+        assert_eq!(count_aromatic_bonds(&structure, &[0, 1, 2, 3, 4]), 0);
     }
 
     #[test]
@@ -536,10 +549,11 @@ mod tests {
         let structure = parse_frowns(
             "destroy:graph:atoms=C.C.C.C.C.C.H.H.H.H.H.H;\
              bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-s-5,5-s-0,\
-                   0-s-6,1-s-7,2-s-8,3-s-9,4-s-10,5-s-11"
-        ).unwrap();
+                   0-s-6,1-s-7,2-s-8,3-s-9,4-s-10,5-s-11",
+        )
+        .unwrap();
 
-        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5]), 0);
+        assert_eq!(count_aromatic_bonds(&structure, &[0, 1, 2, 3, 4, 5]), 0);
     }
 
     #[test]
@@ -547,10 +561,11 @@ mod tests {
         let structure = parse_frowns(
             "destroy:graph:atoms=Si.C.C.C.C.C.H.H.H.H.H;\
              bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-d-5,5-s-0,\
-                   1-s-6,2-s-7,3-s-8,4-s-9,5-s-10"
-        ).unwrap();
+                   1-s-6,2-s-7,3-s-8,4-s-9,5-s-10",
+        )
+        .unwrap();
 
-        assert_eq!(count_aromatic_bonds(&structure, &[0,1,2,3,4,5]), 0);
+        assert_eq!(count_aromatic_bonds(&structure, &[0, 1, 2, 3, 4, 5]), 0);
     }
 
     #[test]
@@ -558,8 +573,9 @@ mod tests {
         let structure = parse_frowns(
             "destroy:graph:atoms=C.C.C.C.C.C.H.H.H.H.H.H;\
              bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-d-5,5-s-0,\
-                   0-s-6,1-s-7,2-s-8,3-s-9,4-s-10,5-s-11"
-        ).unwrap();
+                   0-s-6,1-s-7,2-s-8,3-s-9,4-s-10,5-s-11",
+        )
+        .unwrap();
 
         let once = aromatize(structure.clone()).unwrap();
         let twice = aromatize(once.clone()).unwrap();

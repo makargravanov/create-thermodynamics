@@ -1,4 +1,4 @@
-use super::super::aromatic::{AromaticRingDescriptor, is_aromatic_ring_preserved};
+use super::super::aromatic::{is_aromatic_ring_preserved, AromaticRingDescriptor};
 use super::super::resolver::DerivedSubstanceResolver;
 use super::super::space::SiteParticipant;
 use super::common::*;
@@ -223,7 +223,8 @@ pub(crate) fn generate_fc_alkylation(
 
         let mut aromatic_editor = MolecularEditor::new(aromatic.structure);
         let aromatic_mapping = aromatic_editor.remove_atoms(&[hydrogen])?;
-        let aromatic_carbon_mapped = mapped_atom(&aromatic_mapping, carbon, "aromatic substitution carbon")?;
+        let aromatic_carbon_mapped =
+            mapped_atom(&aromatic_mapping, carbon, "aromatic substitution carbon")?;
         let aromatic_fragment = aromatic_editor.finish()?;
 
         let product_structure = MolecularEditor::join_structures(
@@ -306,7 +307,8 @@ pub(crate) fn generate_fc_acylation(
 
         let mut aromatic_editor = MolecularEditor::new(aromatic.structure);
         let aromatic_mapping = aromatic_editor.remove_atoms(&[hydrogen])?;
-        let aromatic_carbon_mapped = mapped_atom(&aromatic_mapping, carbon, "aromatic substitution carbon")?;
+        let aromatic_carbon_mapped =
+            mapped_atom(&aromatic_mapping, carbon, "aromatic substitution carbon")?;
         let aromatic_fragment = aromatic_editor.finish()?;
 
         let product_structure = MolecularEditor::join_structures(
@@ -363,7 +365,8 @@ pub(crate) fn generate_aryl_halide_hydroxide_substitution(
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Option<Reaction>> {
     let site = participant.aryl_halide_site()?;
-    let descriptor = AromaticRingDescriptor::from_start_carbon(site.participant.structure, site.carbon);
+    let descriptor =
+        AromaticRingDescriptor::from_start_carbon(site.participant.structure, site.carbon);
     if descriptor.ring_atoms.len() < 5 {
         return Ok(None);
     }
@@ -413,7 +416,8 @@ pub(crate) fn generate_aryl_halide_ammonia_substitution(
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Option<Reaction>> {
     let site = participant.aryl_halide_site()?;
-    let descriptor = AromaticRingDescriptor::from_start_carbon(site.participant.structure, site.carbon);
+    let descriptor =
+        AromaticRingDescriptor::from_start_carbon(site.participant.structure, site.carbon);
     if descriptor.ring_atoms.len() < 5 {
         return Ok(None);
     }
