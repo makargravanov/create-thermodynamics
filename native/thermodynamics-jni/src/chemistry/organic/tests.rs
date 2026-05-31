@@ -202,6 +202,130 @@ fn organometallic_and_aldol_generators_create_carbon_carbon_bonds() {
 }
 
 #[test]
+fn alpha_carbon_generators_create_halogenation_dehydration_enamine_and_alkylation() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+
+    let acetone = SubstanceId::from("destroy:acetone");
+    let iodomethane = SubstanceId::from("destroy:iodomethane");
+    let methyl_acetate = SubstanceId::from("destroy:methyl_acetate");
+    let dimethylamine = dynamic.resolve_frowns("CNC").unwrap();
+    let methyl_vinyl_ketone = dynamic.resolve_frowns("C=CC(=O)C").unwrap();
+
+    dynamic
+        .generate_reactions_for_substances(
+            [
+                acetone.clone(),
+                iodomethane.clone(),
+                methyl_acetate.clone(),
+                dimethylamine.clone(),
+                methyl_vinyl_ketone.clone(),
+            ],
+            1,
+        )
+        .unwrap();
+
+    let alpha_chlorination = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("alpha_chlorination/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == acetone)
+        })
+        .expect("acetone must have alpha chlorination");
+    assert!(alpha_chlorination
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:hydrochloric_acid"));
+
+    let enolate_alkylation = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("enolate_alkylation/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == iodomethane)
+        })
+        .expect("acetone enolate must alkylate iodomethane");
+    assert!(enolate_alkylation
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:iodide"));
+    assert!(enolate_alkylation
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:water"));
+
+    let enamine = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("enamine_formation/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == dimethylamine)
+        })
+        .expect("acetone and secondary amine must form an enamine");
+    assert!(enamine
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:water"));
+
+    dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("michael_addition/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == methyl_vinyl_ketone)
+        })
+        .expect("acetone enolate must add to a conjugated enone");
+
+    dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("claisen_condensation/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .all(|term| term.substance_id == methyl_acetate)
+        })
+        .expect("methyl acetate must undergo self-Claisen condensation");
+
+    let acetaldehyde = dynamic.resolve_frowns("CC=O").unwrap();
+    dynamic
+        .generate_reactions_for_substances([acetaldehyde.clone()], 1)
+        .unwrap();
+    let aldol_product = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("aldol_addition/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .all(|term| term.substance_id == acetaldehyde)
+        })
+        .and_then(|reaction| reaction.products.first())
+        .map(|term| term.substance_id.clone())
+        .expect("acetaldehyde must produce an aldol addition product");
+
+    dynamic
+        .generate_reactions_for_substances([aldol_product.clone()], 1)
+        .unwrap();
+    assert!(dynamic.reactions().any(|reaction| {
+        reaction.id.as_str().starts_with("aldol_dehydration/")
+            && reaction
+                .reactants
+                .iter()
+                .any(|term| term.substance_id == aldol_product)
+    }));
+}
+
+#[test]
 fn scoped_generation_matches_full_static_generation() {
     let registry = super::super::destroy_registry_builder()
         .unwrap()

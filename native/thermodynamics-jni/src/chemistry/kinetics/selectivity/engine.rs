@@ -42,6 +42,13 @@ impl SelectivityEngine {
                 1.0,
                 "electrophilic addition has no specialized selectivity profile yet",
             ),
+            ReactionType::AlphaHalogenation
+            | ReactionType::AldolAddition
+            | ReactionType::AldolDehydration
+            | ReactionType::EnamineFormation
+            | ReactionType::EnolateAlkylation
+            | ReactionType::MichaelAddition
+            | ReactionType::ClaisenCondensation => evaluate_alpha_carbon_profile(profile, context),
         };
         let recommendation = if matches!(profile.mechanism, ReactionType::SN2) {
             evaluate_sn2(&profile.primary_site, context).recommendation
@@ -453,6 +460,72 @@ fn missing_secondary_site(profile: &SelectivityProfile) -> SelectivityRuntimeEff
             profile.mechanism
         ),
     }
+}
+
+fn evaluate_alpha_carbon_profile(
+    profile: &SelectivityProfile,
+    context: &SelectivityContext,
+) -> ReactivityScore {
+    let mut value = profile.primary_site.steric_accessibility();
+    let mut activation_delta = 0.0;
+    let mut reason = format!("{:?} alpha-carbon selectivity", profile.mechanism);
+
+    if profile.primary_site.electronics.electron_withdrawing_groups >= 2 {
+        value *= 2.0;
+        activation_delta -= 4.0;
+        reason.push_str("; activated alpha carbon");
+    } else if profile.primary_site.electronics.electron_withdrawing_groups == 0 {
+        value *= 0.6;
+        activation_delta += 3.0;
+        reason.push_str("; weakly acidic alpha carbon");
+    }
+
+    match profile.mechanism {
+        ReactionType::AlphaHalogenation => {
+            if context.is_acidic() || context.is_basic() {
+                value *= 1.4;
+                activation_delta -= 2.0;
+            } else {
+                value *= 0.4;
+                activation_delta += 8.0;
+            }
+        }
+        ReactionType::AldolAddition
+        | ReactionType::EnolateAlkylation
+        | ReactionType::MichaelAddition
+        | ReactionType::ClaisenCondensation => {
+            if context.is_basic() {
+                value *= 1.8;
+                activation_delta -= 4.0;
+            } else {
+                value *= 0.35;
+                activation_delta += 10.0;
+            }
+        }
+        ReactionType::AldolDehydration => {
+            if context.is_acidic() || context.is_high_temperature() {
+                value *= 1.5;
+                activation_delta -= 3.0;
+            } else {
+                value *= 0.3;
+                activation_delta += 12.0;
+            }
+        }
+        ReactionType::EnamineFormation => {
+            if context.is_acidic() {
+                value *= 1.2;
+                activation_delta -= 2.0;
+            }
+            if context.is_basic() {
+                value *= 0.4;
+                activation_delta += 8.0;
+            }
+        }
+        _ => {}
+    }
+
+    ReactivityScore::with_activation_delta(activation_delta, reason)
+        .with_pre_exp_multiplier(value.max(0.05))
 }
 
 fn descriptor_from_carbon(

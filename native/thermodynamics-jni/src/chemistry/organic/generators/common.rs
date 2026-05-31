@@ -86,33 +86,6 @@ pub(crate) fn carbonyl_atoms_from_site(
     })
 }
 
-pub(crate) fn enol_atoms(
-    structure: &MolecularStructure,
-    site: &ReactiveSite,
-) -> ChemistryResult<(usize, usize)> {
-    let (carbonyl, _) = carbonyl_atoms_from_site(structure, site, "enol")?;
-    let alpha = site
-        .atoms
-        .iter()
-        .copied()
-        .find(|atom| {
-            *atom != carbonyl
-                && structure.atoms[*atom].element == "C"
-                && structure
-                    .neighbors(carbonyl)
-                    .iter()
-                    .any(|(neighbor, order)| {
-                        *neighbor == *atom
-                            && crate::chemistry::molecule::bond_order_matches(*order, 1.0)
-                    })
-        })
-        .ok_or_else(|| ChemistryError::InvalidReaction {
-            reaction_id: "<generated-organic>".to_string(),
-            reason: "enol site does not contain an alpha carbon".to_string(),
-        })?;
-    Ok((carbonyl, alpha))
-}
-
 pub(crate) fn organometallic_atoms(
     structure: &MolecularStructure,
     site: &ReactiveSite,

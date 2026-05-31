@@ -82,6 +82,12 @@ enum OrganicGeneratorKind {
     EpoxideHydrolysis,
     OrganometallicCarbonylAddition,
     AldolAddition,
+    AlphaHalogenation,
+    AldolDehydration,
+    EnamineFormation,
+    EnolateAlkylation,
+    MichaelAddition,
+    ClaisenCondensation,
 }
 
 impl OrganicGeneratorKind {
@@ -135,6 +141,12 @@ impl OrganicGeneratorKind {
             OrganicGeneratorKind::EpoxideHydrolysis => 41,
             OrganicGeneratorKind::OrganometallicCarbonylAddition => 42,
             OrganicGeneratorKind::AldolAddition => 43,
+            OrganicGeneratorKind::AlphaHalogenation => 44,
+            OrganicGeneratorKind::AldolDehydration => 45,
+            OrganicGeneratorKind::EnamineFormation => 46,
+            OrganicGeneratorKind::EnolateAlkylation => 47,
+            OrganicGeneratorKind::MichaelAddition => 48,
+            OrganicGeneratorKind::ClaisenCondensation => 49,
         }
     }
 }
@@ -1249,6 +1261,7 @@ fn generators_for_site(
             OrganicGeneratorKind::HalideAmmoniaSubstitution,
             OrganicGeneratorKind::HalideCyanideSubstitution,
             OrganicGeneratorKind::HalideAmineSubstitution,
+            OrganicGeneratorKind::EnolateAlkylation,
         ],
         ReactiveSiteKind::Alcohol => &[
             OrganicGeneratorKind::AlcoholOxidation,
@@ -1258,6 +1271,7 @@ fn generators_for_site(
             OrganicGeneratorKind::AcylChlorideEsterification,
         ],
         ReactiveSiteKind::Alkoxide => &[OrganicGeneratorKind::AlkoxideProtonation],
+        ReactiveSiteKind::Ester => &[OrganicGeneratorKind::ClaisenCondensation],
         ReactiveSiteKind::Nitrile => &[
             OrganicGeneratorKind::NitrileHydrolysis,
             OrganicGeneratorKind::NitrileHydrogenation,
@@ -1277,18 +1291,21 @@ fn generators_for_site(
             OrganicGeneratorKind::WolffKishnerReduction,
             OrganicGeneratorKind::OrganometallicCarbonylAddition,
             OrganicGeneratorKind::AldolAddition,
+            OrganicGeneratorKind::EnamineFormation,
         ],
         ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl => &[
             OrganicGeneratorKind::CyanideNucleophilicAddition,
             OrganicGeneratorKind::WolffKishnerReduction,
             OrganicGeneratorKind::OrganometallicCarbonylAddition,
             OrganicGeneratorKind::AldolAddition,
+            OrganicGeneratorKind::EnamineFormation,
         ],
         ReactiveSiteKind::Amide => &[OrganicGeneratorKind::AmideHydrolysis],
         ReactiveSiteKind::PrimaryAmine => &[OrganicGeneratorKind::AminePhosgenation],
         ReactiveSiteKind::NonTertiaryAmine => &[
             OrganicGeneratorKind::CyanamideAddition,
             OrganicGeneratorKind::HalideAmineSubstitution,
+            OrganicGeneratorKind::EnamineFormation,
         ],
         ReactiveSiteKind::Isocyanate => &[OrganicGeneratorKind::IsocyanateHydrolysis],
         ReactiveSiteKind::Borane => &[OrganicGeneratorKind::BoraneOxidation],
@@ -1302,6 +1319,7 @@ fn generators_for_site(
             OrganicGeneratorKind::AlkeneHydrogenation,
             OrganicGeneratorKind::AlkeneHydroiodination,
             OrganicGeneratorKind::AlkeneIodination,
+            OrganicGeneratorKind::MichaelAddition,
         ],
         ReactiveSiteKind::Alkyne => &[
             OrganicGeneratorKind::AlkyneChlorination,
@@ -1324,7 +1342,14 @@ fn generators_for_site(
                 &[]
             }
         }
-        ReactiveSiteKind::Enol => &[OrganicGeneratorKind::AldolAddition],
+        ReactiveSiteKind::Enol | ReactiveSiteKind::Enolate => &[
+            OrganicGeneratorKind::AldolAddition,
+            OrganicGeneratorKind::AlphaHalogenation,
+            OrganicGeneratorKind::AldolDehydration,
+            OrganicGeneratorKind::EnolateAlkylation,
+            OrganicGeneratorKind::MichaelAddition,
+            OrganicGeneratorKind::ClaisenCondensation,
+        ],
         _ => &[],
     }
 }

@@ -219,6 +219,20 @@ pub enum ReactionType {
     CarbonylAddition,
     /// Electrophilic addition to alkene/alkyne
     ElectrophilicAddition,
+    /// Halogenation at the alpha carbon of an enolizable carbonyl
+    AlphaHalogenation,
+    /// Carbon-carbon bond formation between an enol/enolate and carbonyl
+    AldolAddition,
+    /// Dehydration of beta-hydroxy carbonyls into enones/enals
+    AldolDehydration,
+    /// Enamine formation from an enolizable carbonyl and secondary amine
+    EnamineFormation,
+    /// Carbon-carbon bond formation between an enolate and alkyl halide
+    EnolateAlkylation,
+    /// Conjugate addition of an enolate to an activated alkene
+    MichaelAddition,
+    /// Condensation of an ester enolate with an ester
+    ClaisenCondensation,
 }
 
 /// Nucleophile strength classification for selectivity models.
