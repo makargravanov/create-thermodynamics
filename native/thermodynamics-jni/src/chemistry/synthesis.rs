@@ -504,4 +504,115 @@ mod tests {
             .unwrap();
         assert!(routes.is_empty());
     }
+
+    #[test]
+    fn planner_uses_tms_protection_as_synthesis_step() {
+        let mut setup_registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        setup_registry
+            .generate_reactions_for_substances(
+                [
+                    SubstanceId::from("destroy:ethanol"),
+                    SubstanceId::from("destroy:trimethylsilyl_chloride"),
+                ],
+                1,
+            )
+            .unwrap();
+        let protected_id = setup_registry
+            .reactions()
+            .find(|reaction| {
+                reaction
+                    .id
+                    .as_str()
+                    .starts_with("alcohol_silyl_protection/")
+                    && reaction
+                        .reactants
+                        .iter()
+                        .any(|term| term.substance_id == SubstanceId::from("destroy:ethanol"))
+            })
+            .and_then(|reaction| reaction.products.first())
+            .map(|term| term.substance_id.clone())
+            .expect("ethanol must generate a TMS-protected product");
+        let target_structure = setup_registry
+            .substance(&protected_id)
+            .unwrap()
+            .molecular_structure
+            .as_ref()
+            .unwrap()
+            .clone();
+
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let routes = SynthesisPlanner::new()
+            .with_max_steps(1)
+            .allow_reaction_prefix("alcohol_silyl_protection/")
+            .find_routes(
+                &mut registry,
+                [
+                    SubstanceId::from("destroy:ethanol"),
+                    SubstanceId::from("destroy:trimethylsilyl_chloride"),
+                ],
+                target_structure,
+            )
+            .unwrap();
+
+        assert!(!routes.is_empty());
+        assert!(routes[0]
+            .steps
+            .iter()
+            .any(|step| step
+                .reaction_id
+                .as_str()
+                .starts_with("alcohol_silyl_protection/")));
+    }
+
+    #[test]
+    fn planner_uses_tms_deprotection_to_restore_alcohol() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        registry
+            .generate_reactions_for_substances(
+                [
+                    SubstanceId::from("destroy:ethanol"),
+                    SubstanceId::from("destroy:trimethylsilyl_chloride"),
+                ],
+                1,
+            )
+            .unwrap();
+        let protected_id = registry
+            .reactions()
+            .find(|reaction| {
+                reaction
+                    .id
+                    .as_str()
+                    .starts_with("alcohol_silyl_protection/")
+                    && reaction
+                        .reactants
+                        .iter()
+                        .any(|term| term.substance_id == SubstanceId::from("destroy:ethanol"))
+            })
+            .and_then(|reaction| reaction.products.first())
+            .map(|term| term.substance_id.clone())
+            .expect("ethanol must generate a TMS-protected product");
+
+        let routes = SynthesisPlanner::new()
+            .with_max_steps(1)
+            .allow_reaction_prefix("silyl_ether_deprotection/")
+            .find_routes(
+                &mut registry,
+                [
+                    protected_id,
+                    SubstanceId::from("destroy:fluoride"),
+                    SubstanceId::from("destroy:proton"),
+                ],
+                parse_frowns("CCO").unwrap(),
+            )
+            .unwrap();
+
+        assert!(!routes.is_empty());
+        assert!(routes[0]
+            .steps
+            .iter()
+            .any(|step| step
+                .reaction_id
+                .as_str()
+                .starts_with("silyl_ether_deprotection/")));
+    }
 }
