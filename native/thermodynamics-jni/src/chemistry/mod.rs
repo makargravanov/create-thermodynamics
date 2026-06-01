@@ -286,10 +286,18 @@ mod tests {
         let reaction_error = ChemistryRegistryBuilder::new()
             .substance(test_substance("a"))
             .substance(test_substance("b"))
-            .reaction(Reaction::builder("").reactant("a", 1, 1).product("b", 1).build())
+            .reaction(
+                Reaction::builder("")
+                    .reactant("a", 1, 1)
+                    .product("b", 1)
+                    .build(),
+            )
             .build()
             .unwrap_err();
-        assert!(matches!(reaction_error, ChemistryError::InvalidReaction { .. }));
+        assert!(matches!(
+            reaction_error,
+            ChemistryError::InvalidReaction { .. }
+        ));
 
         let substance_error = ChemistryRegistryBuilder::new()
             .substance(test_substance(""))
@@ -304,8 +312,12 @@ mod tests {
     #[test]
     fn external_catalyst_adds_surface_sites_without_overwriting() {
         let mut context = ReactionContext::default();
-        context.add_external_catalyst("surface:nickel", 1.0).unwrap();
-        context.add_external_catalyst("surface:nickel", 1.0).unwrap();
+        context
+            .add_external_catalyst("surface:nickel", 1.0)
+            .unwrap();
+        context
+            .add_external_catalyst("surface:nickel", 1.0)
+            .unwrap();
 
         assert_eq!(context.external_catalysts["surface:nickel"], 2.0);
         assert_eq!(

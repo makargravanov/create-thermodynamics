@@ -884,9 +884,7 @@ impl DynamicChemistryRegistry {
             .sum::<ChemistryResult<f64>>()?
             + external_reactant_charge;
         let product_charge = self.dynamic_product_charge(reaction)?;
-        if (reactant_charge - product_charge).abs() > 1.0e-9
-            && !reaction.allow_charge_imbalance
-        {
+        if (reactant_charge - product_charge).abs() > 1.0e-9 && !reaction.allow_charge_imbalance {
             return Err(ChemistryError::ChargeNotConserved {
                 reaction_id: reaction.id.to_string(),
                 reactants: reactant_charge.round() as i32,

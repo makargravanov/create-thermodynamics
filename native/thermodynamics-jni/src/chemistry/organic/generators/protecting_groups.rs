@@ -7,8 +7,7 @@
 //! Cbz amine protection.
 
 use super::super::centers::{
-    AcetalCenter, AlcoholSite, AmineSite, BocCarbamateCenter, CbzCarbamateCenter,
-    SilylEtherCenter,
+    AcetalCenter, AlcoholSite, AmineSite, BocCarbamateCenter, CbzCarbamateCenter, SilylEtherCenter,
 };
 use super::super::resolver::DerivedSubstanceResolver;
 use super::common::*;
@@ -62,8 +61,7 @@ pub(crate) fn generate_alcohol_silyl_protection(
     .product(product, 1)
     .product("destroy:hydrochloric_acid", 1)
     .condition(
-        ReactionCondition::new("silyl protection requires dry conditions")
-            .max_water_activity(0.1),
+        ReactionCondition::new("silyl protection requires dry conditions").max_water_activity(0.1),
     )
     .selectivity_profile(
         SelectivityProfile::new(
@@ -123,9 +121,9 @@ pub(crate) fn generate_silyl_ether_deprotection(
     .reactant("destroy:proton", 1, 1)
     .product(product, 1)
     .product("destroy:trimethylsilyl_fluoride", 1)
-    .condition(
-        ReactionCondition::new("fluoride deprotection requires fluoride source"),
-    )
+    .condition(ReactionCondition::new(
+        "fluoride deprotection requires fluoride source",
+    ))
     .selectivity_profile(
         SelectivityProfile::new(
             ReactionType::SilylEtherCleavage,
@@ -209,13 +207,17 @@ pub(crate) fn generate_amine_boc_protection(
     let substance = amine_site.participant.substance;
     let structure = amine_site.participant.structure;
     let nitrogen = amine_site.nitrogen;
-    let hydrogen = *amine_site
-        .hydrogens
-        .first()
-        .ok_or_else(|| ChemistryError::InvalidReaction {
-            reaction_id: generated_site_reaction_id("amine_boc_protection", &amine_site.participant),
-            reason: "Boc protection requires an explicit N-H bond".to_string(),
-        })?;
+    let hydrogen =
+        *amine_site
+            .hydrogens
+            .first()
+            .ok_or_else(|| ChemistryError::InvalidReaction {
+                reaction_id: generated_site_reaction_id(
+                    "amine_boc_protection",
+                    &amine_site.participant,
+                ),
+                reason: "Boc protection requires an explicit N-H bond".to_string(),
+            })?;
 
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[hydrogen])?;
@@ -232,9 +234,11 @@ pub(crate) fn generate_amine_boc_protection(
     .product(product, 1)
     .product("destroy:tert_butanol", 1)
     .product("destroy:carbon_dioxide", 1)
-    .condition(ReactionCondition::new("Boc protection prefers basic, water-poor conditions")
-        .acidity(AcidityCondition::Basic)
-        .max_water_activity(0.2))
+    .condition(
+        ReactionCondition::new("Boc protection prefers basic, water-poor conditions")
+            .acidity(AcidityCondition::Basic)
+            .max_water_activity(0.2),
+    )
     .selectivity_profile(
         SelectivityProfile::new(
             ReactionType::CarbamateFormation,
@@ -256,13 +260,17 @@ pub(crate) fn generate_amine_cbz_protection(
     let substance = amine_site.participant.substance;
     let structure = amine_site.participant.structure;
     let nitrogen = amine_site.nitrogen;
-    let hydrogen = *amine_site
-        .hydrogens
-        .first()
-        .ok_or_else(|| ChemistryError::InvalidReaction {
-            reaction_id: generated_site_reaction_id("amine_cbz_protection", &amine_site.participant),
-            reason: "Cbz protection requires an explicit N-H bond".to_string(),
-        })?;
+    let hydrogen =
+        *amine_site
+            .hydrogens
+            .first()
+            .ok_or_else(|| ChemistryError::InvalidReaction {
+                reaction_id: generated_site_reaction_id(
+                    "amine_cbz_protection",
+                    &amine_site.participant,
+                ),
+                reason: "Cbz protection requires an explicit N-H bond".to_string(),
+            })?;
 
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[hydrogen])?;
@@ -363,7 +371,8 @@ pub(crate) fn generate_cbz_deprotection(
 ) -> ChemistryResult<Reaction> {
     let substance = cbz_site.participant.substance;
     let structure = cbz_site.participant.structure;
-    let mut atoms_to_remove = branch_atoms(structure, cbz_site.alkoxy_oxygen, cbz_site.carbonyl_carbon)?;
+    let mut atoms_to_remove =
+        branch_atoms(structure, cbz_site.alkoxy_oxygen, cbz_site.carbonyl_carbon)?;
     atoms_to_remove.push(cbz_site.carbonyl_carbon);
     atoms_to_remove.push(cbz_site.carbonyl_oxygen);
     atoms_to_remove.sort_unstable();
@@ -472,7 +481,10 @@ fn alcohol_fragment_product(
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<crate::chemistry::substance::SubstanceId> {
     let mut editor = MolecularEditor::new(structure);
-    let keep = atoms.iter().copied().collect::<std::collections::BTreeSet<_>>();
+    let keep = atoms
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
     let remove = (0..structure.atoms.len())
         .filter(|atom| !keep.contains(atom))
         .collect::<Vec<_>>();

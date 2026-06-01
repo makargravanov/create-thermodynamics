@@ -372,7 +372,10 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
                 atoms.extend(hydrogens.iter().copied());
                 atoms.sort_unstable();
                 atoms.dedup();
-                groups.push(FunctionalGroup::new(FunctionalGroupType::PhosphorusYlide, atoms));
+                groups.push(FunctionalGroup::new(
+                    FunctionalGroupType::PhosphorusYlide,
+                    atoms,
+                ));
                 continue;
             }
             if let Some(alpha_carbon) = carbons
@@ -386,7 +389,10 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
                 atoms.extend(hydrogens.iter().copied());
                 atoms.sort_unstable();
                 atoms.dedup();
-                groups.push(FunctionalGroup::new(FunctionalGroupType::PhosphoniumSalt, atoms));
+                groups.push(FunctionalGroup::new(
+                    FunctionalGroupType::PhosphoniumSalt,
+                    atoms,
+                ));
                 continue;
             }
         }
@@ -421,20 +427,18 @@ fn add_protecting_groups(structure: &MolecularStructure, groups: &mut Vec<Functi
         let carbon_neighbors: Vec<usize> = neighbors
             .iter()
             .filter(|(atom, order)| {
-                structure.atoms[*atom].element == "C"
-                    && bond_order_matches(*order, 1.0)
+                structure.atoms[*atom].element == "C" && bond_order_matches(*order, 1.0)
             })
             .map(|(atom, _)| *atom)
             .collect();
         let silicon_neighbors: Vec<usize> = neighbors
             .iter()
             .filter(|(atom, order)| {
-                structure.atoms[*atom].element == "Si"
-                    && bond_order_matches(*order, 1.0)
+                structure.atoms[*atom].element == "Si" && bond_order_matches(*order, 1.0)
             })
             .map(|(atom, _)| *atom)
             .collect();
-        
+
         if !carbon_neighbors.is_empty() && !silicon_neighbors.is_empty() {
             // This is a silyl ether - the oxygen is bonded to both carbon and silicon
             let mut atoms = vec![oxygen];
@@ -449,9 +453,7 @@ fn add_protecting_groups(structure: &MolecularStructure, groups: &mut Vec<Functi
             continue;
         }
         for (carbonyl_carbon, n_bond) in structure.neighbors(nitrogen) {
-            if structure.atoms[carbonyl_carbon].element != "C"
-                || !bond_order_matches(n_bond, 1.0)
-            {
+            if structure.atoms[carbonyl_carbon].element != "C" || !bond_order_matches(n_bond, 1.0) {
                 continue;
             }
             let carbonyl_oxygens = bonded(structure, carbonyl_carbon, "O", Some(2.0));
@@ -471,10 +473,12 @@ fn add_protecting_groups(structure: &MolecularStructure, groups: &mut Vec<Functi
                 continue;
             };
             let methyl_carbons = bonded(structure, tert_butyl_carbon, "C", Some(1.0));
-            if methyl_carbons.len() == 3 && methyl_carbons.iter().all(|methyl| {
-                bonded(structure, *methyl, "H", Some(1.0)).len() == 3
-                    && bonded(structure, *methyl, "C", Some(1.0)).len() == 1
-            }) {
+            if methyl_carbons.len() == 3
+                && methyl_carbons.iter().all(|methyl| {
+                    bonded(structure, *methyl, "H", Some(1.0)).len() == 3
+                        && bonded(structure, *methyl, "C", Some(1.0)).len() == 1
+                })
+            {
                 let mut atoms = vec![
                     nitrogen,
                     carbonyl_carbon,
@@ -483,7 +487,10 @@ fn add_protecting_groups(structure: &MolecularStructure, groups: &mut Vec<Functi
                     tert_butyl_carbon,
                 ];
                 atoms.extend(methyl_carbons);
-                groups.push(FunctionalGroup::new(FunctionalGroupType::BocCarbamate, atoms));
+                groups.push(FunctionalGroup::new(
+                    FunctionalGroupType::BocCarbamate,
+                    atoms,
+                ));
             }
             let benzyl_carbons = bonded(structure, alkoxy_oxygen, "C", Some(1.0))
                 .into_iter()

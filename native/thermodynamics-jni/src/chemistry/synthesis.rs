@@ -555,13 +555,10 @@ mod tests {
             .unwrap();
 
         assert!(!routes.is_empty());
-        assert!(routes[0]
-            .steps
-            .iter()
-            .any(|step| step
-                .reaction_id
-                .as_str()
-                .starts_with("alcohol_silyl_protection/")));
+        assert!(routes[0].steps.iter().any(|step| step
+            .reaction_id
+            .as_str()
+            .starts_with("alcohol_silyl_protection/")));
     }
 
     #[test]
@@ -607,12 +604,9 @@ mod tests {
             .unwrap();
 
         assert!(!routes.is_empty());
-        assert!(routes[0]
-            .steps
-            .iter()
-            .any(|step| step
-                .reaction_id
-                .as_str()
-                .starts_with("silyl_ether_deprotection/")));
+        assert!(routes[0].steps.iter().any(|step| step
+            .reaction_id
+            .as_str()
+            .starts_with("silyl_ether_deprotection/")));
     }
 }

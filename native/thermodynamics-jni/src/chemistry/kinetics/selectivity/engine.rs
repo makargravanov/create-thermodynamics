@@ -49,7 +49,10 @@ impl SelectivityEngine {
                 if context.is_acidic() {
                     score.value *= 0.2;
                     score.activation_delta += 8.0;
-                    score.reason = format!("hydride is quenched in strongly acidic medium; {}", score.reason);
+                    score.reason = format!(
+                        "hydride is quenched in strongly acidic medium; {}",
+                        score.reason
+                    );
                 } else {
                     score.reason = format!("hydride carbonyl reduction: {}", score.reason);
                 }
@@ -574,10 +577,7 @@ impl SiteDescriptorBuilder {
             site.participant.structure,
             ReactiveSiteKind::PhosphoniumSalt,
             site.alpha_carbon,
-            site
-                .participant
-                .structure
-                .carbon_degree(site.alpha_carbon),
+            site.participant.structure.carbon_degree(site.alpha_carbon),
         )
     }
 
@@ -588,10 +588,7 @@ impl SiteDescriptorBuilder {
             site.participant.structure,
             ReactiveSiteKind::PhosphorusYlide,
             site.alpha_carbon,
-            site
-                .participant
-                .structure
-                .carbon_degree(site.alpha_carbon),
+            site.participant.structure.carbon_degree(site.alpha_carbon),
         )
     }
 
@@ -602,10 +599,7 @@ impl SiteDescriptorBuilder {
             site.participant.structure,
             ReactiveSiteKind::PhosphonateCarbanion,
             site.alpha_carbon,
-            site
-                .participant
-                .structure
-                .carbon_degree(site.alpha_carbon),
+            site.participant.structure.carbon_degree(site.alpha_carbon),
         );
         descriptor.electronics.electron_withdrawing_groups += 1;
         descriptor.electronics.resonance_stabilization = true;
@@ -619,10 +613,7 @@ impl SiteDescriptorBuilder {
             site.participant.structure,
             ReactiveSiteKind::SulfoneCarbanion,
             site.alpha_carbon,
-            site
-                .participant
-                .structure
-                .carbon_degree(site.alpha_carbon),
+            site.participant.structure.carbon_degree(site.alpha_carbon),
         );
         descriptor.electronics.electron_withdrawing_groups += 2;
         descriptor.electronics.resonance_stabilization = true;
@@ -817,8 +808,7 @@ fn evaluate_protecting_group_profile(
         }
         ReactionType::CarbamateCleavage => {
             let acid_path = context.is_acidic() && context.is_water_rich();
-            let hydrogenolysis_path =
-                context.has_hydrogen() && context.palladium_available;
+            let hydrogenolysis_path = context.has_hydrogen() && context.palladium_available;
             if acid_path {
                 value *= 2.5;
                 activation_delta -= 7.0;
@@ -832,7 +822,8 @@ fn evaluate_protecting_group_profile(
             if !acid_path && !hydrogenolysis_path {
                 value *= 0.03;
                 activation_delta += 24.0;
-                reasons.push("carbamate cleavage lacks acid hydrolysis or hydrogenolysis conditions");
+                reasons
+                    .push("carbamate cleavage lacks acid hydrolysis or hydrogenolysis conditions");
             }
         }
         ReactionType::EsterProtection => {
@@ -874,11 +865,8 @@ fn evaluate_protecting_group_profile(
         _ => {}
     }
 
-    ReactivityScore::with_activation_delta(
-        activation_delta,
-        reasons.join("; "),
-    )
-    .with_pre_exp_multiplier(value.max(0.01))
+    ReactivityScore::with_activation_delta(activation_delta, reasons.join("; "))
+        .with_pre_exp_multiplier(value.max(0.01))
 }
 
 fn descriptor_from_carbon(
@@ -1146,7 +1134,8 @@ mod tests {
             SiteDescriptorBuilder::silyl_ether(),
         )
         .never_suppress();
-        let no_fluoride = SelectivityEngine::evaluate_profile(&cleavage, &SelectivityContext::default());
+        let no_fluoride =
+            SelectivityEngine::evaluate_profile(&cleavage, &SelectivityContext::default());
         let with_fluoride = SelectivityEngine::evaluate_profile(
             &cleavage,
             &SelectivityContext {
@@ -1157,8 +1146,7 @@ mod tests {
         );
         assert!(with_fluoride.rate_multiplier > no_fluoride.rate_multiplier);
         assert!(
-            with_fluoride.activation_delta_kj_per_mol
-                < no_fluoride.activation_delta_kj_per_mol
+            with_fluoride.activation_delta_kj_per_mol < no_fluoride.activation_delta_kj_per_mol
         );
     }
 

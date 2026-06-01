@@ -214,9 +214,11 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 for carbonyl_kind in carbonyl_site_kinds() {
                     for carbonyl in space.sites_of(&carbonyl_kind) {
                         let carbonyl_site = carbonyl.carbonyl_site()?;
-                        if let Some(reaction) =
-                            generate_julia_olefination(&sulfone_site, &carbonyl_site, &mut resolver)?
-                        {
+                        if let Some(reaction) = generate_julia_olefination(
+                            &sulfone_site,
+                            &carbonyl_site,
+                            &mut resolver,
+                        )? {
                             push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                         }
                     }

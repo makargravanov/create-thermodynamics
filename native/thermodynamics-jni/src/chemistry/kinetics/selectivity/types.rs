@@ -168,18 +168,24 @@ impl SelectivityContext {
             .ok()
             .map(|_| mixture.concentration_of(&hydrogen))
             .unwrap_or(0.0);
-        let palladium_available = reaction_context.external_catalysts.iter().any(
-            |(description, amount)| {
-                *amount > TRACE_CONCENTRATION_MOL_PER_BUCKET
-                    && description.to_ascii_lowercase().contains("palladium")
-            },
-        ) || reaction_context
-            .surfaces
-            .iter()
-            .any(|(surface_id, surface)| {
-                surface.free_sites() > TRACE_CONCENTRATION_MOL_PER_BUCKET
-                    && surface_id.as_str().to_ascii_lowercase().contains("palladium")
-            });
+        let palladium_available =
+            reaction_context
+                .external_catalysts
+                .iter()
+                .any(|(description, amount)| {
+                    *amount > TRACE_CONCENTRATION_MOL_PER_BUCKET
+                        && description.to_ascii_lowercase().contains("palladium")
+                })
+                || reaction_context
+                    .surfaces
+                    .iter()
+                    .any(|(surface_id, surface)| {
+                        surface.free_sites() > TRACE_CONCENTRATION_MOL_PER_BUCKET
+                            && surface_id
+                                .as_str()
+                                .to_ascii_lowercase()
+                                .contains("palladium")
+                    });
         let mut context = Self {
             temperature: mixture.temperature_kelvin(),
             ph,

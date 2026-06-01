@@ -359,6 +359,10 @@ impl ChemistryRegistryBuilder {
                 .filter(|equilibrium| {
                     !equilibrium.spec.id.ends_with(".acid_base_equilibrium")
                         && !equilibrium.spec.id.ends_with(".neutralization_equilibrium")
+                        && !equilibrium
+                            .spec
+                            .id
+                            .ends_with(".base_hydrolysis_equilibrium")
                         && !complex_equilibrium_ids.contains(&equilibrium.spec.id)
                 })
                 .map(|equilibrium| equilibrium.spec.clone())
@@ -713,8 +717,7 @@ impl ChemistryRegistry {
                 .sum::<ChemistryResult<f64>>()?
                 + external_reactant_charge;
             let product_charge = product_charge(reaction, self)?;
-            if (reactant_charge - product_charge).abs() > 1.0e-9
-                && !reaction.allow_charge_imbalance
+            if (reactant_charge - product_charge).abs() > 1.0e-9 && !reaction.allow_charge_imbalance
             {
                 return Err(ChemistryError::ChargeNotConserved {
                     reaction_id: reaction.id.to_string(),

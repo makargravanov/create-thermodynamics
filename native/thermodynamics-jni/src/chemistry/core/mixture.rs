@@ -366,6 +366,10 @@ impl Mixture {
         solution::solution_state(registry, self)
     }
 
+    pub fn equilibrate_solution(&mut self, registry: &ChemistryRegistry) -> ChemistryResult<f64> {
+        solution::equilibrate_solution_equilibria(registry, self)
+    }
+
     pub fn transfer_gases_toward_solubility_equilibrium(
         &mut self,
         registry: &ChemistryRegistry,
@@ -492,7 +496,7 @@ impl Mixture {
         })?;
         self.components[position].remove_from_phase(from, concentration_mol_per_bucket)?;
         self.components[position].add_to_phase(to, concentration_mol_per_bucket);
-        self.remove_trace_component(substance);
+        self.remove_trace_component(registry, substance)?;
         self.validate(registry)
     }
 
@@ -642,7 +646,7 @@ impl Mixture {
             let amount = *coefficient as f64 * moles_per_bucket;
             if let Some(position) = self.position_of_substance(*substance) {
                 self.components[position].remove_from_phases(phases, amount)?;
-                self.remove_trace_component(*substance);
+                self.remove_trace_component(registry, *substance)?;
             }
         }
         for (substance, coefficient, phase) in products {
@@ -1391,10 +1395,20 @@ impl Mixture {
         self.move_gas_to_preferred_liquid(registry, substance, amount)
     }
 
-    fn remove_trace_component(&mut self, substance: SubstanceIndex) {
-        if self.concentration_of_index(substance) <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+    fn remove_trace_component(
+        &mut self,
+        registry: &ChemistryRegistry,
+        substance: SubstanceIndex,
+    ) -> ChemistryResult<()> {
+        let trace_threshold = if registry.substance_by_index(substance)?.charge == 0 {
+            TRACE_CONCENTRATION_MOL_PER_BUCKET
+        } else {
+            1.0e-14
+        };
+        if self.concentration_of_index(substance) <= trace_threshold {
             self.remove_component(substance);
         }
+        Ok(())
     }
 
     fn validate_registry_shape(&self, registry: &ChemistryRegistry) -> ChemistryResult<()> {
@@ -2600,7 +2614,9 @@ mod tests {
         mixture
             .add_substance(&registry, "destroy:ethanol", 3.0)
             .unwrap();
-        mixture.add_substance(&registry, solute.clone(), 0.1).unwrap();
+        mixture
+            .add_substance(&registry, solute.clone(), 0.1)
+            .unwrap();
 
         let phases = mixture.liquid_phase_snapshots(&registry).unwrap();
         assert_eq!(phases.len(), 1);

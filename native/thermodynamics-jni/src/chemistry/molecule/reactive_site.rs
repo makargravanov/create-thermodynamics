@@ -600,7 +600,10 @@ fn is_aromatic_carbon(structure: &MolecularStructure, atom: usize) -> bool {
 
 /// Remove conflicting sites when a protected functional group is present.
 /// A protected group should not have its original reactive site detected.
-fn remove_conflicting_protected_sites(structure: &MolecularStructure, sites: &mut Vec<ReactiveSite>) {
+fn remove_conflicting_protected_sites(
+    structure: &MolecularStructure,
+    sites: &mut Vec<ReactiveSite>,
+) {
     let mut protected_alcohol_oxygens: Vec<usize> = Vec::new();
     let mut protected_amine_nitrogens: Vec<usize> = Vec::new();
     let mut protected_carbamate_carbons: Vec<usize> = Vec::new();
@@ -635,8 +638,7 @@ fn remove_conflicting_protected_sites(structure: &MolecularStructure, sites: &mu
     sites.retain(|site| {
         if site.kind == ReactiveSiteKind::Alcohol
             && site.atoms.iter().any(|&atom| {
-                structure.atoms[atom].element == "O"
-                    && protected_alcohol_oxygens.contains(&atom)
+                structure.atoms[atom].element == "O" && protected_alcohol_oxygens.contains(&atom)
             })
         {
             return false;
@@ -651,8 +653,7 @@ fn remove_conflicting_protected_sites(structure: &MolecularStructure, sites: &mu
         }
         if site.kind == ReactiveSiteKind::Ester
             && site.atoms.iter().any(|&atom| {
-                structure.atoms[atom].element == "C"
-                    && protected_carbamate_carbons.contains(&atom)
+                structure.atoms[atom].element == "C" && protected_carbamate_carbons.contains(&atom)
             })
         {
             return false;

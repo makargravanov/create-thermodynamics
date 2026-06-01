@@ -3,9 +3,7 @@ use super::super::centers::{
     SulfoneCarbanionSite, YlideStability,
 };
 use super::super::resolver::DerivedSubstanceResolver;
-use super::addition::{
-    expand_stereo_product_distribution_with_parameters, StereoProductVariant,
-};
+use super::addition::{expand_stereo_product_distribution_with_parameters, StereoProductVariant};
 use super::common::*;
 use crate::chemistry::error::{ChemistryError, ChemistryResult};
 use crate::chemistry::kinetics::ReactionChannel;
@@ -99,11 +97,8 @@ pub(crate) fn generate_phosphonium_ylide_formation(
         .product("destroy:ethanol", 1)
         .activation_energy_kj_per_mol(28.0)
         .selectivity_profile(
-            SelectivityProfile::new(
-                ReactionType::PhosphoniumYlideFormation,
-                phosphorus_desc,
-            )
-            .with_nucleophile_strength(NucleophileStrength::Strong),
+            SelectivityProfile::new(ReactionType::PhosphoniumYlideFormation, phosphorus_desc)
+                .with_nucleophile_strength(NucleophileStrength::Strong),
         )
         .build(),
     ))
@@ -158,8 +153,8 @@ pub(crate) fn generate_wittig_olefination(
     )?;
     let joined_alpha_carbon = carbonyl_fragment.atom_count() + alpha_index;
     let mut alkene_editor = MolecularEditor::new(&alkene_structure);
-    let has_stereo =
-        alkene_editor.mark_double_bond_stereo_mixture_if_valid(carbonyl_carbon, joined_alpha_carbon)?;
+    let has_stereo = alkene_editor
+        .mark_double_bond_stereo_mixture_if_valid(carbonyl_carbon, joined_alpha_carbon)?;
     let mut variants = if has_stereo {
         expand_stereo_product_distribution_with_parameters(
             alkene_editor.finish()?,
@@ -246,10 +241,7 @@ pub(crate) fn generate_wittig_olefination(
             ReactionChannel::new(
                 format!("wittig_olefination:{}", variant.channel_suffix),
                 [
-                    StoichiometricTerm::new(
-                        resolver.resolve(variant.structure)?,
-                        1,
-                    ),
+                    StoichiometricTerm::new(resolver.resolve(variant.structure)?, 1),
                     StoichiometricTerm::new(phosphine_oxide.clone(), 1),
                 ],
                 24.0 + activation_delta,
@@ -276,15 +268,13 @@ pub(crate) fn generate_horner_wadsworth_emmons_olefination(
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Option<Reaction>> {
     let carbonyl_desc = SiteDescriptorBuilder::from_carbonyl_site(carbonyl_site);
-    let phosphonate_desc =
-        SiteDescriptorBuilder::from_phosphonate_carbanion_site(phosphonate_site);
+    let phosphonate_desc = SiteDescriptorBuilder::from_phosphonate_carbanion_site(phosphonate_site);
     let carbonyl = carbonyl_site.participant.substance;
     let phosphonate = phosphonate_site.participant.substance;
 
     let mut carbonyl_editor = MolecularEditor::new(carbonyl_site.participant.structure);
     let carbonyl_mapping = carbonyl_editor.remove_atoms(&[carbonyl_site.oxygen])?;
-    let carbonyl_carbon =
-        mapped_atom(&carbonyl_mapping, carbonyl_site.carbon, "carbonyl carbon")?;
+    let carbonyl_carbon = mapped_atom(&carbonyl_mapping, carbonyl_site.carbon, "carbonyl carbon")?;
     let carbonyl_fragment = carbonyl_editor.finish()?;
 
     let (first_fragment, first_map, second_fragment, second_map) = MolecularEditor::split_at_bond(
@@ -298,7 +288,11 @@ pub(crate) fn generate_horner_wadsworth_emmons_olefination(
         } else {
             (second_fragment, second_map, first_fragment, first_map)
         };
-    let p_index = mapped_atom(&p_map, phosphonate_site.phosphorus, "phosphonate phosphorus")?;
+    let p_index = mapped_atom(
+        &p_map,
+        phosphonate_site.phosphorus,
+        "phosphonate phosphorus",
+    )?;
     let alpha_index = mapped_atom(
         &alpha_map,
         phosphonate_site.alpha_carbon,
@@ -351,8 +345,7 @@ pub(crate) fn generate_julia_olefination(
 
     let mut carbonyl_editor = MolecularEditor::new(carbonyl_site.participant.structure);
     let carbonyl_mapping = carbonyl_editor.remove_atoms(&[carbonyl_site.oxygen])?;
-    let carbonyl_carbon =
-        mapped_atom(&carbonyl_mapping, carbonyl_site.carbon, "carbonyl carbon")?;
+    let carbonyl_carbon = mapped_atom(&carbonyl_mapping, carbonyl_site.carbon, "carbonyl carbon")?;
     let carbonyl_fragment = carbonyl_editor.finish()?;
 
     let (first_fragment, first_map, second_fragment, second_map) = MolecularEditor::split_at_bond(
@@ -360,15 +353,18 @@ pub(crate) fn generate_julia_olefination(
         sulfone_site.sulfur,
         sulfone_site.alpha_carbon,
     )?;
-    let (s_fragment, s_map, alpha_fragment, alpha_map) =
-        if first_map[sulfone_site.sulfur].is_some() {
-            (first_fragment, first_map, second_fragment, second_map)
-        } else {
-            (second_fragment, second_map, first_fragment, first_map)
-        };
+    let (s_fragment, s_map, alpha_fragment, alpha_map) = if first_map[sulfone_site.sulfur].is_some()
+    {
+        (first_fragment, first_map, second_fragment, second_map)
+    } else {
+        (second_fragment, second_map, first_fragment, first_map)
+    };
     let s_index = mapped_atom(&s_map, sulfone_site.sulfur, "sulfone sulfur")?;
-    let alpha_index =
-        mapped_atom(&alpha_map, sulfone_site.alpha_carbon, "sulfone alpha carbon")?;
+    let alpha_index = mapped_atom(
+        &alpha_map,
+        sulfone_site.alpha_carbon,
+        "sulfone alpha carbon",
+    )?;
 
     let mut sulfonate_editor = MolecularEditor::new(&s_fragment);
     sulfonate_editor.add_atom(s_index, "O", -1.0, 1.0)?;

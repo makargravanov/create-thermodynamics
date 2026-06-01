@@ -2542,7 +2542,9 @@ const DESTROY_SUBSTANCES: &[RawSubstance] = &[
     RawSubstance {
         id: "trimethylsilyl_chloride",
         structure_code: None,
-        java_structure_code: Some(r#"LegacyMolecularStructure.atom(LegacyElement.SILICON).addAtom(LegacyElement.CARBON).addAtom(LegacyElement.CARBON).addAtom(LegacyElement.CARBON).addAtom(LegacyElement.CHLORINE)"#),
+        java_structure_code: Some(
+            r#"LegacyMolecularStructure.atom(LegacyElement.SILICON).addAtom(LegacyElement.CARBON).addAtom(LegacyElement.CARBON).addAtom(LegacyElement.CARBON).addAtom(LegacyElement.CHLORINE)"#,
+        ),
         translation_key: Some(r#"trimethylsilyl_chloride"#),
         boiling_point_celsius: Some(57.0),
         boiling_point_kelvin: None,
@@ -2556,7 +2558,9 @@ const DESTROY_SUBSTANCES: &[RawSubstance] = &[
     RawSubstance {
         id: "trimethylsilyl_fluoride",
         structure_code: None,
-        java_structure_code: Some(r#"LegacyMolecularStructure.atom(LegacyElement.SILICON).addAtom(LegacyElement.CARBON).addAtom(LegacyElement.CARBON).addAtom(LegacyElement.CARBON).addAtom(LegacyElement.FLUORINE)"#),
+        java_structure_code: Some(
+            r#"LegacyMolecularStructure.atom(LegacyElement.SILICON).addAtom(LegacyElement.CARBON).addAtom(LegacyElement.CARBON).addAtom(LegacyElement.CARBON).addAtom(LegacyElement.FLUORINE)"#,
+        ),
         translation_key: Some(r#"trimethylsilyl_fluoride"#),
         boiling_point_celsius: Some(16.0),
         boiling_point_kelvin: None,

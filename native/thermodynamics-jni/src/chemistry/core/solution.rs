@@ -1,9 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::error::{ChemistryError, ChemistryResult};
-use super::mixture::{
-    LiquidPhaseId, Mixture, MixturePhase, TRACE_CONCENTRATION_MOL_PER_BUCKET,
-};
+use super::mixture::{LiquidPhaseId, Mixture, MixturePhase, TRACE_CONCENTRATION_MOL_PER_BUCKET};
 use super::registry::{ChemistryRegistry, SubstanceIndex};
 use super::substance::SubstanceId;
 
@@ -11,6 +9,7 @@ const DAVIES_A_AT_298_K: f64 = 0.509;
 const PH_PROTON_ACTIVITY_FLOOR: f64 = 1.0e-14;
 const EQUILIBRIUM_QUOTIENT_TOLERANCE: f64 = 1.0e-8;
 const EQUILIBRIUM_MIN_EXTENT_MOL_PER_BUCKET: f64 = 1.0e-12;
+const SOLUTION_EQUILIBRIUM_DELTA_TOLERANCE_MOL_PER_BUCKET: f64 = 1.0e-10;
 const EQUILIBRIUM_MAX_PASSES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,9 +110,9 @@ impl AcidBaseSpec {
         self
     }
 
-    pub(crate) fn to_equilibria(&self) -> [EquilibriumSpec; 2] {
+    pub(crate) fn to_equilibria(&self) -> Vec<EquilibriumSpec> {
         let acid_constant = 10.0_f64.powf(-self.pka);
-        [
+        vec![
             EquilibriumSpec::new(
                 format!("{}.acid_base_equilibrium", self.id),
                 [(self.acid.clone(), 1, MixturePhase::Aqueous)],
@@ -138,6 +137,22 @@ impl AcidBaseSpec {
                     (SubstanceId::from("destroy:water"), 1, MixturePhase::Aqueous),
                 ],
                 acid_constant / 1.0e-14,
+            ),
+            EquilibriumSpec::new(
+                format!("{}.base_hydrolysis_equilibrium", self.id),
+                [
+                    (self.conjugate_base.clone(), 1, MixturePhase::Aqueous),
+                    (SubstanceId::from("destroy:water"), 1, MixturePhase::Aqueous),
+                ],
+                [
+                    (self.acid.clone(), 1, MixturePhase::Aqueous),
+                    (
+                        SubstanceId::from("destroy:hydroxide"),
+                        1,
+                        MixturePhase::Aqueous,
+                    ),
+                ],
+                1.0e-14 / acid_constant,
             ),
         ]
     }
@@ -255,10 +270,7 @@ pub fn solution_state(
 ) -> ChemistryResult<SolutionState> {
     let liquid_phases = liquid_phase_solution_states(registry, mixture)?;
     let ph = unambiguous_aqueous_ph(&liquid_phases)?;
-    Ok(SolutionState {
-        ph,
-        liquid_phases,
-    })
+    Ok(SolutionState { ph, liquid_phases })
 }
 
 fn liquid_phase_solution_states(
@@ -284,24 +296,21 @@ fn liquid_phase_solution_states(
                 phase.ionic_strength_mol_per_bucket,
                 mixture.temperature_kelvin(),
             )?;
-            let proton_activity_mol_per_bucket =
-                if phase.coarse_phase == MixturePhase::Aqueous && registry.substance(&proton).is_ok()
-                {
-                    let proton_coefficient = activity_coefficients
-                        .get(&proton)
-                        .copied()
-                        .ok_or_else(|| ChemistryError::InvalidMixtureState(
+            let proton_activity_mol_per_bucket = if phase.coarse_phase == MixturePhase::Aqueous
+                && registry.substance(&proton).is_ok()
+            {
+                let proton_coefficient =
+                    activity_coefficients.get(&proton).copied().ok_or_else(|| {
+                        ChemistryError::InvalidMixtureState(
                             "proton activity coefficient missing from phase solution state"
                                 .to_string(),
-                        ))?;
-                    let concentration = proton_amounts
-                        .get(&phase.phase_id)
-                        .copied()
-                        .unwrap_or(0.0);
-                    Some((concentration * proton_coefficient).max(PH_PROTON_ACTIVITY_FLOOR))
-                } else {
-                    None
-                };
+                        )
+                    })?;
+                let concentration = proton_amounts.get(&phase.phase_id).copied().unwrap_or(0.0);
+                Some((concentration * proton_coefficient).max(PH_PROTON_ACTIVITY_FLOOR))
+            } else {
+                None
+            };
             let ph = proton_activity_mol_per_bucket.map(|activity| -activity.log10());
             Ok(LiquidPhaseSolutionState {
                 phase_id: phase.phase_id,
@@ -383,7 +392,7 @@ pub(crate) fn equilibrate_solution_equilibria(
             pass_delta = pass_delta.max(apply_equilibrium(registry, mixture, equilibrium)?);
         }
         max_delta = max_delta.max(pass_delta);
-        if pass_delta <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+        if pass_delta <= SOLUTION_EQUILIBRIUM_DELTA_TOLERANCE_MOL_PER_BUCKET {
             return Ok(max_delta);
         }
     }
@@ -667,6 +676,43 @@ mod tests {
     }
 
     #[test]
+    fn weak_base_hydrolysis_uses_water_autoionization() {
+        let registry = acid_registry();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:weak_base", 0.1)
+            .unwrap();
+
+        mixture.equilibrate_solution(&registry).unwrap();
+
+        assert!(mixture.concentration_of(&"destroy:strong_acid".into()) == 0.0);
+        assert!(mixture.concentration_of(&"destroy:weak_acid".into()) > 0.0);
+        let ph = mixture.ph(&registry).unwrap().unwrap();
+        assert!(ph > 7.0, "weak base pH was {ph}");
+    }
+
+    #[test]
+    fn conjugate_acid_salt_hydrolysis_acidifies_water() {
+        let registry = acid_registry();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:weak_acid", 0.1)
+            .unwrap();
+
+        mixture.equilibrate_solution(&registry).unwrap();
+
+        let ph = mixture.ph(&registry).unwrap().unwrap();
+        assert!(ph < 7.0, "conjugate acid pH was {ph}");
+        assert!(mixture.concentration_of(&"destroy:weak_base".into()) > 0.0);
+    }
+
+    #[test]
     fn ionic_strength_lowers_ion_activity() {
         let registry = acid_registry();
         let mut dilute = Mixture::new(298.0).unwrap();
@@ -719,10 +765,10 @@ mod tests {
         assert_eq!(state.liquid_phases[0].coarse_phase, MixturePhase::Aqueous);
         assert!(state.ph.is_some());
         assert_eq!(state.ph, state.liquid_phases[0].ph);
-        assert!(state.liquid_phases[0].proton_activity_mol_per_bucket.is_some());
-        assert!(
-            (state.liquid_phases[0].ionic_strength_mol_per_bucket - 0.5).abs() < 1.0e-12
-        );
+        assert!(state.liquid_phases[0]
+            .proton_activity_mol_per_bucket
+            .is_some());
+        assert!((state.liquid_phases[0].ionic_strength_mol_per_bucket - 0.5).abs() < 1.0e-12);
         assert!(
             state.liquid_phases[0]
                 .activity_coefficients

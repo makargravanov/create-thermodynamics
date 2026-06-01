@@ -610,8 +610,7 @@ impl<'a> SiteParticipant<'a> {
                 .then_some(neighbor)
             })
             .ok_or_else(|| self.site_error("phosphonate has no anionic alpha carbon"))?;
-        self
-            .structure
+        self.structure
             .neighbors(phosphorus)
             .into_iter()
             .find_map(|(neighbor, order)| {
@@ -784,8 +783,7 @@ impl<'a> SiteParticipant<'a> {
         self.require_kind(ReactiveSiteKind::SilylEther)?;
         let oxygen = self.site_atom_by_element("O", "silyl ether oxygen")?;
         let silicon = self.bonded_site_atom(oxygen, "Si", 1.0, "silyl ether silicon")?;
-        self
-            .structure
+        self.structure
             .neighbors(oxygen)
             .into_iter()
             .find_map(|(neighbor, order)| {
@@ -803,7 +801,10 @@ impl<'a> SiteParticipant<'a> {
     }
 
     pub(crate) fn acetal_center(self) -> ChemistryResult<AcetalCenter<'a>> {
-        if !matches!(self.site.kind, ReactiveSiteKind::Acetal | ReactiveSiteKind::Ketal) {
+        if !matches!(
+            self.site.kind,
+            ReactiveSiteKind::Acetal | ReactiveSiteKind::Ketal
+        ) {
             return Err(self.site_error("site is not an acetal or ketal center"));
         }
         let acetal_carbon = self.site_atom_by_element("C", "acetal carbon")?;
@@ -885,8 +886,7 @@ impl<'a> SiteParticipant<'a> {
                 .then_some(neighbor)
             })
             .ok_or_else(|| self.site_error("Cbz carbamate has no alkoxy oxygen"))?;
-        self
-            .structure
+        self.structure
             .neighbors(alkoxy_oxygen)
             .into_iter()
             .find_map(|(neighbor, order)| {

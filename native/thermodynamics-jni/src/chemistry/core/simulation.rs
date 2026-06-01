@@ -234,6 +234,10 @@ pub fn react_for_tick_with_context(
         if gas_transfer_delta > EQUILIBRIUM_EPSILON_MOL_PER_BUCKET {
             any_changed = true;
         }
+        let initial_equilibrium_delta = equilibrate_solution_equilibria(registry, mixture)?;
+        if initial_equilibrium_delta > EQUILIBRIUM_EPSILON_MOL_PER_BUCKET {
+            any_changed = true;
+        }
         registry.collect_reaction_candidate_indices_for_substance_indices(
             mixture.component_indices(),
             &mut candidate_scratch,
@@ -1210,9 +1214,11 @@ fn add_external(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chemistry::condition::{AcidityCondition, ReactionCondition};
     use crate::chemistry::registry::ChemistryRegistryBuilder;
+    use crate::chemistry::solution::{AcidBaseSpec, EquilibriumSpec};
     use crate::chemistry::substance::{
-        LiquidPhasePreference, SolventRole, Substance, SubstancePhaseProperties,
+        LiquidPhasePreference, SolventRole, Substance, SubstanceId, SubstancePhaseProperties,
     };
 
     fn simple_registry(reaction: Reaction) -> ChemistryRegistry {
@@ -1277,6 +1283,73 @@ mod tests {
                 500.0,
                 100.0,
                 20_000.0,
+            ))
+            .reaction(reaction)
+            .build()
+            .unwrap()
+    }
+
+    fn acid_condition_registry(reaction: Reaction) -> ChemistryRegistry {
+        let aqueous = SubstancePhaseProperties::aqueous_unlimited();
+        ChemistryRegistryBuilder::new()
+            .substance(
+                Substance::new("destroy:water", 0, 18.0, 18_000.0, 373.0, 75.0, 40_650.0)
+                    .with_phase_properties(SubstancePhaseProperties::aqueous_solvent()),
+            )
+            .substance(
+                Substance::new("destroy:proton", 1, 1.0, 1_000.0, f64::MAX, 100.0, 20_000.0)
+                    .with_phase_properties(aqueous.clone()),
+            )
+            .substance(
+                Substance::new(
+                    "destroy:hydroxide",
+                    -1,
+                    17.0,
+                    1_000.0,
+                    f64::MAX,
+                    100.0,
+                    20_000.0,
+                )
+                .with_phase_properties(aqueous.clone()),
+            )
+            .substance(
+                Substance::new("destroy:acid", 0, 11.0, 10_000.0, 500.0, 100.0, 20_000.0)
+                    .with_phase_properties(aqueous.clone()),
+            )
+            .substance(
+                Substance::new("destroy:base", -1, 10.0, 10_000.0, 500.0, 100.0, 20_000.0)
+                    .with_phase_properties(aqueous.clone()),
+            )
+            .substance(
+                Substance::new("destroy:a", 0, 10.0, 10_000.0, 500.0, 100.0, 20_000.0)
+                    .with_phase_properties(aqueous.clone()),
+            )
+            .substance(
+                Substance::new("destroy:b", 0, 10.0, 10_000.0, 500.0, 100.0, 20_000.0)
+                    .with_phase_properties(aqueous),
+            )
+            .equilibrium(EquilibriumSpec::new(
+                "destroy:water.autoionization",
+                [(SubstanceId::from("destroy:water"), 1, MixturePhase::Aqueous)],
+                [
+                    (
+                        SubstanceId::from("destroy:proton"),
+                        1,
+                        MixturePhase::Aqueous,
+                    ),
+                    (
+                        SubstanceId::from("destroy:hydroxide"),
+                        1,
+                        MixturePhase::Aqueous,
+                    ),
+                ],
+                1.0e-14,
+            ))
+            .acid_base_pair(AcidBaseSpec::new(
+                "destroy:acid",
+                "destroy:acid",
+                "destroy:base",
+                4.0,
             ))
             .reaction(reaction)
             .build()
@@ -1374,6 +1447,34 @@ mod tests {
 
         assert!(changed);
         assert!(mixture.temperature_kelvin() > 298.0);
+    }
+
+    #[test]
+    fn acid_base_equilibrium_is_applied_before_conditioned_reactions() {
+        let registry = acid_condition_registry(
+            Reaction::builder("destroy:acidic_a_to_b")
+                .reactant("destroy:a", 1, 1)
+                .product("destroy:b", 1)
+                .condition(
+                    ReactionCondition::new("acid required").acidity(AcidityCondition::Acidic),
+                )
+                .pre_exponential_factor(1.0e12)
+                .activation_energy_kj_per_mol(0.0)
+                .build(),
+        );
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:acid", 0.1)
+            .unwrap();
+        mixture.add_substance(&registry, "destroy:a", 0.1).unwrap();
+
+        react_for_tick(&registry, &mut mixture, 1).unwrap();
+
+        assert!(mixture.ph(&registry).unwrap().unwrap() < 6.0);
+        assert!(mixture.concentration_of(&"destroy:b".into()) > 0.0);
     }
 
     #[test]

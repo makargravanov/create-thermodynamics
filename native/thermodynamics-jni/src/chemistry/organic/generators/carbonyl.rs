@@ -328,8 +328,10 @@ pub(crate) fn generate_borohydride_carbonyl_reduction(
     .product(product, 4)
     .product("destroy:tetrahydroxyborate", 1)
     .condition(
-        ReactionCondition::new("borohydride selectively reduces aldehydes and ketones in protic workup")
-            .min_water_activity(0.05),
+        ReactionCondition::new(
+            "borohydride selectively reduces aldehydes and ketones in protic workup",
+        )
+        .min_water_activity(0.05),
     )
     .activation_energy_kj_per_mol(16.0)
     .selectivity_profile(
