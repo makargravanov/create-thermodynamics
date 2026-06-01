@@ -5,6 +5,7 @@ use super::mixture::MixturePhase;
 use super::molecule::{
     parse_java_structure, parse_legacy_structure, MolecularStructure, MolecularSummary,
 };
+use super::redox::{RedoxEnvironment, RedoxHalfReaction};
 use super::registry::{ChemistryRegistryBuilder, GasSolubilityModel, SolventMiscibility};
 use super::solution::{AcidBaseSpec, EquilibriumSpec};
 use super::substance::{
@@ -165,6 +166,48 @@ fn register_phase_tables(builder: ChemistryRegistryBuilder) -> ChemistryRegistry
             .with_translation_key("ferric_hexacyanide")
             .with_color_argb(0x80364D9B),
         )
+        .complex_spec(
+            ComplexSpec::new(
+                "destroy:cuprous_dicyanide",
+                "destroy:copper_i",
+                [ComplexLigand::new("destroy:cyanide", 2)],
+                -1,
+                1.0e24,
+            )
+            .with_coordination_number(2)
+            .with_geometry(ComplexGeometry::Linear)
+            .with_ligand_exchange_lability(LigandExchangeLability::Intermediate)
+            .with_translation_key("cuprous_dicyanide")
+            .with_color_argb(0x8077A5A1),
+        )
+        .complex_spec(
+            ComplexSpec::new(
+                "destroy:zinc_tetraammine",
+                "destroy:zinc_ion",
+                [ComplexLigand::new("destroy:ammonia", 4)],
+                2,
+                3.0e9,
+            )
+            .with_coordination_number(4)
+            .with_geometry(ComplexGeometry::Tetrahedral)
+            .with_ligand_exchange_lability(LigandExchangeLability::Labile)
+            .with_translation_key("zinc_tetraammine")
+            .with_color_argb(0x8090A8C8),
+        )
+        .complex_spec(
+            ComplexSpec::new(
+                "destroy:ferric_tetrachloride",
+                "destroy:iron_iii",
+                [ComplexLigand::new("destroy:chloride", 4)],
+                -1,
+                1.0e2,
+            )
+            .with_coordination_number(4)
+            .with_geometry(ComplexGeometry::Tetrahedral)
+            .with_ligand_exchange_lability(LigandExchangeLability::Labile)
+            .with_translation_key("ferric_tetrachloride")
+            .with_color_argb(0x80B78238),
+        )
         .gas_solubility(
             "destroy:oxygen",
             GasSolubilityModel::Henry {
@@ -172,6 +215,86 @@ fn register_phase_tables(builder: ChemistryRegistryBuilder) -> ChemistryRegistry
                 temperature_kelvin: 298.0,
                 salting_out_coefficient: 0.12,
                 transfer_coefficient_per_tick: 0.15,
+                estimated: true,
+            },
+        )
+        .gas_solubility(
+            "destroy:nitrogen",
+            GasSolubilityModel::Henry {
+                henry_mol_per_bucket_pascal: 6.4e-9,
+                temperature_kelvin: 298.0,
+                salting_out_coefficient: 0.08,
+                transfer_coefficient_per_tick: 0.12,
+                estimated: true,
+            },
+        )
+        .gas_solubility(
+            "destroy:carbon_monoxide",
+            GasSolubilityModel::Henry {
+                henry_mol_per_bucket_pascal: 9.5e-9,
+                temperature_kelvin: 298.0,
+                salting_out_coefficient: 0.08,
+                transfer_coefficient_per_tick: 0.14,
+                estimated: true,
+            },
+        )
+        .gas_solubility(
+            "destroy:carbon_dioxide",
+            GasSolubilityModel::Henry {
+                henry_mol_per_bucket_pascal: 3.4e-7,
+                temperature_kelvin: 298.0,
+                salting_out_coefficient: 0.20,
+                transfer_coefficient_per_tick: 0.18,
+                estimated: true,
+            },
+        )
+        .gas_solubility(
+            "destroy:chlorine",
+            GasSolubilityModel::Henry {
+                henry_mol_per_bucket_pascal: 6.0e-5,
+                temperature_kelvin: 298.0,
+                salting_out_coefficient: 0.25,
+                transfer_coefficient_per_tick: 0.20,
+                estimated: true,
+            },
+        )
+        .gas_solubility(
+            "destroy:ammonia",
+            GasSolubilityModel::Henry {
+                henry_mol_per_bucket_pascal: 5.8e-4,
+                temperature_kelvin: 298.0,
+                salting_out_coefficient: 0.15,
+                transfer_coefficient_per_tick: 0.25,
+                estimated: true,
+            },
+        )
+        .gas_solubility(
+            "destroy:hydrochloric_acid",
+            GasSolubilityModel::Henry {
+                henry_mol_per_bucket_pascal: 1.0e-2,
+                temperature_kelvin: 298.0,
+                salting_out_coefficient: 0.30,
+                transfer_coefficient_per_tick: 0.30,
+                estimated: true,
+            },
+        )
+        .gas_solubility(
+            "destroy:sulfur_dioxide",
+            GasSolubilityModel::Henry {
+                henry_mol_per_bucket_pascal: 1.2e-5,
+                temperature_kelvin: 298.0,
+                salting_out_coefficient: 0.20,
+                transfer_coefficient_per_tick: 0.22,
+                estimated: true,
+            },
+        )
+        .gas_solubility(
+            "destroy:nitrogen_dioxide",
+            GasSolubilityModel::Henry {
+                henry_mol_per_bucket_pascal: 1.0e-5,
+                temperature_kelvin: 298.0,
+                salting_out_coefficient: 0.20,
+                transfer_coefficient_per_tick: 0.22,
                 estimated: true,
             },
         )
@@ -279,6 +402,191 @@ fn register_phase_tables(builder: ChemistryRegistryBuilder) -> ChemistryRegistry
             "destroy:hydrogensulfate",
             -3.0,
         ))
+        .equilibrium(EquilibriumSpec::new(
+            "destroy:boric_acid.hydrolysis",
+            [
+                (
+                    SubstanceId::from("destroy:boric_acid"),
+                    1,
+                    MixturePhase::Aqueous,
+                ),
+                (SubstanceId::from("destroy:water"), 1, MixturePhase::Aqueous),
+            ],
+            [
+                (
+                    SubstanceId::from("destroy:tetrahydroxyborate"),
+                    1,
+                    MixturePhase::Aqueous,
+                ),
+                (
+                    SubstanceId::from("destroy:proton"),
+                    1,
+                    MixturePhase::Aqueous,
+                ),
+            ],
+            10.0_f64.powf(-9.24),
+        ))
+        .redox_half_reaction(
+            RedoxHalfReaction::oxidation(
+                "destroy:iron_ii_to_iron_iii",
+                [(SubstanceId::from("destroy:iron_ii"), 1)],
+                [(SubstanceId::from("destroy:iron_iii"), 1)],
+                1,
+                RedoxEnvironment::Any,
+            )
+            .with_standard_potential_volts(-0.771),
+        )
+        .redox_half_reaction(
+            RedoxHalfReaction::reduction(
+                "destroy:iron_iii_to_iron_ii",
+                [(SubstanceId::from("destroy:iron_iii"), 1)],
+                [(SubstanceId::from("destroy:iron_ii"), 1)],
+                1,
+                RedoxEnvironment::Any,
+            )
+            .with_standard_potential_volts(0.771),
+        )
+        .redox_half_reaction(
+            RedoxHalfReaction::oxidation(
+                "destroy:copper_i_to_copper_ii",
+                [(SubstanceId::from("destroy:copper_i"), 1)],
+                [(SubstanceId::from("destroy:copper_ii"), 1)],
+                1,
+                RedoxEnvironment::Any,
+            )
+            .with_standard_potential_volts(-0.153),
+        )
+        .redox_half_reaction(
+            RedoxHalfReaction::reduction(
+                "destroy:copper_ii_to_copper_i",
+                [(SubstanceId::from("destroy:copper_ii"), 1)],
+                [(SubstanceId::from("destroy:copper_i"), 1)],
+                1,
+                RedoxEnvironment::Any,
+            )
+            .with_standard_potential_volts(0.153),
+        )
+        .redox_half_reaction(
+            RedoxHalfReaction::oxidation(
+                "destroy:iodide_to_iodine",
+                [(SubstanceId::from("destroy:iodide"), 2)],
+                [(SubstanceId::from("destroy:iodine"), 1)],
+                2,
+                RedoxEnvironment::Any,
+            )
+            .with_standard_potential_volts(-0.535),
+        )
+        .redox_half_reaction(
+            RedoxHalfReaction::reduction(
+                "destroy:iodine_to_iodide",
+                [(SubstanceId::from("destroy:iodine"), 1)],
+                [(SubstanceId::from("destroy:iodide"), 2)],
+                2,
+                RedoxEnvironment::Any,
+            )
+            .with_standard_potential_volts(0.535),
+        )
+        .redox_half_reaction(
+            RedoxHalfReaction::oxidation(
+                "destroy:hydrogen_to_proton",
+                [(SubstanceId::from("destroy:hydrogen"), 1)],
+                [(SubstanceId::from("destroy:proton"), 2)],
+                2,
+                RedoxEnvironment::Acidic,
+            )
+            .with_standard_potential_volts(0.0),
+        )
+        .redox_half_reaction(
+            RedoxHalfReaction::reduction(
+                "destroy:proton_to_hydrogen",
+                [(SubstanceId::from("destroy:proton"), 2)],
+                [(SubstanceId::from("destroy:hydrogen"), 1)],
+                2,
+                RedoxEnvironment::Acidic,
+            )
+            .with_standard_potential_volts(0.0),
+        )
+        .redox_half_reaction(
+            RedoxHalfReaction::reduction(
+                "destroy:oxygen_to_water",
+                [
+                    (SubstanceId::from("destroy:oxygen"), 1),
+                    (SubstanceId::from("destroy:proton"), 4),
+                ],
+                [(SubstanceId::from("destroy:water"), 2)],
+                4,
+                RedoxEnvironment::Acidic,
+            )
+            .with_standard_potential_volts(1.229),
+        )
+        .redox_half_reaction(
+            RedoxHalfReaction::reduction(
+                "destroy:hydrogen_peroxide_to_water",
+                [
+                    (SubstanceId::from("destroy:hydrogen_peroxide"), 1),
+                    (SubstanceId::from("destroy:proton"), 2),
+                ],
+                [(SubstanceId::from("destroy:water"), 2)],
+                2,
+                RedoxEnvironment::Acidic,
+            )
+            .with_standard_potential_volts(1.776),
+        )
+        .redox_half_reaction(
+            RedoxHalfReaction::oxidation(
+                "destroy:hydrogen_peroxide_to_oxygen",
+                [(SubstanceId::from("destroy:hydrogen_peroxide"), 1)],
+                [
+                    (SubstanceId::from("destroy:oxygen"), 1),
+                    (SubstanceId::from("destroy:proton"), 2),
+                ],
+                2,
+                RedoxEnvironment::Acidic,
+            )
+            .with_standard_potential_volts(-0.682),
+        )
+        .redox_half_reaction(
+            RedoxHalfReaction::reduction(
+                "destroy:chlorine_to_chloride",
+                [(SubstanceId::from("destroy:chlorine"), 1)],
+                [(SubstanceId::from("destroy:chloride"), 2)],
+                2,
+                RedoxEnvironment::Any,
+            )
+            .with_standard_potential_volts(1.358),
+        )
+        .redox_half_reaction(
+            RedoxHalfReaction::reduction(
+                "destroy:hypochlorous_acid_to_chloride",
+                [
+                    (SubstanceId::from("destroy:hypochlorous_acid"), 1),
+                    (SubstanceId::from("destroy:proton"), 1),
+                ],
+                [
+                    (SubstanceId::from("destroy:chloride"), 1),
+                    (SubstanceId::from("destroy:water"), 1),
+                ],
+                2,
+                RedoxEnvironment::Acidic,
+            )
+            .with_standard_potential_volts(1.49),
+        )
+        .redox_half_reaction(
+            RedoxHalfReaction::reduction(
+                "destroy:dichromate_to_chromium_iii",
+                [
+                    (SubstanceId::from("destroy:dichromate"), 1),
+                    (SubstanceId::from("destroy:proton"), 14),
+                ],
+                [
+                    (SubstanceId::from("destroy:chromium_iii"), 2),
+                    (SubstanceId::from("destroy:water"), 7),
+                ],
+                6,
+                RedoxEnvironment::Acidic,
+            )
+            .with_standard_potential_volts(1.33),
+        )
 }
 
 impl RawSubstance {
@@ -2632,7 +2940,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(DESTROY_SUBSTANCE_COUNT, 165);
-        assert_eq!(registry.substance_count(), 168);
+        assert_eq!(registry.substance_count(), 171);
     }
 
     #[test]
@@ -2703,5 +3011,33 @@ mod tests {
         assert!(chloroethane.functional_groups.iter().any(|group| {
             group.group_type == super::super::functional_group::FunctionalGroupType::Halide
         }));
+    }
+
+    #[test]
+    fn destroy_catalog_contains_inorganic_equilibrium_data() {
+        let registry = destroy_substances_registry_builder()
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let carbon_dioxide = registry
+            .substance_index(&"destroy:carbon_dioxide".into())
+            .unwrap();
+        assert!(registry.gas_solubility(carbon_dioxide).is_some());
+
+        assert!(registry
+            .indexed_equilibria()
+            .iter()
+            .any(|equilibrium| equilibrium.spec.id == "destroy:boric_acid.hydrolysis"));
+
+        assert!(registry
+            .complex_specs()
+            .any(|complex| complex.id == SubstanceId::from("destroy:zinc_tetraammine")));
+
+        let dichromate = registry
+            .redox_half_reaction("destroy:dichromate_to_chromium_iii")
+            .unwrap();
+        assert_eq!(dichromate.electron_count, 6);
+        assert_eq!(dichromate.standard_potential_volts, Some(1.33));
     }
 }

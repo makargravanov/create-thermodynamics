@@ -72,8 +72,8 @@ mod tests {
     };
     use super::mixture::{Mixture, MixturePhase};
     use super::reaction::{Reaction, StoichiometricTerm};
-    use super::registry::{ChemistryRegistryBuilder, ReactionCandidateScratch};
     use super::redox::RedoxRole;
+    use super::registry::{ChemistryRegistryBuilder, ReactionCandidateScratch};
     use super::selectivity::{
         NucleophileStrength, ReactionType, SelectivityContext, SelectivityEngine,
         SelectivityProfile, SiteDescriptorBuilder,
@@ -1227,8 +1227,7 @@ mod tests {
             .substance(
                 Substance::new("destroy:hydrogen", 0, 2.0, 70.0, 20.0, 28.0, 900.0)
                     .with_phase_properties(SubstancePhaseProperties {
-                        preferred_liquid_phase:
-                            super::substance::LiquidPhasePreference::Aqueous,
+                        preferred_liquid_phase: super::substance::LiquidPhasePreference::Aqueous,
                         aqueous_solubility_mol_per_bucket: Some(0.0),
                         organic_solubility_mol_per_bucket: Some(0.0),
                         can_precipitate: false,
@@ -1519,12 +1518,7 @@ mod tests {
                 < 1.0e-12
         );
         assert!(
-            (thermo
-                .equilibrium_constant_at_kelvin(0.0, 298.15)
-                .unwrap()
-                - 10.0)
-                .abs()
-                < 1.0e-9
+            (thermo.equilibrium_constant_at_kelvin(0.0, 298.15).unwrap() - 10.0).abs() < 1.0e-9
         );
     }
 

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 
+use super::complex::{ComplexGeometry, ComplexLigand, ComplexSpec, LigandExchangeLability};
 use super::error::{ChemistryError, ChemistryResult};
 use super::frowns::{parse_frowns, write_frowns};
 use super::functional_group::{FunctionalGroup, FunctionalGroupType};
@@ -12,10 +13,10 @@ use super::reactive_site::{
     try_find_reactive_sites, ReactiveRole, ReactiveSiteKey, ReactiveSiteKind,
 };
 use super::registry::{ChemistryRegistry, ChemistryRegistryBuilder, SubstanceIndex};
-use super::solution::AcidBaseSpec;
+use super::solution::{AcidBaseSpec, PrecipitationSpec};
 use super::substance::{
-    LiquidPhasePreference, SolventRole, Substance, SubstanceId, SubstancePhaseProperties,
-    SubstanceTagId,
+    LiquidPhasePreference, MaterialFormulaUnit, SolventRole, Substance, SubstanceId,
+    SubstancePhaseProperties, SubstanceRepresentation, SubstanceTagId,
 };
 
 const DEFAULT_DYNAMIC_DENSITY: f64 = 1000.0;
@@ -202,6 +203,8 @@ pub struct DynamicChemistryRegistry {
     site_handles_by_substance: Vec<Vec<SiteHandle>>,
     processed_generation_masks: BTreeMap<(usize, ReactiveSiteKey), u64>,
     dynamic_acid_base_specs: Vec<AcidBaseSpec>,
+    dynamic_precipitation_specs: Vec<PrecipitationSpec>,
+    dynamic_complex_specs: Vec<ComplexSpec>,
     energy_model: EnergyModel,
 }
 
@@ -238,6 +241,8 @@ impl DynamicChemistryRegistry {
             site_handles_by_substance: vec![Vec::new(); static_substance_count],
             processed_generation_masks: BTreeMap::new(),
             dynamic_acid_base_specs: Vec::new(),
+            dynamic_precipitation_specs: Vec::new(),
+            dynamic_complex_specs: Vec::new(),
             energy_model: EnergyModel::new(),
         };
         result.rebuild_canonical_index()?;
@@ -272,6 +277,12 @@ impl DynamicChemistryRegistry {
         }
         for spec in &self.dynamic_acid_base_specs {
             builder = builder.acid_base_pair(spec.clone());
+        }
+        for spec in &self.dynamic_precipitation_specs {
+            builder = builder.precipitation(spec.clone());
+        }
+        for spec in &self.dynamic_complex_specs {
+            builder = builder.complex_spec(spec.clone());
         }
         builder.build()
     }
@@ -487,11 +498,16 @@ impl DynamicChemistryRegistry {
                 });
             }
             let batch_len = queue.len();
+            let mut inorganic_seeds = Vec::new();
             let mut unprocessed_seeds = Vec::new();
             let mut pending_generation_mask_updates = Vec::new();
             for _ in 0..batch_len {
                 let seed = queue.pop_front().expect("batch length was measured");
                 self.mark_known_substance(&mut queued, seed, false);
+                if inorganic_salt_ion_role(self.substance_by_known_index(seed)?).is_some() {
+                    inorganic_seeds.push(seed);
+                    processed_work_items += 1;
+                }
                 let mask_updates = self.generation_mask_updates_for_substance(seed)?;
                 if mask_updates.is_empty() {
                     skipped_duplicates += 1;
@@ -511,7 +527,7 @@ impl DynamicChemistryRegistry {
                     });
                 }
             }
-            if unprocessed_seeds.is_empty() {
+            if unprocessed_seeds.is_empty() && inorganic_seeds.is_empty() {
                 return Ok(DynamicGenerationReport {
                     iterations: iteration + 1,
                     added_substances,
@@ -524,8 +540,15 @@ impl DynamicChemistryRegistry {
                 });
             }
 
-            let generated =
-                self.generate_organic_for_known_substances(&unprocessed_seeds, &scope)?;
+            let generated = if unprocessed_seeds.is_empty() {
+                organic::GeneratedOrganicCatalog::default()
+            } else {
+                self.generate_organic_for_known_substances(&unprocessed_seeds, &scope)?
+            };
+            let generated_salts =
+                self.generate_inorganic_salts_for_known_substances(&inorganic_seeds, &scope)?;
+            let generated_complexes =
+                self.generate_inorganic_complexes_for_known_substances(&inorganic_seeds, &scope)?;
             let mut changed = false;
 
             let mut staged = self.clone();
@@ -572,6 +595,38 @@ impl DynamicChemistryRegistry {
                 }
                 staged.add_dynamic_reaction(reaction)?;
                 added_reactions += 1;
+                changed = true;
+            }
+
+            for salt in generated_salts {
+                let solid_id = salt.substance.id.clone();
+                if staged.substance(&solid_id).is_err() {
+                    staged.add_dynamic_substance_with_canonical(salt.substance, None)?;
+                    new_substance_ids.push(solid_id.clone());
+                    added_substances += 1;
+                    changed = true;
+                }
+                if staged.has_precipitation_spec(&salt.precipitation.id) {
+                    skipped_duplicates += 1;
+                    continue;
+                }
+                staged.add_dynamic_precipitation_spec(salt.precipitation)?;
+                changed = true;
+            }
+
+            for complex in generated_complexes {
+                let complex_id = complex.substance.id.clone();
+                if staged.substance(&complex_id).is_err() {
+                    staged.add_dynamic_substance_with_canonical(complex.substance, None)?;
+                    new_substance_ids.push(complex_id.clone());
+                    added_substances += 1;
+                    changed = true;
+                }
+                if staged.has_complex_spec_equivalent(&complex.spec) {
+                    skipped_duplicates += 1;
+                    continue;
+                }
+                staged.add_dynamic_complex_spec(complex.spec)?;
                 changed = true;
             }
 
@@ -777,6 +832,276 @@ impl DynamicChemistryRegistry {
             ));
         }
         Ok(())
+    }
+
+    fn generate_inorganic_salts_for_known_substances(
+        &self,
+        seeds: &[KnownSubstanceIndex],
+        scope: &[bool],
+    ) -> ChemistryResult<Vec<DynamicSaltGeneration>> {
+        let scope_ions = self
+            .known_substances_in_scope(scope)
+            .into_iter()
+            .filter_map(|index| {
+                let substance = self.substance_by_known_index(index).ok()?;
+                inorganic_salt_ion_role(substance).map(|role| (index, role))
+            })
+            .collect::<Vec<_>>();
+        let mut salts = Vec::new();
+        for seed in seeds {
+            let seed_substance = self.substance_by_known_index(*seed)?;
+            let Some(seed_role) = inorganic_salt_ion_role(seed_substance) else {
+                continue;
+            };
+            for (partner, partner_role) in &scope_ions {
+                if *partner == *seed || seed_role.same_sign(*partner_role) {
+                    continue;
+                }
+                let cation = if seed_role.charge > 0 {
+                    (*seed, seed_role)
+                } else {
+                    (*partner, *partner_role)
+                };
+                let anion = if seed_role.charge < 0 {
+                    (*seed, seed_role)
+                } else {
+                    (*partner, *partner_role)
+                };
+                let generation = self.build_dynamic_salt(cation, anion)?;
+                if self.substance(&generation.substance.id).is_ok()
+                    && self.has_precipitation_spec(&generation.precipitation.id)
+                {
+                    continue;
+                }
+                if !salts.iter().any(|salt: &DynamicSaltGeneration| {
+                    salt.precipitation.id == generation.precipitation.id
+                }) {
+                    salts.push(generation);
+                }
+            }
+        }
+        Ok(salts)
+    }
+
+    fn build_dynamic_salt(
+        &self,
+        cation: (KnownSubstanceIndex, InorganicSaltIonRole),
+        anion: (KnownSubstanceIndex, InorganicSaltIonRole),
+    ) -> ChemistryResult<DynamicSaltGeneration> {
+        let cation_substance = self.substance_by_known_index(cation.0)?;
+        let anion_substance = self.substance_by_known_index(anion.0)?;
+        let cation_charge = cation.1.charge as u32;
+        let anion_charge = (-anion.1.charge) as u32;
+        let divisor = gcd_u32(cation_charge, anion_charge);
+        let cation_coefficient = anion_charge / divisor;
+        let anion_coefficient = cation_charge / divisor;
+        let salt_id = dynamic_salt_id(
+            &cation_substance.id,
+            cation_coefficient,
+            &anion_substance.id,
+            anion_coefficient,
+        )?;
+        let precipitation_id = format!("{}.precipitation", salt_id.as_str());
+        let molar_mass = cation_substance.molar_mass_grams * cation_coefficient as f64
+            + anion_substance.molar_mass_grams * anion_coefficient as f64;
+        let solubility_product = estimate_dynamic_salt_solubility_product(
+            cation_charge,
+            cation_coefficient,
+            anion_charge,
+            anion_coefficient,
+        );
+        let molar_solubility = salt_molar_solubility_from_product(
+            solubility_product,
+            cation_coefficient,
+            anion_coefficient,
+        );
+        let substance = Substance::new(
+            salt_id.clone(),
+            0,
+            molar_mass,
+            DEFAULT_DYNAMIC_DENSITY,
+            f64::MAX,
+            DEFAULT_DYNAMIC_HEAT_CAPACITY,
+            DEFAULT_DYNAMIC_LATENT_HEAT,
+        )
+        .with_phase_properties(SubstancePhaseProperties {
+            preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+            aqueous_solubility_mol_per_bucket: Some(molar_solubility),
+            organic_solubility_mol_per_bucket: Some(0.0),
+            can_precipitate: true,
+            can_form_liquid_phase: false,
+            solvent_role: SolventRole::NotSolvent,
+        })
+        .with_representation(SubstanceRepresentation::IonicSolid {
+            formula_units: vec![
+                MaterialFormulaUnit::new(cation_substance.id.clone(), cation_coefficient),
+                MaterialFormulaUnit::new(anion_substance.id.clone(), anion_coefficient),
+            ],
+        })
+        .with_melting_point_kelvin(900.0)
+        .with_fusion_heat_j_per_mol(20_000.0)
+        .with_catalog_metadata(
+            None,
+            None,
+            dynamic_salt_color(cation_substance.color_argb, anion_substance.color_argb),
+            Vec::new(),
+        );
+        let precipitation = PrecipitationSpec::new(
+            precipitation_id,
+            salt_id,
+            [
+                (cation_substance.id.clone(), cation_coefficient),
+                (anion_substance.id.clone(), anion_coefficient),
+            ],
+            solubility_product,
+        );
+        Ok(DynamicSaltGeneration {
+            substance,
+            precipitation,
+        })
+    }
+
+    fn add_dynamic_precipitation_spec(&mut self, spec: PrecipitationSpec) -> ChemistryResult<()> {
+        if self.has_precipitation_spec(&spec.id) {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: spec.id,
+                reason: "duplicate precipitation spec".to_string(),
+            });
+        }
+        validate_dynamic_precipitation_spec(self, &spec)?;
+        self.dynamic_precipitation_specs.push(spec);
+        Ok(())
+    }
+
+    fn has_precipitation_spec(&self, id: &str) -> bool {
+        self.static_registry
+            .indexed_precipitations()
+            .iter()
+            .any(|spec| spec.spec.id == id)
+            || self
+                .dynamic_precipitation_specs
+                .iter()
+                .any(|spec| spec.id == id)
+    }
+
+    fn generate_inorganic_complexes_for_known_substances(
+        &self,
+        seeds: &[KnownSubstanceIndex],
+        scope: &[bool],
+    ) -> ChemistryResult<Vec<DynamicComplexGeneration>> {
+        let scope_ligands = self
+            .known_substances_in_scope(scope)
+            .into_iter()
+            .filter_map(|index| {
+                let substance = self.substance_by_known_index(index).ok()?;
+                inorganic_complex_ligand_role(substance).map(|role| (index, role))
+            })
+            .collect::<Vec<_>>();
+        let scope_metals = self
+            .known_substances_in_scope(scope)
+            .into_iter()
+            .filter_map(|index| {
+                let substance = self.substance_by_known_index(index).ok()?;
+                inorganic_complex_metal_role(substance).map(|role| (index, role))
+            })
+            .collect::<Vec<_>>();
+        let mut complexes = Vec::new();
+        for seed in seeds {
+            let seed_substance = self.substance_by_known_index(*seed)?;
+            if let Some(metal_role) = inorganic_complex_metal_role(seed_substance) {
+                for (ligand, ligand_role) in &scope_ligands {
+                    let generation =
+                        self.build_dynamic_complex((*seed, metal_role), (*ligand, *ligand_role))?;
+                    self.push_unique_dynamic_complex(&mut complexes, generation)?;
+                }
+            }
+            if let Some(ligand_role) = inorganic_complex_ligand_role(seed_substance) {
+                for (metal, metal_role) in &scope_metals {
+                    let generation =
+                        self.build_dynamic_complex((*metal, *metal_role), (*seed, ligand_role))?;
+                    self.push_unique_dynamic_complex(&mut complexes, generation)?;
+                }
+            }
+        }
+        Ok(complexes)
+    }
+
+    fn push_unique_dynamic_complex(
+        &self,
+        complexes: &mut Vec<DynamicComplexGeneration>,
+        generation: DynamicComplexGeneration,
+    ) -> ChemistryResult<()> {
+        if self.has_complex_spec_equivalent(&generation.spec) {
+            return Ok(());
+        }
+        if complexes.iter().any(|complex| {
+            complex.spec.central_ion == generation.spec.central_ion
+                && same_complex_ligands(&complex.spec.ligands, &generation.spec.ligands)
+        }) {
+            return Ok(());
+        }
+        complexes.push(generation);
+        Ok(())
+    }
+
+    fn build_dynamic_complex(
+        &self,
+        metal: (KnownSubstanceIndex, InorganicComplexMetalRole),
+        ligand: (KnownSubstanceIndex, InorganicComplexLigandRole),
+    ) -> ChemistryResult<DynamicComplexGeneration> {
+        let metal_substance = self.substance_by_known_index(metal.0)?;
+        let ligand_substance = self.substance_by_known_index(ligand.0)?;
+        let ligand_count = ligand_count_for_complex(metal.1, ligand.1);
+        let charge = metal_substance.charge + ligand_substance.charge * ligand_count as i32;
+        let id = dynamic_complex_id(&metal_substance.id, &ligand_substance.id, ligand_count)?;
+        let mass = metal_substance.molar_mass_grams
+            + ligand_substance.molar_mass_grams * ligand_count as f64;
+        let spec = ComplexSpec::new(
+            id.clone(),
+            metal_substance.id.clone(),
+            [
+                ComplexLigand::new(ligand_substance.id.clone(), ligand_count)
+                    .with_denticity(ligand.1.denticity),
+            ],
+            charge,
+            estimate_dynamic_complex_formation_constant(metal.1, ligand.1, ligand_count),
+        )
+        .with_coordination_number(ligand_count * ligand.1.denticity)
+        .with_geometry(complex_geometry_for_coordination(
+            ligand_count * ligand.1.denticity,
+        ))
+        .with_ligand_exchange_lability(ligand_exchange_lability(metal.1, ligand.1))
+        .with_translation_key(id.as_str().replace(':', "."))
+        .with_color_argb(dynamic_complex_color(
+            metal_substance.color_argb,
+            ligand_substance.color_argb,
+        ));
+        let substance = spec.to_substance(mass, charge)?;
+        Ok(DynamicComplexGeneration { substance, spec })
+    }
+
+    fn add_dynamic_complex_spec(&mut self, spec: ComplexSpec) -> ChemistryResult<()> {
+        if self.has_complex_spec_equivalent(&spec) {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: format!("{}.formation", spec.id),
+                reason: "duplicate complex spec".to_string(),
+            });
+        }
+        validate_dynamic_complex_spec(self, &spec)?;
+        self.dynamic_complex_specs.push(spec);
+        Ok(())
+    }
+
+    fn has_complex_spec_equivalent(&self, spec: &ComplexSpec) -> bool {
+        self.static_registry
+            .complex_specs()
+            .chain(self.dynamic_complex_specs.iter())
+            .any(|existing| {
+                existing.id == spec.id
+                    || (existing.central_ion == spec.central_ion
+                        && existing.phase == spec.phase
+                        && same_complex_ligands(&existing.ligands, &spec.ligands))
+            })
     }
 
     fn add_dynamic_reaction(&mut self, reaction: Reaction) -> ChemistryResult<()> {
@@ -1252,6 +1577,16 @@ impl DynamicChemistryRegistry {
             .collect()
     }
 
+    fn known_substances_in_scope(&self, scope: &[bool]) -> Vec<KnownSubstanceIndex> {
+        self.all_known_substance_indices()
+            .into_iter()
+            .filter(|substance| {
+                let slot = known_substance_slot(self.static_registry.substance_count(), *substance);
+                scope.get(slot).copied().unwrap_or(false)
+            })
+            .collect()
+    }
+
     fn known_substance_count(&self) -> usize {
         self.static_registry.substance_count() + self.dynamic_substances.len()
     }
@@ -1500,6 +1835,380 @@ fn known_substance_slot(static_substance_count: usize, substance: KnownSubstance
         KnownSubstanceIndex::Static(index) => index.as_usize(),
         KnownSubstanceIndex::Dynamic(index) => static_substance_count + index,
     }
+}
+
+#[derive(Debug, Clone)]
+struct DynamicSaltGeneration {
+    substance: Substance,
+    precipitation: PrecipitationSpec,
+}
+
+#[derive(Debug, Clone)]
+struct DynamicComplexGeneration {
+    substance: Substance,
+    spec: ComplexSpec,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct InorganicSaltIonRole {
+    charge: i32,
+}
+
+impl InorganicSaltIonRole {
+    fn same_sign(self, other: Self) -> bool {
+        self.charge.signum() == other.charge.signum()
+    }
+}
+
+fn inorganic_salt_ion_role(substance: &Substance) -> Option<InorganicSaltIonRole> {
+    if substance.charge == 0 {
+        return None;
+    }
+    if matches!(
+        substance.id.as_str(),
+        "destroy:proton" | "destroy:hydroxide" | "destroy:electron"
+    ) {
+        return None;
+    }
+    if substance
+        .tags
+        .iter()
+        .any(|tag| tag.as_str() == "destroy:hypothetical")
+    {
+        return None;
+    }
+    if substance.phase_properties.preferred_liquid_phase != LiquidPhasePreference::Aqueous {
+        return None;
+    }
+    Some(InorganicSaltIonRole {
+        charge: substance.charge,
+    })
+}
+
+#[derive(Debug, Copy, Clone)]
+struct InorganicComplexMetalRole {
+    charge: i32,
+    preferred_coordination_number: u32,
+}
+
+#[derive(Debug, Copy, Clone)]
+struct InorganicComplexLigandRole {
+    denticity: u32,
+    field_strength: f64,
+}
+
+fn inorganic_complex_metal_role(substance: &Substance) -> Option<InorganicComplexMetalRole> {
+    if substance.charge <= 0 {
+        return None;
+    }
+    if substance
+        .tags
+        .iter()
+        .any(|tag| tag.as_str() == "destroy:hypothetical")
+    {
+        return None;
+    }
+    if substance.phase_properties.preferred_liquid_phase != LiquidPhasePreference::Aqueous {
+        return None;
+    }
+    let preferred_coordination_number = match substance.id.as_str() {
+        "destroy:copper_i" => 2,
+        "destroy:copper_ii" | "destroy:nickel_ion" | "destroy:zinc_ion" => 4,
+        "destroy:iron_ii" | "destroy:iron_iii" => 6,
+        id if id.contains("copper") && substance.charge == 1 => 2,
+        id if id.contains("copper") || id.contains("nickel") || id.contains("zinc") => 4,
+        id if id.contains("iron") => 6,
+        _ => return None,
+    };
+    Some(InorganicComplexMetalRole {
+        charge: substance.charge,
+        preferred_coordination_number,
+    })
+}
+
+fn inorganic_complex_ligand_role(substance: &Substance) -> Option<InorganicComplexLigandRole> {
+    if substance
+        .tags
+        .iter()
+        .any(|tag| tag.as_str() == "destroy:hypothetical")
+    {
+        return None;
+    }
+    if substance.phase_properties.preferred_liquid_phase != LiquidPhasePreference::Aqueous {
+        return None;
+    }
+    match substance.id.as_str() {
+        "destroy:ammonia" => Some(InorganicComplexLigandRole {
+            denticity: 1,
+            field_strength: 5.0,
+        }),
+        "destroy:cyanide" => Some(InorganicComplexLigandRole {
+            denticity: 1,
+            field_strength: 9.0,
+        }),
+        "destroy:chloride" => Some(InorganicComplexLigandRole {
+            denticity: 1,
+            field_strength: 2.0,
+        }),
+        "destroy:hydroxide" => Some(InorganicComplexLigandRole {
+            denticity: 1,
+            field_strength: 3.0,
+        }),
+        _ => None,
+    }
+}
+
+fn ligand_count_for_complex(
+    metal: InorganicComplexMetalRole,
+    ligand: InorganicComplexLigandRole,
+) -> u32 {
+    (metal.preferred_coordination_number / ligand.denticity).max(1)
+}
+
+fn complex_geometry_for_coordination(coordination_number: u32) -> ComplexGeometry {
+    match coordination_number {
+        2 => ComplexGeometry::Linear,
+        4 => ComplexGeometry::Tetrahedral,
+        6 => ComplexGeometry::Octahedral,
+        _ => ComplexGeometry::Unknown,
+    }
+}
+
+fn ligand_exchange_lability(
+    metal: InorganicComplexMetalRole,
+    ligand: InorganicComplexLigandRole,
+) -> LigandExchangeLability {
+    if ligand.field_strength >= 8.0 && metal.charge >= 3 {
+        LigandExchangeLability::Inert
+    } else if ligand.field_strength >= 6.0 {
+        LigandExchangeLability::Intermediate
+    } else {
+        LigandExchangeLability::Labile
+    }
+}
+
+fn estimate_dynamic_complex_formation_constant(
+    metal: InorganicComplexMetalRole,
+    ligand: InorganicComplexLigandRole,
+    ligand_count: u32,
+) -> f64 {
+    let charge_factor = (metal.charge as f64).max(1.0);
+    let log_beta = charge_factor * ligand.field_strength * ligand_count as f64 / 2.0;
+    10.0_f64.powf(log_beta.clamp(1.0, 32.0))
+}
+
+fn dynamic_complex_id(
+    metal: &SubstanceId,
+    ligand: &SubstanceId,
+    ligand_count: u32,
+) -> ChemistryResult<SubstanceId> {
+    SubstanceId::new(format!(
+        "dynamic:complex:{}:{}_{}",
+        sanitize_dynamic_salt_component(metal.as_str()),
+        sanitize_dynamic_salt_component(ligand.as_str()),
+        ligand_count
+    ))
+}
+
+fn dynamic_complex_color(metal_color: u32, ligand_color: u32) -> u32 {
+    let alpha = 0x80;
+    let red = (((metal_color >> 16) & 0xFF) * 3 + ((ligand_color >> 16) & 0xFF)) / 4;
+    let green = (((metal_color >> 8) & 0xFF) * 3 + ((ligand_color >> 8) & 0xFF)) / 4;
+    let blue = ((metal_color & 0xFF) * 3 + (ligand_color & 0xFF)) / 4;
+    (alpha << 24) | (red << 16) | (green << 8) | blue
+}
+
+fn same_complex_ligands(left: &[ComplexLigand], right: &[ComplexLigand]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut left = left
+        .iter()
+        .map(|ligand| (&ligand.substance_id, ligand.count, ligand.denticity))
+        .collect::<Vec<_>>();
+    let mut right = right
+        .iter()
+        .map(|ligand| (&ligand.substance_id, ligand.count, ligand.denticity))
+        .collect::<Vec<_>>();
+    left.sort();
+    right.sort();
+    left == right
+}
+
+fn dynamic_salt_id(
+    cation: &SubstanceId,
+    cation_coefficient: u32,
+    anion: &SubstanceId,
+    anion_coefficient: u32,
+) -> ChemistryResult<SubstanceId> {
+    SubstanceId::new(format!(
+        "dynamic:salt:{}_{}:{}_{}",
+        sanitize_dynamic_salt_component(cation.as_str()),
+        cation_coefficient,
+        sanitize_dynamic_salt_component(anion.as_str()),
+        anion_coefficient
+    ))
+}
+
+fn sanitize_dynamic_salt_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn estimate_dynamic_salt_solubility_product(
+    cation_charge: u32,
+    cation_coefficient: u32,
+    anion_charge: u32,
+    anion_coefficient: u32,
+) -> f64 {
+    let charge_product = cation_charge * anion_charge;
+    let base_solubility: f64 = match charge_product {
+        1 => 0.5,
+        2 => 0.05,
+        3 => 0.01,
+        _ => 0.001,
+    };
+    let cation_factor = (cation_coefficient as f64).powi(cation_coefficient as i32);
+    let anion_factor = (anion_coefficient as f64).powi(anion_coefficient as i32);
+    cation_factor
+        * anion_factor
+        * base_solubility.powi((cation_coefficient + anion_coefficient) as i32)
+}
+
+fn salt_molar_solubility_from_product(
+    solubility_product: f64,
+    cation_coefficient: u32,
+    anion_coefficient: u32,
+) -> f64 {
+    let cation_factor = (cation_coefficient as f64).powi(cation_coefficient as i32);
+    let anion_factor = (anion_coefficient as f64).powi(anion_coefficient as i32);
+    (solubility_product / (cation_factor * anion_factor))
+        .powf(1.0 / (cation_coefficient + anion_coefficient) as f64)
+}
+
+fn dynamic_salt_color(cation_color: u32, anion_color: u32) -> u32 {
+    let alpha = 0x20;
+    let red = (((cation_color >> 16) & 0xFF) + ((anion_color >> 16) & 0xFF)) / 2;
+    let green = (((cation_color >> 8) & 0xFF) + ((anion_color >> 8) & 0xFF)) / 2;
+    let blue = ((cation_color & 0xFF) + (anion_color & 0xFF)) / 2;
+    (alpha << 24) | (red << 16) | (green << 8) | blue
+}
+
+fn gcd_u32(mut left: u32, mut right: u32) -> u32 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left.max(1)
+}
+
+fn validate_dynamic_precipitation_spec(
+    registry: &DynamicChemistryRegistry,
+    spec: &PrecipitationSpec,
+) -> ChemistryResult<()> {
+    let solid = registry.substance(&spec.solid)?;
+    if solid.charge != 0 {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: spec.id.clone(),
+            reason: "dynamic salt solid must be neutral".to_string(),
+        });
+    }
+    if !solid.phase_properties.can_precipitate {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: spec.id.clone(),
+            reason: "dynamic salt solid must be allowed to precipitate".to_string(),
+        });
+    }
+    if spec.ions.len() < 2 {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: spec.id.clone(),
+            reason: "dynamic salt precipitation needs at least two ions".to_string(),
+        });
+    }
+    let mut charge = 0.0;
+    let mut mass = 0.0;
+    for ion in &spec.ions {
+        let substance = registry.substance(&ion.substance_id)?;
+        if substance.charge == 0 {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: spec.id.clone(),
+                reason: "dynamic salt precipitation terms must be ions".to_string(),
+            });
+        }
+        charge += substance.charge as f64 * ion.coefficient as f64;
+        mass += substance.molar_mass_grams * ion.coefficient as f64;
+    }
+    if charge.abs() > 1.0e-9 {
+        return Err(ChemistryError::ChargeNotConserved {
+            reaction_id: spec.id.clone(),
+            reactants: charge.round() as i32,
+            products: solid.charge,
+        });
+    }
+    if (mass - solid.molar_mass_grams).abs() > MASS_TOLERANCE_GRAMS_PER_MOL {
+        return Err(ChemistryError::MassNotConserved {
+            reaction_id: spec.id.clone(),
+            reactants: mass,
+            products: solid.molar_mass_grams,
+        });
+    }
+    Ok(())
+}
+
+fn validate_dynamic_complex_spec(
+    registry: &DynamicChemistryRegistry,
+    spec: &ComplexSpec,
+) -> ChemistryResult<()> {
+    spec.validate_shape()?;
+    let central = registry.substance(&spec.central_ion)?;
+    if inorganic_complex_metal_role(central).is_none() {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: format!("{}.formation", spec.id),
+            reason: "dynamic complex central substance must be a supported aqueous metal ion"
+                .to_string(),
+        });
+    }
+    let complex = registry.substance(&spec.id)?;
+    let mut charge = central.charge;
+    let mut mass = central.molar_mass_grams;
+    for ligand in &spec.ligands {
+        let ligand_substance = registry.substance(&ligand.substance_id)?;
+        if inorganic_complex_ligand_role(ligand_substance).is_none() {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: format!("{}.formation", spec.id),
+                reason: format!(
+                    "dynamic complex ligand '{}' is not a supported dissolved ligand",
+                    ligand.substance_id
+                ),
+            });
+        }
+        charge += ligand_substance.charge * ligand.count as i32;
+        mass += ligand_substance.molar_mass_grams * ligand.count as f64;
+    }
+    if charge != complex.charge {
+        return Err(ChemistryError::ChargeNotConserved {
+            reaction_id: format!("{}.formation", spec.id),
+            reactants: charge,
+            products: complex.charge,
+        });
+    }
+    if (mass - complex.molar_mass_grams).abs() > MASS_TOLERANCE_GRAMS_PER_MOL {
+        return Err(ChemistryError::MassNotConserved {
+            reaction_id: format!("{}.formation", spec.id),
+            reactants: mass,
+            products: complex.molar_mass_grams,
+        });
+    }
+    Ok(())
 }
 
 fn insert_sorted_unique<T: Ord + Copy>(values: &mut Vec<T>, value: T) {
@@ -1852,7 +2561,7 @@ fn count_atoms(structure: &MolecularStructure, element: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chemistry::mixture::Mixture;
+    use crate::chemistry::mixture::{Mixture, MixturePhase};
     use crate::chemistry::simulation::react_for_tick;
 
     #[test]
@@ -2088,6 +2797,117 @@ mod tests {
 
         assert!(mixture.ph(&registry).unwrap().is_some_and(|ph| ph < 7.0));
         assert!(mixture.concentration_of(&spec.conjugate_base) > 0.0);
+    }
+
+    #[test]
+    fn dynamic_inorganic_generation_creates_neutral_salt_precipitation() {
+        let mut dynamic = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let calcium = SubstanceId::from("destroy:calcium_ion");
+        let chloride = SubstanceId::from("destroy:chloride");
+
+        let report = dynamic
+            .generate_reactions_for_substances([calcium.clone(), chloride.clone()], 1)
+            .unwrap();
+
+        let salt = SubstanceId::from("dynamic:salt:destroy_calcium_ion_1:destroy_chloride_2");
+        let salt_substance = dynamic.substance(&salt).unwrap();
+        assert_eq!(salt_substance.charge, 0);
+        assert!(salt_substance.phase_properties.can_precipitate);
+        assert!(matches!(
+            salt_substance.representation,
+            SubstanceRepresentation::IonicSolid { .. }
+        ));
+        assert_eq!(report.added_substances, 1);
+        assert!(dynamic
+            .dynamic_precipitation_specs
+            .iter()
+            .any(|spec| spec.solid == salt
+                && spec.ions.iter().any(|ion| ion.substance_id == calcium)
+                && spec.ions.iter().any(|ion| ion.substance_id == chloride)));
+
+        let registry = dynamic.to_registry().unwrap();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        mixture.add_substance(&registry, calcium, 1.0).unwrap();
+        mixture.add_substance(&registry, chloride, 2.0).unwrap();
+        react_for_tick(&registry, &mut mixture, 1).unwrap();
+
+        assert!(mixture.concentration_in_phase(&salt, MixturePhase::Solid) > 0.0);
+    }
+
+    #[test]
+    fn dynamic_inorganic_generation_uses_charge_stoichiometry_and_is_idempotent() {
+        let mut dynamic = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let sodium = SubstanceId::from("destroy:sodium_ion");
+        let chloride = SubstanceId::from("destroy:chloride");
+
+        let first = dynamic
+            .generate_reactions_for_substances([sodium.clone(), chloride.clone()], 1)
+            .unwrap();
+        let second = dynamic
+            .generate_reactions_for_substances([sodium, chloride], 1)
+            .unwrap();
+
+        let salt = SubstanceId::from("dynamic:salt:destroy_sodium_ion_1:destroy_chloride_1");
+        let spec = dynamic
+            .dynamic_precipitation_specs
+            .iter()
+            .find(|spec| spec.solid == salt)
+            .unwrap();
+        assert_eq!(dynamic.substance(&salt).unwrap().charge, 0);
+        assert!(spec.ions.iter().any(|ion| ion.substance_id
+            == SubstanceId::from("destroy:sodium_ion")
+            && ion.coefficient == 1));
+        assert!(spec.ions.iter().any(|ion| ion.substance_id
+            == SubstanceId::from("destroy:chloride")
+            && ion.coefficient == 1));
+        assert_eq!(first.added_substances, 1);
+        assert_eq!(second.added_substances, 0);
+    }
+
+    #[test]
+    fn dynamic_inorganic_generation_creates_complex_equilibrium() {
+        let mut dynamic = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let iron = SubstanceId::from("destroy:iron_ii");
+        let ammonia = SubstanceId::from("destroy:ammonia");
+
+        let first = dynamic
+            .generate_reactions_for_substances([iron.clone(), ammonia.clone()], 1)
+            .unwrap();
+        let second = dynamic
+            .generate_reactions_for_substances([iron.clone(), ammonia.clone()], 1)
+            .unwrap();
+
+        let complex = SubstanceId::from("dynamic:complex:destroy_iron_ii:destroy_ammonia_6");
+        let complex_substance = dynamic.substance(&complex).unwrap();
+        assert_eq!(complex_substance.charge, 2);
+        assert_eq!(first.added_substances, 1);
+        assert_eq!(second.added_substances, 0);
+        assert!(dynamic.dynamic_complex_specs.iter().any(|spec| {
+            spec.id == complex
+                && spec.central_ion == iron
+                && spec
+                    .ligands
+                    .iter()
+                    .any(|ligand| ligand.substance_id == ammonia && ligand.count == 6)
+        }));
+
+        let registry = dynamic.to_registry().unwrap();
+        assert!(registry
+            .complex_specs()
+            .any(|registered| registered.id == complex));
+
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        mixture.add_substance(&registry, iron, 0.01).unwrap();
+        mixture.add_substance(&registry, ammonia, 0.20).unwrap();
+        react_for_tick(&registry, &mut mixture, 1).unwrap();
+
+        assert!(mixture.concentration_of(&complex) > 0.0);
     }
 
     #[test]

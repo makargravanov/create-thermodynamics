@@ -693,10 +693,7 @@ impl ReactionBuilder {
         temperature_kelvin: f64,
     ) -> ChemistryResult<Self> {
         self.reaction.thermodynamics = Some(
-            ReactionThermodynamics::from_equilibrium_constant_at_kelvin(
-                value,
-                temperature_kelvin,
-            )?,
+            ReactionThermodynamics::from_equilibrium_constant_at_kelvin(value, temperature_kelvin)?,
         );
         Ok(self)
     }

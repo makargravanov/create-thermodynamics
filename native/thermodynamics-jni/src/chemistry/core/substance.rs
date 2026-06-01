@@ -78,6 +78,7 @@ impl From<&str> for SubstanceTagId {
 #[derive(Debug, Clone)]
 pub struct Substance {
     pub id: SubstanceId,
+    pub representation: SubstanceRepresentation,
     pub charge: i32,
     pub molar_mass_grams: f64,
     pub liquid_density_grams_per_bucket: f64,
@@ -100,6 +101,163 @@ pub struct Substance {
     pub phase_properties: SubstancePhaseBehavior,
     pub redox_roles: Vec<RedoxRole>,
     pub explicit_oxidation_states: Vec<ExplicitOxidationState>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SubstanceRepresentation {
+    Molecular,
+    Ion {
+        parent_element: Option<String>,
+    },
+    IonicSolid {
+        formula_units: Vec<MaterialFormulaUnit>,
+    },
+    Metal {
+        element_symbol: String,
+    },
+    Oxide {
+        formula_units: Vec<MaterialFormulaUnit>,
+    },
+    Hydrate {
+        formula_units: Vec<MaterialFormulaUnit>,
+        water_count: u32,
+    },
+    SurfaceMaterial {
+        active_site: Option<String>,
+    },
+    UnspecifiedMaterial {
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaterialFormulaUnit {
+    pub substance_id: SubstanceId,
+    pub coefficient: u32,
+}
+
+impl MaterialFormulaUnit {
+    pub fn new(substance_id: impl Into<SubstanceId>, coefficient: u32) -> Self {
+        Self {
+            substance_id: substance_id.into(),
+            coefficient,
+        }
+    }
+}
+
+impl SubstanceRepresentation {
+    pub fn validate(&self, substance: &Substance) -> ChemistryResult<()> {
+        match self {
+            SubstanceRepresentation::Molecular => Ok(()),
+            SubstanceRepresentation::Ion { parent_element } => {
+                if substance.charge == 0 {
+                    return invalid_representation(
+                        substance,
+                        "ion representation requires non-zero charge",
+                    );
+                }
+                validate_optional_non_empty_text(
+                    substance,
+                    parent_element.as_deref(),
+                    "ion parent element",
+                )
+            }
+            SubstanceRepresentation::IonicSolid { formula_units } => {
+                if substance.charge != 0 {
+                    return invalid_representation(substance, "ionic solids must be neutral");
+                }
+                if substance.molecular_structure.is_some() {
+                    return invalid_representation(
+                        substance,
+                        "ionic solids must not pretend to be molecular graphs",
+                    );
+                }
+                if !substance.phase_properties.can_precipitate {
+                    return invalid_representation(
+                        substance,
+                        "ionic solids must be able to exist as a solid phase",
+                    );
+                }
+                if substance.phase_properties.solvent_role != SolventRole::NotSolvent {
+                    return invalid_representation(substance, "ionic solids must not be solvents");
+                }
+                validate_formula_units(substance, formula_units)
+            }
+            SubstanceRepresentation::Metal { element_symbol } => {
+                if substance.charge != 0 {
+                    return invalid_representation(substance, "metal materials must be neutral");
+                }
+                validate_non_empty_text(substance, element_symbol, "metal element symbol")?;
+                if substance.phase_properties.solvent_role != SolventRole::NotSolvent {
+                    return invalid_representation(
+                        substance,
+                        "metal materials must not be solvents",
+                    );
+                }
+                Ok(())
+            }
+            SubstanceRepresentation::Oxide { formula_units } => {
+                if substance.charge != 0 {
+                    return invalid_representation(substance, "oxide materials must be neutral");
+                }
+                if substance.phase_properties.solvent_role != SolventRole::NotSolvent {
+                    return invalid_representation(
+                        substance,
+                        "oxide materials must not be solvents",
+                    );
+                }
+                validate_formula_units(substance, formula_units)
+            }
+            SubstanceRepresentation::Hydrate {
+                formula_units,
+                water_count,
+            } => {
+                if substance.charge != 0 {
+                    return invalid_representation(substance, "hydrates must be neutral");
+                }
+                if *water_count == 0 {
+                    return invalid_representation(substance, "hydrates must contain water");
+                }
+                validate_formula_units(substance, formula_units)
+            }
+            SubstanceRepresentation::SurfaceMaterial { active_site } => {
+                if substance.charge != 0 {
+                    return invalid_representation(substance, "surface materials must be neutral");
+                }
+                validate_optional_non_empty_text(
+                    substance,
+                    active_site.as_deref(),
+                    "surface active site",
+                )?;
+                if substance.phase_properties.solvent_role != SolventRole::NotSolvent {
+                    return invalid_representation(
+                        substance,
+                        "surface materials must not be solvents",
+                    );
+                }
+                Ok(())
+            }
+            SubstanceRepresentation::UnspecifiedMaterial { reason } => {
+                validate_non_empty_text(substance, reason, "unspecified material reason")
+            }
+        }?;
+        if matches!(
+            self,
+            SubstanceRepresentation::IonicSolid { .. }
+                | SubstanceRepresentation::Metal { .. }
+                | SubstanceRepresentation::Oxide { .. }
+                | SubstanceRepresentation::Hydrate { .. }
+                | SubstanceRepresentation::SurfaceMaterial { .. }
+        ) && substance.boiling_point_kelvin.is_finite()
+            && substance.boiling_point_kelvin < substance.melting_point_kelvin
+        {
+            return invalid_representation(
+                substance,
+                "material boiling point must not be below its melting point",
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -378,6 +536,13 @@ impl Substance {
         };
         Self {
             id,
+            representation: if charge == 0 {
+                SubstanceRepresentation::Molecular
+            } else {
+                SubstanceRepresentation::Ion {
+                    parent_element: None,
+                }
+            },
             charge,
             molar_mass_grams,
             liquid_density_grams_per_bucket,
@@ -419,6 +584,11 @@ impl Substance {
 
     pub fn with_phase_properties(mut self, phase_properties: SubstancePhaseProperties) -> Self {
         self.phase_properties = phase_properties;
+        self
+    }
+
+    pub fn with_representation(mut self, representation: SubstanceRepresentation) -> Self {
+        self.representation = representation;
         self
     }
 
@@ -650,6 +820,7 @@ impl Substance {
             model.validate(&self.id)?;
         }
         self.phase_properties.validate(&self.id, self.charge)?;
+        self.representation.validate(self)?;
         if !self.explicit_oxidation_states.is_empty() {
             explicit_oxidation_assignment(&self.id, self.charge, &self.explicit_oxidation_states)?;
         }
@@ -699,6 +870,55 @@ impl Substance {
         }
         Ok(())
     }
+}
+
+fn validate_formula_units(
+    substance: &Substance,
+    formula_units: &[MaterialFormulaUnit],
+) -> ChemistryResult<()> {
+    if formula_units.is_empty() {
+        return invalid_representation(substance, "material formula must not be empty");
+    }
+    for unit in formula_units {
+        if unit.substance_id.as_str().trim().is_empty() {
+            return invalid_representation(
+                substance,
+                "material formula component id must not be empty",
+            );
+        }
+        if unit.coefficient == 0 {
+            return invalid_representation(
+                substance,
+                "material formula coefficients must be greater than zero",
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_non_empty_text(substance: &Substance, value: &str, name: &str) -> ChemistryResult<()> {
+    if value.trim().is_empty() {
+        return invalid_representation(substance, &format!("{name} must not be empty"));
+    }
+    Ok(())
+}
+
+fn validate_optional_non_empty_text(
+    substance: &Substance,
+    value: Option<&str>,
+    name: &str,
+) -> ChemistryResult<()> {
+    if let Some(value) = value {
+        validate_non_empty_text(substance, value, name)?;
+    }
+    Ok(())
+}
+
+fn invalid_representation<T>(substance: &Substance, reason: &str) -> ChemistryResult<T> {
+    Err(ChemistryError::InvalidSubstance {
+        substance_id: substance.id.to_string(),
+        reason: reason.to_string(),
+    })
 }
 
 fn validate_solubility_limit(
@@ -808,6 +1028,65 @@ mod tests {
         let error = substance.validate().unwrap_err();
 
         assert!(matches!(error, ChemistryError::InvalidSubstance { .. }));
+    }
+
+    #[test]
+    fn ionic_solid_representation_requires_neutral_precipitating_material() {
+        let valid = valid_substance()
+            .with_phase_properties(SubstancePhaseProperties {
+                preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+                aqueous_solubility_mol_per_bucket: Some(0.01),
+                organic_solubility_mol_per_bucket: Some(0.0),
+                can_precipitate: true,
+                can_form_liquid_phase: false,
+                solvent_role: SolventRole::NotSolvent,
+            })
+            .with_representation(SubstanceRepresentation::IonicSolid {
+                formula_units: vec![
+                    MaterialFormulaUnit::new("destroy:sodium_ion", 1),
+                    MaterialFormulaUnit::new("destroy:chloride", 1),
+                ],
+            });
+        assert!(valid.validate().is_ok());
+
+        let charged = Substance::new(
+            "destroy:bad_salt",
+            1,
+            58.5,
+            2_160_000.0,
+            f64::MAX,
+            50.0,
+            0.0,
+        )
+        .with_phase_properties(SubstancePhaseProperties {
+            preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+            aqueous_solubility_mol_per_bucket: Some(0.01),
+            organic_solubility_mol_per_bucket: Some(0.0),
+            can_precipitate: true,
+            can_form_liquid_phase: false,
+            solvent_role: SolventRole::NotSolvent,
+        })
+        .with_representation(SubstanceRepresentation::IonicSolid {
+            formula_units: vec![MaterialFormulaUnit::new("destroy:sodium_ion", 1)],
+        });
+        assert!(matches!(
+            charged.validate().unwrap_err(),
+            ChemistryError::InvalidSubstance { .. }
+        ));
+    }
+
+    #[test]
+    fn material_representation_rejects_solvent_metal() {
+        let metal = valid_substance()
+            .with_solvent_role(SolventRole::KnownSolvent)
+            .with_representation(SubstanceRepresentation::Metal {
+                element_symbol: "Fe".to_string(),
+            });
+
+        assert!(matches!(
+            metal.validate().unwrap_err(),
+            ChemistryError::InvalidSubstance { .. }
+        ));
     }
 
     #[test]

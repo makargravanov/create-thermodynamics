@@ -7,15 +7,16 @@ use super::kinetics::{ChannelConditionEffect, ReactionChannel};
 use super::mixture::MixturePhase;
 use super::reaction::{ProductDistribution, Reaction, ReactionId, StoichiometricTerm};
 use super::redox::{
-    validate_half_reaction_conservation, validate_half_reaction_shape, validate_redox_annotation,
-    validate_redox_pair, RedoxHalfReaction, RedoxPair,
+    build_redox_pair_reaction, validate_half_reaction_conservation, validate_half_reaction_shape,
+    validate_redox_annotation, validate_redox_pair, RedoxHalfReaction, RedoxPair, RedoxPairSpec,
 };
 use super::solution::{
     AcidBaseSpec, EquilibriumSpec, IndexedEquilibrium, IndexedEquilibriumTerm,
     IndexedPrecipitation, PrecipitationSpec,
 };
 use super::substance::{
-    SolventRole, Substance, SubstanceAggregateState, SubstanceId, SubstanceTagId,
+    MaterialFormulaUnit, SolventRole, Substance, SubstanceAggregateState, SubstanceId,
+    SubstanceRepresentation, SubstanceTagId,
 };
 
 const MASS_TOLERANCE_GRAMS_PER_MOL: f64 = 1.0e-6;
@@ -325,6 +326,7 @@ pub struct ChemistryRegistryBuilder {
     precipitations: Vec<PrecipitationSpec>,
     redox_half_reactions: Vec<RedoxHalfReaction>,
     redox_pairs: Vec<RedoxPair>,
+    redox_pair_specs: Vec<RedoxPairSpec>,
     catalyst_surface_specs: Vec<CatalystSurfaceSpec>,
     complex_specs: Vec<ComplexSpec>,
 }
@@ -387,6 +389,7 @@ impl ChemistryRegistryBuilder {
                 .collect(),
             redox_half_reactions: registry.redox_half_reactions.values().cloned().collect(),
             redox_pairs: Vec::new(),
+            redox_pair_specs: Vec::new(),
             catalyst_surface_specs: registry.catalyst_surface_specs.values().cloned().collect(),
             complex_specs: registry.complex_specs.clone(),
         }
@@ -452,6 +455,20 @@ impl ChemistryRegistryBuilder {
         self
     }
 
+    pub fn redox_pair_from_halves(
+        mut self,
+        reaction_id: impl Into<ReactionId>,
+        oxidation_half_id: impl Into<String>,
+        reduction_half_id: impl Into<String>,
+    ) -> Self {
+        self.redox_pair_specs.push(RedoxPairSpec::new(
+            reaction_id,
+            oxidation_half_id,
+            reduction_half_id,
+        ));
+        self
+    }
+
     pub fn catalyst_surface_spec(mut self, spec: CatalystSurfaceSpec) -> Self {
         self.catalyst_surface_specs.push(spec);
         self
@@ -476,6 +493,9 @@ impl ChemistryRegistryBuilder {
         for pair in self.redox_pairs {
             validate_redox_pair(&pair, &redox_half_reactions)?;
             reactions.push(pair.reaction);
+        }
+        for spec in self.redox_pair_specs {
+            reactions.push(build_redox_pair_reaction(&spec, &redox_half_reactions)?);
         }
         let mut substances = self.substances;
         let mut equilibria = self.equilibria;
@@ -574,6 +594,7 @@ impl ChemistryRegistryBuilder {
         };
         registry.validate_redox_half_reactions()?;
         registry.validate_substance_tags()?;
+        registry.validate_material_representations()?;
         registry.validate_reactions()?;
         Ok(registry)
     }
@@ -590,6 +611,65 @@ impl ChemistryRegistry {
                     });
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn validate_material_representations(&self) -> ChemistryResult<()> {
+        for substance in &self.substances_by_index {
+            match &substance.representation {
+                SubstanceRepresentation::IonicSolid { formula_units }
+                | SubstanceRepresentation::Oxide { formula_units } => {
+                    self.validate_material_formula(substance, formula_units, &[])?;
+                }
+                SubstanceRepresentation::Hydrate {
+                    formula_units,
+                    water_count,
+                } => {
+                    let water = SubstanceId::from("destroy:water");
+                    let hydrate_water = [MaterialFormulaUnit::new(water, *water_count)];
+                    self.validate_material_formula(substance, formula_units, &hydrate_water)?;
+                }
+                SubstanceRepresentation::Molecular
+                | SubstanceRepresentation::Ion { .. }
+                | SubstanceRepresentation::Metal { .. }
+                | SubstanceRepresentation::SurfaceMaterial { .. }
+                | SubstanceRepresentation::UnspecifiedMaterial { .. } => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_material_formula(
+        &self,
+        material: &Substance,
+        formula_units: &[MaterialFormulaUnit],
+        extra_units: &[MaterialFormulaUnit],
+    ) -> ChemistryResult<()> {
+        let mut mass = 0.0;
+        let mut charge = 0;
+        for unit in formula_units.iter().chain(extra_units.iter()) {
+            let component = self.substance(&unit.substance_id)?;
+            mass += component.molar_mass_grams * unit.coefficient as f64;
+            charge += component.charge * unit.coefficient as i32;
+        }
+        if charge != material.charge {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: material.id.to_string(),
+                reason: format!(
+                    "material formula charge {charge} does not match substance charge {}",
+                    material.charge
+                ),
+            });
+        }
+        if (mass - material.molar_mass_grams).abs() > MASS_TOLERANCE_GRAMS_PER_MOL {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: material.id.to_string(),
+                reason: format!(
+                    "material formula mass {mass} does not match substance mass {}",
+                    material.molar_mass_grams
+                ),
+            });
         }
         Ok(())
     }
@@ -1932,5 +2012,60 @@ fn mark_reaction_candidate(scratch: &mut ReactionCandidateScratch, reaction_inde
             *slot = scratch.generation;
             scratch.candidates.push(reaction_index);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chemistry::substance::{LiquidPhasePreference, SubstancePhaseProperties};
+
+    fn aqueous_ion(id: &str, charge: i32, mass: f64) -> Substance {
+        Substance::new(id, charge, mass, 1000.0, f64::MAX, 50.0, 0.0).with_phase_properties(
+            SubstancePhaseProperties {
+                preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+                aqueous_solubility_mol_per_bucket: Some(10.0),
+                organic_solubility_mol_per_bucket: Some(0.0),
+                can_precipitate: false,
+                can_form_liquid_phase: false,
+                solvent_role: SolventRole::NotSolvent,
+            },
+        )
+    }
+
+    #[test]
+    fn material_formula_mass_and_charge_are_checked_by_registry() {
+        let bad_salt = Substance::new(
+            "destroy:bad_sodium_chloride",
+            0,
+            100.0,
+            2_160_000.0,
+            f64::MAX,
+            50.0,
+            0.0,
+        )
+        .with_phase_properties(SubstancePhaseProperties {
+            preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+            aqueous_solubility_mol_per_bucket: Some(0.01),
+            organic_solubility_mol_per_bucket: Some(0.0),
+            can_precipitate: true,
+            can_form_liquid_phase: false,
+            solvent_role: SolventRole::NotSolvent,
+        })
+        .with_representation(SubstanceRepresentation::IonicSolid {
+            formula_units: vec![
+                MaterialFormulaUnit::new("destroy:sodium_ion", 1),
+                MaterialFormulaUnit::new("destroy:chloride", 1),
+            ],
+        });
+
+        let error = ChemistryRegistryBuilder::new()
+            .substance(aqueous_ion("destroy:sodium_ion", 1, 22.99))
+            .substance(aqueous_ion("destroy:chloride", -1, 35.45))
+            .substance(bad_salt)
+            .build()
+            .unwrap_err();
+
+        assert!(matches!(error, ChemistryError::InvalidSubstance { .. }));
     }
 }

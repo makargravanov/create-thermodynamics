@@ -92,8 +92,8 @@ impl ReactionThermodynamics {
         enthalpy_change_kj_per_mol: f64,
         temperature_kelvin: f64,
     ) -> ChemistryResult<f64> {
-        let delta_g =
-            self.gibbs_free_energy_change_at_kelvin(enthalpy_change_kj_per_mol, temperature_kelvin)?;
+        let delta_g = self
+            .gibbs_free_energy_change_at_kelvin(enthalpy_change_kj_per_mol, temperature_kelvin)?;
         equilibrium_constant_from_delta_g(delta_g, temperature_kelvin)
     }
 }
@@ -108,9 +108,9 @@ pub fn equilibrium_constant_from_delta_g(
             "Gibbs free energy change must be finite".to_string(),
         ));
     }
-    let value =
-        (-(delta_g_kj_per_mol * 1000.0) / (GAS_CONSTANT_J_PER_MOL_KELVIN * temperature_kelvin))
-            .exp();
+    let value = (-(delta_g_kj_per_mol * 1000.0)
+        / (GAS_CONSTANT_J_PER_MOL_KELVIN * temperature_kelvin))
+        .exp();
     validate_equilibrium_constant(value, "derived equilibrium constant")?;
     Ok(value)
 }
@@ -121,10 +121,7 @@ pub fn delta_g_from_equilibrium_constant(
 ) -> ChemistryResult<f64> {
     validate_temperature(temperature_kelvin, "thermodynamic temperature")?;
     validate_equilibrium_constant(equilibrium_constant, "equilibrium constant")?;
-    Ok(-GAS_CONSTANT_J_PER_MOL_KELVIN
-        * temperature_kelvin
-        * equilibrium_constant.ln()
-        / 1000.0)
+    Ok(-GAS_CONSTANT_J_PER_MOL_KELVIN * temperature_kelvin * equilibrium_constant.ln() / 1000.0)
 }
 
 pub fn reaction_thermodynamic_rate_factor(
