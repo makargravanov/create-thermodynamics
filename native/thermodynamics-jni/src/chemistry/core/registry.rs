@@ -10,7 +10,10 @@ use super::redox::{
     validate_half_reaction_conservation, validate_half_reaction_shape, validate_redox_annotation,
     validate_redox_pair, RedoxHalfReaction, RedoxPair,
 };
-use super::solution::{AcidBaseSpec, EquilibriumSpec, IndexedEquilibrium, IndexedEquilibriumTerm};
+use super::solution::{
+    AcidBaseSpec, EquilibriumSpec, IndexedEquilibrium, IndexedEquilibriumTerm,
+    IndexedPrecipitation, PrecipitationSpec,
+};
 use super::substance::{
     SolventRole, Substance, SubstanceAggregateState, SubstanceId, SubstanceTagId,
 };
@@ -135,6 +138,7 @@ pub struct ChemistryRegistry {
     gas_solubility: BTreeMap<SubstanceIndex, GasSolubilityModel>,
     acid_base_specs: Vec<AcidBaseSpec>,
     indexed_equilibria: Vec<IndexedEquilibrium>,
+    indexed_precipitations: Vec<IndexedPrecipitation>,
     redox_half_reactions: BTreeMap<String, RedoxHalfReaction>,
     catalyst_surface_specs: BTreeMap<CatalystSurfaceId, CatalystSurfaceSpec>,
     complex_specs: Vec<ComplexSpec>,
@@ -284,6 +288,10 @@ impl ChemistryRegistry {
         &self.indexed_equilibria
     }
 
+    pub(crate) fn indexed_precipitations(&self) -> &[IndexedPrecipitation] {
+        &self.indexed_precipitations
+    }
+
     pub fn redox_half_reactions(&self) -> impl Iterator<Item = &RedoxHalfReaction> {
         self.redox_half_reactions.values()
     }
@@ -310,6 +318,7 @@ pub struct ChemistryRegistryBuilder {
     gas_solubility: Vec<(SubstanceId, GasSolubilityModel)>,
     acid_base_specs: Vec<AcidBaseSpec>,
     equilibria: Vec<EquilibriumSpec>,
+    precipitations: Vec<PrecipitationSpec>,
     redox_half_reactions: Vec<RedoxHalfReaction>,
     redox_pairs: Vec<RedoxPair>,
     catalyst_surface_specs: Vec<CatalystSurfaceSpec>,
@@ -367,6 +376,11 @@ impl ChemistryRegistryBuilder {
                 })
                 .map(|equilibrium| equilibrium.spec.clone())
                 .collect(),
+            precipitations: registry
+                .indexed_precipitations
+                .iter()
+                .map(|precipitation| precipitation.spec.clone())
+                .collect(),
             redox_half_reactions: registry.redox_half_reactions.values().cloned().collect(),
             redox_pairs: Vec::new(),
             catalyst_surface_specs: registry.catalyst_surface_specs.values().cloned().collect(),
@@ -416,6 +430,11 @@ impl ChemistryRegistryBuilder {
 
     pub fn equilibrium(mut self, spec: EquilibriumSpec) -> Self {
         self.equilibria.push(spec);
+        self
+    }
+
+    pub fn precipitation(mut self, spec: PrecipitationSpec) -> Self {
+        self.precipitations.push(spec);
         self
     }
 
@@ -525,6 +544,11 @@ impl ChemistryRegistryBuilder {
         }
         let indexed_equilibria =
             build_indexed_equilibria(&equilibria, &substances_by_index, &substance_id_to_index)?;
+        let indexed_precipitations = build_indexed_precipitations(
+            &self.precipitations,
+            &substances_by_index,
+            &substance_id_to_index,
+        )?;
         let registry = ChemistryRegistry {
             substances_by_index,
             substance_id_to_index,
@@ -539,6 +563,7 @@ impl ChemistryRegistryBuilder {
             gas_solubility,
             acid_base_specs,
             indexed_equilibria,
+            indexed_precipitations,
             redox_half_reactions,
             catalyst_surface_specs,
             complex_specs: complex_specs.into_iter().map(|(spec, _)| spec).collect(),
@@ -1372,6 +1397,125 @@ fn build_indexed_equilibria(
         });
     }
     Ok(result)
+}
+
+fn build_indexed_precipitations(
+    specs: &[PrecipitationSpec],
+    substances: &[Substance],
+    substance_id_to_index: &BTreeMap<SubstanceId, SubstanceIndex>,
+) -> ChemistryResult<Vec<IndexedPrecipitation>> {
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::new();
+    for spec in specs {
+        validate_precipitation_spec_shape(spec)?;
+        if !seen.insert(spec.id.clone()) {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: spec.id.clone(),
+                reason: "duplicate precipitation spec".to_string(),
+            });
+        }
+        let solid = *substance_id_to_index
+            .get(&spec.solid)
+            .ok_or_else(|| ChemistryError::UnknownSubstance {
+                reaction_id: spec.id.clone(),
+                substance_id: spec.solid.to_string(),
+            })?;
+        if !substances[solid.0].phase_properties.can_precipitate {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: spec.solid.to_string(),
+                reason: "precipitation solid must be allowed to precipitate".to_string(),
+            });
+        }
+        let ions = index_equilibrium_terms(&spec.id, &spec.ions, substance_id_to_index)?;
+        validate_precipitation_conservation(spec, substances, solid, &ions)?;
+        result.push(IndexedPrecipitation {
+            spec: spec.clone(),
+            solid,
+            ions,
+        });
+    }
+    Ok(result)
+}
+
+fn validate_precipitation_spec_shape(spec: &PrecipitationSpec) -> ChemistryResult<()> {
+    if spec.id.trim().is_empty() {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: "<precipitation>".to_string(),
+            reason: "precipitation id must not be empty".to_string(),
+        });
+    }
+    if spec.ions.is_empty() {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: spec.id.clone(),
+            reason: "precipitation must have dissolved ions".to_string(),
+        });
+    }
+    if !spec.solubility_product.is_finite() || spec.solubility_product <= 0.0 {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: spec.id.clone(),
+            reason: "solubility product must be positive and finite".to_string(),
+        });
+    }
+    if !spec.reference_temperature_kelvin.is_finite() || spec.reference_temperature_kelvin <= 0.0 {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: spec.id.clone(),
+            reason: "precipitation reference temperature must be positive and finite".to_string(),
+        });
+    }
+    if !spec.enthalpy_change_kj_per_mol.is_finite() {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: spec.id.clone(),
+            reason: "precipitation enthalpy change must be finite".to_string(),
+        });
+    }
+    for term in &spec.ions {
+        if term.coefficient == 0 {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: spec.id.clone(),
+                reason: "precipitation coefficients must be greater than zero".to_string(),
+            });
+        }
+        if term.phase != MixturePhase::Aqueous {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: spec.id.clone(),
+                reason: "precipitation ions must be aqueous".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_precipitation_conservation(
+    spec: &PrecipitationSpec,
+    substances: &[Substance],
+    solid: SubstanceIndex,
+    ions: &[IndexedEquilibriumTerm],
+) -> ChemistryResult<()> {
+    let ion_charge = ions
+        .iter()
+        .map(|term| substances[term.substance.0].charge * term.coefficient as i32)
+        .sum::<i32>();
+    let solid_charge = substances[solid.0].charge;
+    if solid_charge != ion_charge {
+        return Err(ChemistryError::ChargeNotConserved {
+            reaction_id: spec.id.clone(),
+            reactants: solid_charge,
+            products: ion_charge,
+        });
+    }
+    let ion_mass = ions
+        .iter()
+        .map(|term| substances[term.substance.0].molar_mass_grams * term.coefficient as f64)
+        .sum::<f64>();
+    let solid_mass = substances[solid.0].molar_mass_grams;
+    if (solid_mass - ion_mass).abs() > MASS_TOLERANCE_GRAMS_PER_MOL {
+        return Err(ChemistryError::MassNotConserved {
+            reaction_id: spec.id.clone(),
+            reactants: solid_mass,
+            products: ion_mass,
+        });
+    }
+    Ok(())
 }
 
 fn validate_equilibrium_spec_shape(spec: &EquilibriumSpec) -> ChemistryResult<()> {

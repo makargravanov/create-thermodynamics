@@ -189,6 +189,73 @@ pub struct EquilibriumSpec {
     pub enthalpy_change_kj_per_mol: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrecipitationSpec {
+    pub id: String,
+    pub solid: SubstanceId,
+    pub ions: Vec<EquilibriumTerm>,
+    pub solubility_product: f64,
+    pub reference_temperature_kelvin: f64,
+    pub enthalpy_change_kj_per_mol: f64,
+}
+
+impl PrecipitationSpec {
+    pub fn new(
+        id: impl Into<String>,
+        solid: impl Into<SubstanceId>,
+        ions: impl IntoIterator<Item = (SubstanceId, u32)>,
+        solubility_product: f64,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            solid: solid.into(),
+            ions: ions
+                .into_iter()
+                .map(|(substance_id, coefficient)| {
+                    EquilibriumTerm::new(substance_id, coefficient, MixturePhase::Aqueous)
+                })
+                .collect(),
+            solubility_product,
+            reference_temperature_kelvin: 298.0,
+            enthalpy_change_kj_per_mol: 0.0,
+        }
+    }
+
+    pub fn with_reference_temperature_kelvin(mut self, value: f64) -> Self {
+        self.reference_temperature_kelvin = value;
+        self
+    }
+
+    pub fn with_enthalpy_change_kj_per_mol(mut self, value: f64) -> Self {
+        self.enthalpy_change_kj_per_mol = value;
+        self
+    }
+
+    pub(crate) fn constant_at(&self, temperature_kelvin: f64) -> ChemistryResult<f64> {
+        if !temperature_kelvin.is_finite() || temperature_kelvin <= 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "temperature must be positive and finite for precipitation equilibrium"
+                    .to_string(),
+            ));
+        }
+        if self.enthalpy_change_kj_per_mol == 0.0 {
+            return Ok(self.solubility_product);
+        }
+        let factor = (-self.enthalpy_change_kj_per_mol * 1000.0
+            / super::reaction::GAS_CONSTANT_J_PER_MOL_KELVIN
+            * (1.0 / temperature_kelvin - 1.0 / self.reference_temperature_kelvin))
+            .exp();
+        let value = self.solubility_product * factor;
+        if !value.is_finite() || value <= 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "solubility product '{}' became invalid at current temperature",
+                self.id
+            )));
+        }
+        Ok(value)
+    }
+}
+
 impl EquilibriumSpec {
     pub fn new(
         id: impl Into<String>,
@@ -262,6 +329,13 @@ pub(crate) struct IndexedEquilibrium {
     pub spec: EquilibriumSpec,
     pub reactants: Vec<IndexedEquilibriumTerm>,
     pub products: Vec<IndexedEquilibriumTerm>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct IndexedPrecipitation {
+    pub spec: PrecipitationSpec,
+    pub solid: SubstanceIndex,
+    pub ions: Vec<IndexedEquilibriumTerm>,
 }
 
 pub fn solution_state(
@@ -391,6 +465,9 @@ pub(crate) fn equilibrate_solution_equilibria(
         for equilibrium in registry.indexed_equilibria() {
             pass_delta = pass_delta.max(apply_equilibrium(registry, mixture, equilibrium)?);
         }
+        for precipitation in registry.indexed_precipitations() {
+            pass_delta = pass_delta.max(apply_precipitation(registry, mixture, precipitation)?);
+        }
         max_delta = max_delta.max(pass_delta);
         if pass_delta <= SOLUTION_EQUILIBRIUM_DELTA_TOLERANCE_MOL_PER_BUCKET {
             return Ok(max_delta);
@@ -400,6 +477,117 @@ pub(crate) fn equilibrate_solution_equilibria(
         equilibrium_id: "<all>".to_string(),
         reason: "equilibrium solver did not reach a fixed point".to_string(),
     })
+}
+
+fn apply_precipitation(
+    registry: &ChemistryRegistry,
+    mixture: &mut Mixture,
+    precipitation: &IndexedPrecipitation,
+) -> ChemistryResult<f64> {
+    let constant = precipitation.spec.constant_at(mixture.temperature_kelvin())?;
+    let ion_product = precipitation_ion_product(registry, mixture, precipitation)?;
+    let solid_amount = mixture.concentration_of_index_in_phases(
+        precipitation.solid,
+        &[MixturePhase::Solid],
+    );
+    if ion_product == 0.0 && solid_amount <= EQUILIBRIUM_MIN_EXTENT_MOL_PER_BUCKET {
+        return Ok(0.0);
+    }
+    let precipitate = ion_product > constant;
+    if !precipitate && solid_amount <= EQUILIBRIUM_MIN_EXTENT_MOL_PER_BUCKET {
+        return Ok(0.0);
+    }
+    let relative_error = if ion_product == 0.0 {
+        f64::INFINITY
+    } else {
+        ((ion_product / constant).ln()).abs()
+    };
+    if relative_error <= EQUILIBRIUM_QUOTIENT_TOLERANCE {
+        return Ok(0.0);
+    }
+    let max_extent = if precipitate {
+        precipitation
+            .ions
+            .iter()
+            .map(|term| {
+                mixture.concentration_of_index_in_phases(term.substance, &[MixturePhase::Aqueous])
+                    / term.coefficient as f64
+            })
+            .fold(f64::INFINITY, f64::min)
+    } else {
+        solid_amount
+    };
+    if max_extent <= EQUILIBRIUM_MIN_EXTENT_MOL_PER_BUCKET {
+        return Ok(0.0);
+    }
+    let mut low = 0.0;
+    let mut high = max_extent;
+    let initial_distance = equilibrium_distance(constant, ion_product);
+    for _ in 0..80 {
+        let mid = (low + high) * 0.5;
+        let trial = trial_precipitation_ion_product(registry, mixture, precipitation, precipitate, mid)?;
+        let distance = equilibrium_distance(constant, trial);
+        let on_target_side = if precipitate {
+            trial >= constant
+        } else {
+            trial <= constant
+        };
+        if distance < initial_distance && on_target_side {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    if low <= EQUILIBRIUM_MIN_EXTENT_MOL_PER_BUCKET {
+        return Ok(0.0);
+    }
+    apply_precipitation_extent(registry, mixture, precipitation, precipitate, low)
+}
+
+fn precipitation_ion_product(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    precipitation: &IndexedPrecipitation,
+) -> ChemistryResult<f64> {
+    term_activity_product(registry, mixture, &precipitation.ions)
+}
+
+fn trial_precipitation_ion_product(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    precipitation: &IndexedPrecipitation,
+    precipitate: bool,
+    extent: f64,
+) -> ChemistryResult<f64> {
+    let mut cloned = mixture.clone();
+    apply_precipitation_extent(registry, &mut cloned, precipitation, precipitate, extent)?;
+    precipitation_ion_product(registry, &cloned, precipitation)
+}
+
+fn apply_precipitation_extent(
+    registry: &ChemistryRegistry,
+    mixture: &mut Mixture,
+    precipitation: &IndexedPrecipitation,
+    precipitate: bool,
+    extent: f64,
+) -> ChemistryResult<f64> {
+    if precipitate {
+        let reactants = precipitation
+            .ions
+            .iter()
+            .map(|term| (term.substance, term.coefficient, vec![MixturePhase::Aqueous]))
+            .collect::<Vec<_>>();
+        let products = vec![(precipitation.solid, 1.0, MixturePhase::Solid)];
+        mixture.apply_reaction_phase_deltas_by_index(registry, &reactants, &products, extent)
+    } else {
+        let reactants = vec![(precipitation.solid, 1, vec![MixturePhase::Solid])];
+        let products = precipitation
+            .ions
+            .iter()
+            .map(|term| (term.substance, term.coefficient as f64, MixturePhase::Aqueous))
+            .collect::<Vec<_>>();
+        mixture.apply_reaction_phase_deltas_by_index(registry, &reactants, &products, extent)
+    }
 }
 
 fn apply_equilibrium(
@@ -548,7 +736,9 @@ fn apply_equilibrium_extent(
 mod tests {
     use super::*;
     use crate::chemistry::registry::ChemistryRegistryBuilder;
-    use crate::chemistry::substance::{Substance, SubstancePhaseProperties};
+    use crate::chemistry::substance::{
+        LiquidPhasePreference, SolventRole, Substance, SubstancePhaseProperties,
+    };
 
     fn aqueous_substance(id: &str, charge: i32, mass: f64) -> Substance {
         let phase_properties = if id == "destroy:water" {
@@ -558,6 +748,18 @@ mod tests {
         };
         Substance::new(id, charge, mass, 1_000.0, 10_000.0, 75.0, 20_000.0)
             .with_phase_properties(phase_properties)
+    }
+
+    fn precipitating_solid(id: &str, mass: f64) -> Substance {
+        Substance::new(id, 0, mass, 1_000.0, 1_000.0, 75.0, 20_000.0)
+            .with_phase_properties(SubstancePhaseProperties {
+                preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+                aqueous_solubility_mol_per_bucket: Some(0.0),
+                organic_solubility_mol_per_bucket: Some(0.0),
+                can_precipitate: true,
+                can_form_liquid_phase: false,
+                solvent_role: SolventRole::NotSolvent,
+            })
     }
 
     fn acid_registry() -> ChemistryRegistry {
@@ -599,6 +801,25 @@ mod tests {
                 "destroy:weak_acid",
                 "destroy:weak_base",
                 4.76,
+            ))
+            .build()
+            .unwrap()
+    }
+
+    fn precipitation_registry() -> ChemistryRegistry {
+        ChemistryRegistryBuilder::new()
+            .substance(aqueous_substance("destroy:water", 0, 18.0))
+            .substance(aqueous_substance("destroy:silver_ion", 1, 108.0))
+            .substance(aqueous_substance("destroy:chloride", -1, 35.5))
+            .substance(precipitating_solid("destroy:silver_chloride", 143.5))
+            .precipitation(PrecipitationSpec::new(
+                "destroy:silver_chloride.precipitation",
+                "destroy:silver_chloride",
+                [
+                    (SubstanceId::from("destroy:silver_ion"), 1),
+                    (SubstanceId::from("destroy:chloride"), 1),
+                ],
+                1.0e-4,
             ))
             .build()
             .unwrap()
@@ -692,6 +913,83 @@ mod tests {
         assert!(mixture.concentration_of(&"destroy:weak_acid".into()) > 0.0);
         let ph = mixture.ph(&registry).unwrap().unwrap();
         assert!(ph > 7.0, "weak base pH was {ph}");
+    }
+
+    #[test]
+    fn supersaturated_ions_precipitate_to_solubility_product() {
+        let registry = precipitation_registry();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:silver_ion", 0.1)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:chloride", 0.1)
+            .unwrap();
+
+        equilibrate_solution_equilibria(&registry, &mut mixture).unwrap();
+
+        let silver = SubstanceId::from("destroy:silver_ion");
+        let chloride = SubstanceId::from("destroy:chloride");
+        let product = mixture
+            .activity_of(&registry, &silver, MixturePhase::Aqueous)
+            .unwrap()
+            * mixture
+                .activity_of(&registry, &chloride, MixturePhase::Aqueous)
+                .unwrap();
+        assert!((product / 1.0e-4).ln().abs() < 1.0e-5, "ion product was {product}");
+        assert!(
+            mixture.concentration_in_phase(
+                &SubstanceId::from("destroy:silver_chloride"),
+                MixturePhase::Solid
+            ) > 0.08
+        );
+    }
+
+    #[test]
+    fn common_ion_reduces_dissolved_counter_ion() {
+        let registry = precipitation_registry();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:silver_chloride", 0.05)
+            .unwrap();
+        equilibrate_solution_equilibria(&registry, &mut mixture).unwrap();
+        let silver = SubstanceId::from("destroy:silver_ion");
+        let before = mixture.concentration_in_phase(&silver, MixturePhase::Aqueous);
+
+        mixture
+            .add_substance(&registry, "destroy:chloride", 0.1)
+            .unwrap();
+        equilibrate_solution_equilibria(&registry, &mut mixture).unwrap();
+        let after = mixture.concentration_in_phase(&silver, MixturePhase::Aqueous);
+
+        assert!(after < before, "silver before {before}, after {after}");
+    }
+
+    #[test]
+    fn invalid_precipitation_mass_is_rejected() {
+        let error = ChemistryRegistryBuilder::new()
+            .substance(aqueous_substance("destroy:water", 0, 18.0))
+            .substance(aqueous_substance("destroy:metal", 1, 10.0))
+            .substance(aqueous_substance("destroy:anion", -1, 20.0))
+            .substance(precipitating_solid("destroy:bad_salt", 20.0))
+            .precipitation(PrecipitationSpec::new(
+                "destroy:bad_salt.precipitation",
+                "destroy:bad_salt",
+                [
+                    (SubstanceId::from("destroy:metal"), 1),
+                    (SubstanceId::from("destroy:anion"), 1),
+                ],
+                1.0e-4,
+            ))
+            .build()
+            .unwrap_err();
+        assert!(matches!(error, ChemistryError::MassNotConserved { .. }));
     }
 
     #[test]
