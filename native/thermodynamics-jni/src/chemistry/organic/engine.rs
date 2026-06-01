@@ -138,6 +138,9 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 let reaction =
                     generate_cyanide_nucleophilic_addition(&site, &mut resolver, context)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                let reaction =
+                    generate_borohydride_carbonyl_reduction(&site, &mut resolver, context)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 let reaction = generate_wolff_kishner_reduction(&site, &mut resolver, context)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
@@ -149,6 +152,8 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
             ReactiveSiteKind::Ester => {
                 let site = participant.clone().ester_site()?;
                 let reaction = generate_ester_hydrolysis(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                let reaction = generate_lah_ester_reduction(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             ReactiveSiteKind::PrimaryAmine => {

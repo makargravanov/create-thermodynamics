@@ -217,6 +217,69 @@ pub(crate) fn generate_ester_hydrolysis(
     .build())
 }
 
+pub(crate) fn generate_lah_ester_reduction(
+    site: &EsterSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let carbonyl_oxygen = site.carbonyl_oxygen;
+    let alkoxy_oxygen = site.alkoxy_oxygen;
+    let alkoxy_branch = ester_alkoxy_branch(structure, alkoxy_oxygen, carbon)?;
+
+    let mut acyl_editor = MolecularEditor::new(structure);
+    let acyl_mapping = acyl_editor.remove_atoms(&alkoxy_branch)?;
+    let carbon = mapped_atom(&acyl_mapping, carbon, "ester carbonyl carbon")?;
+    let carbonyl_oxygen = mapped_atom(&acyl_mapping, carbonyl_oxygen, "ester carbonyl oxygen")?;
+    acyl_editor.set_bond_order(carbon, carbonyl_oxygen, 1.0)?;
+    acyl_editor.add_atom(carbonyl_oxygen, "H", 0.0, 1.0)?;
+    acyl_editor.add_atom(carbon, "H", 0.0, 1.0)?;
+    acyl_editor.add_atom(carbon, "H", 0.0, 1.0)?;
+    let acyl_alcohol = resolver.resolve(acyl_editor.finish()?)?;
+
+    let mut alkoxy_editor = MolecularEditor::new(structure);
+    let keep = alkoxy_branch
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    let remove = (0..structure.atoms.len())
+        .filter(|atom| !keep.contains(atom))
+        .collect::<Vec<_>>();
+    let alkoxy_mapping = alkoxy_editor.remove_atoms(&remove)?;
+    let alcohol_oxygen = mapped_atom(&alkoxy_mapping, alkoxy_oxygen, "ester alkoxy oxygen")?;
+    alkoxy_editor.add_atom(alcohol_oxygen, "H", 0.0, 1.0)?;
+    let alkoxy_alcohol = resolver.resolve(alkoxy_editor.finish()?)?;
+
+    Ok(Reaction::builder(generated_site_reaction_id(
+        "lah_ester_reduction",
+        &site.participant,
+    ))
+    .reactant(substance.id.clone(), 1, 1)
+    .chemical_external_reactant(
+        "lithium aluminium hydride hydride/proton equivalents",
+        1.0,
+        4.04,
+        0,
+    )
+    .product(acyl_alcohol, 1)
+    .product(alkoxy_alcohol, 1)
+    .condition(
+        ReactionCondition::new("LAH ester reduction requires dry aprotic conditions")
+            .max_water_activity(0.02),
+    )
+    .activation_energy_kj_per_mol(18.0)
+    .selectivity_profile(
+        SelectivityProfile::new(
+            ReactionType::CarbonylReduction,
+            SiteDescriptorBuilder::carboxylic_acid(),
+        )
+        .with_nucleophile_strength(crate::chemistry::selectivity::NucleophileStrength::VeryStrong)
+        .never_suppress(),
+    )
+    .build())
+}
+
 pub(crate) fn generate_amide_hydrolysis(
     site: &AmideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,

@@ -301,6 +301,45 @@ pub(crate) fn generate_cyanide_nucleophilic_addition(
     .build())
 }
 
+pub(crate) fn generate_borohydride_carbonyl_reduction(
+    site: &CarbonylSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+    _context: &SelectivityContext,
+) -> ChemistryResult<Reaction> {
+    let carbonyl_desc = SiteDescriptorBuilder::from_carbonyl_site(site);
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let oxygen = site.oxygen;
+
+    let mut editor = MolecularEditor::new(structure);
+    editor.set_bond_order(carbon, oxygen, 1.0)?;
+    editor.add_atom(oxygen, "H", 0.0, 1.0)?;
+    editor.add_atom(carbon, "H", 0.0, 1.0)?;
+    let product = resolver.resolve(editor.finish()?)?;
+
+    Ok(Reaction::builder(generated_site_reaction_id(
+        "borohydride_carbonyl_reduction",
+        &site.participant,
+    ))
+    .reactant(substance.id.clone(), 4, 1)
+    .reactant("destroy:borohydride", 1, 1)
+    .reactant("destroy:water", 4, 1)
+    .product(product, 4)
+    .product("destroy:tetrahydroxyborate", 1)
+    .condition(
+        ReactionCondition::new("borohydride selectively reduces aldehydes and ketones in protic workup")
+            .min_water_activity(0.05),
+    )
+    .activation_energy_kj_per_mol(16.0)
+    .selectivity_profile(
+        SelectivityProfile::new(ReactionType::CarbonylReduction, carbonyl_desc)
+            .with_nucleophile_strength(NucleophileStrength::Strong)
+            .never_suppress(),
+    )
+    .build())
+}
+
 pub(crate) fn generate_wolff_kishner_reduction(
     site: &CarbonylSite<'_>,
     resolver: &mut DerivedSubstanceResolver,

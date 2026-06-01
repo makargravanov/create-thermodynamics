@@ -38,6 +38,23 @@ impl SelectivityEngine {
                     .unwrap_or(NucleophileStrength::Moderate),
                 context,
             ),
+            ReactionType::CarbonylReduction => {
+                let mut score = evaluate_carbonyl_addition(
+                    &profile.primary_site,
+                    profile
+                        .nucleophile_strength
+                        .unwrap_or(NucleophileStrength::Strong),
+                    context,
+                );
+                if context.is_acidic() {
+                    score.value *= 0.2;
+                    score.activation_delta += 8.0;
+                    score.reason = format!("hydride is quenched in strongly acidic medium; {}", score.reason);
+                } else {
+                    score.reason = format!("hydride carbonyl reduction: {}", score.reason);
+                }
+                score
+            }
             ReactionType::WittigOlefination
             | ReactionType::HornerWadsworthEmmonsOlefination
             | ReactionType::JuliaOlefination => {

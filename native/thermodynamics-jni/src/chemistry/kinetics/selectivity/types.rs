@@ -275,6 +275,8 @@ pub enum ReactionType {
     FischerEsterification,
     /// Nucleophilic addition to carbonyl
     CarbonylAddition,
+    /// Hydride reduction of aldehydes and ketones to alcohols
+    CarbonylReduction,
     /// Electrophilic addition to alkene/alkyne
     ElectrophilicAddition,
     /// Halogenation at the alpha carbon of an enolizable carbonyl
