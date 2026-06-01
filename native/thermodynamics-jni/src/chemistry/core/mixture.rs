@@ -45,6 +45,36 @@ pub struct OrganicPhaseAmount {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LiquidPhaseId(usize);
 
+impl LiquidPhaseId {
+    pub fn as_usize(self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiquidPhaseSolventAmount {
+    pub substance_id: SubstanceId,
+    pub concentration_mol_per_bucket: f64,
+    pub mole_fraction: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiquidPhaseSnapshot {
+    pub id: LiquidPhaseId,
+    pub coarse_phase: MixturePhase,
+    pub representative_solvent_id: SubstanceId,
+    pub total_solvent_mol_per_bucket: f64,
+    pub solvents: Vec<LiquidPhaseSolventAmount>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiquidPhaseSubstanceAmount {
+    pub phase_id: LiquidPhaseId,
+    pub coarse_phase: MixturePhase,
+    pub representative_solvent_id: SubstanceId,
+    pub concentration_mol_per_bucket: f64,
+}
+
 #[derive(Debug, Clone)]
 struct LiquidPhaseState {
     id: LiquidPhaseId,
@@ -204,6 +234,46 @@ impl Mixture {
 
     pub fn liquid_phase_count(&self, registry: &ChemistryRegistry) -> ChemistryResult<usize> {
         Ok(self.liquid_phases(registry)?.len())
+    }
+
+    pub fn liquid_phase_snapshots(
+        &self,
+        registry: &ChemistryRegistry,
+    ) -> ChemistryResult<Vec<LiquidPhaseSnapshot>> {
+        self.liquid_phases(registry)?
+            .into_iter()
+            .map(|phase| liquid_phase_snapshot(registry, phase))
+            .collect()
+    }
+
+    pub fn liquid_phase_amounts_of(
+        &self,
+        registry: &ChemistryRegistry,
+        substance_id: &SubstanceId,
+    ) -> ChemistryResult<Vec<LiquidPhaseSubstanceAmount>> {
+        self.validate_registry_shape(registry)?;
+        let Some(component) = self
+            .components
+            .iter()
+            .find(|component| &component.substance_id == substance_id)
+        else {
+            return Ok(Vec::new());
+        };
+        self.liquid_phases(registry)?
+            .into_iter()
+            .map(|phase| {
+                let amount = component.amount_in_liquid_phase(&phase);
+                Ok(LiquidPhaseSubstanceAmount {
+                    phase_id: phase.id,
+                    coarse_phase: phase.coarse_phase,
+                    representative_solvent_id: registry
+                        .substance_by_index(phase.representative_solvent)?
+                        .id
+                        .clone(),
+                    concentration_mol_per_bucket: amount,
+                })
+            })
+            .collect()
     }
 
     pub fn gas_pressure_pascal(&self) -> f64 {
@@ -1514,6 +1584,14 @@ impl MixtureComponent {
             .unwrap_or(0.0)
     }
 
+    fn amount_in_liquid_phase(&self, phase: &LiquidPhaseState) -> f64 {
+        match phase.coarse_phase {
+            MixturePhase::Aqueous => self.aqueous_mol_per_bucket,
+            MixturePhase::Organic => self.amount_in_organic_solvent(phase.representative_solvent),
+            MixturePhase::Gas | MixturePhase::Solid => 0.0,
+        }
+    }
+
     fn phase_amounts(&self) -> Vec<f64> {
         let mut amounts = vec![
             self.aqueous_mol_per_bucket,
@@ -1678,6 +1756,43 @@ fn classify_liquid_phase(
     } else {
         Ok(MixturePhase::Organic)
     }
+}
+
+fn liquid_phase_snapshot(
+    registry: &ChemistryRegistry,
+    phase: LiquidPhaseState,
+) -> ChemistryResult<LiquidPhaseSnapshot> {
+    let total_solvent_mol_per_bucket = phase.solvent_amounts.values().sum::<f64>();
+    if !total_solvent_mol_per_bucket.is_finite()
+        || total_solvent_mol_per_bucket < TRACE_CONCENTRATION_MOL_PER_BUCKET
+    {
+        return Err(ChemistryError::InvalidMixtureState(
+            "liquid phase solvent amount must be positive and finite".to_string(),
+        ));
+    }
+    let mut solvents = Vec::new();
+    for (solvent, concentration_mol_per_bucket) in phase.solvent_amounts {
+        if !concentration_mol_per_bucket.is_finite() || concentration_mol_per_bucket < 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "liquid phase solvent concentration must be non-negative and finite".to_string(),
+            ));
+        }
+        solvents.push(LiquidPhaseSolventAmount {
+            substance_id: registry.substance_by_index(solvent)?.id.clone(),
+            concentration_mol_per_bucket,
+            mole_fraction: concentration_mol_per_bucket / total_solvent_mol_per_bucket,
+        });
+    }
+    Ok(LiquidPhaseSnapshot {
+        id: phase.id,
+        coarse_phase: phase.coarse_phase,
+        representative_solvent_id: registry
+            .substance_by_index(phase.representative_solvent)?
+            .id
+            .clone(),
+        total_solvent_mol_per_bucket,
+        solvents,
+    })
 }
 
 fn mixed_phase_solubility_limit(
@@ -2400,6 +2515,69 @@ mod tests {
         assert_eq!(mixture.liquid_phase_count(&registry).unwrap(), 1);
         assert_eq!(mixture.concentration_of(&water), 1.0);
         assert_eq!(mixture.concentration_of(&ethanol), 1.0);
+    }
+
+    #[test]
+    fn liquid_phase_snapshot_exposes_concrete_mixed_phase_composition() {
+        let registry = ChemistryRegistryBuilder::new()
+            .substance(
+                Substance::new("destroy:water", 0, 18.0, 18_000.0, 373.0, 75.0, 40_650.0)
+                    .with_phase_properties(SubstancePhaseProperties::aqueous_solvent()),
+            )
+            .substance(
+                Substance::new("destroy:ethanol", 0, 46.0, 46_000.0, 351.0, 110.0, 20_000.0)
+                    .with_phase_properties(SubstancePhaseProperties::organic_unlimited(1.0)),
+            )
+            .substance(
+                Substance::new(
+                    "destroy:solute",
+                    0,
+                    120.0,
+                    120_000.0,
+                    700.0,
+                    100.0,
+                    20_000.0,
+                )
+                .with_phase_properties(SubstancePhaseProperties::organic_solute(0.2)),
+            )
+            .solvent_miscibility(
+                "destroy:water",
+                "destroy:ethanol",
+                SolventMiscibility::FullyMiscible,
+            )
+            .build()
+            .unwrap();
+        let solute: SubstanceId = "destroy:solute".into();
+        let mut mixture = Mixture::new(298.0).unwrap();
+
+        mixture
+            .add_substance(&registry, "destroy:water", 1.0)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:ethanol", 3.0)
+            .unwrap();
+        mixture.add_substance(&registry, solute.clone(), 0.1).unwrap();
+
+        let phases = mixture.liquid_phase_snapshots(&registry).unwrap();
+        assert_eq!(phases.len(), 1);
+        assert_eq!(phases[0].coarse_phase, MixturePhase::Aqueous);
+        assert_eq!(phases[0].total_solvent_mol_per_bucket, 4.0);
+        assert_eq!(phases[0].solvents.len(), 2);
+        assert!(phases[0]
+            .solvents
+            .iter()
+            .any(|solvent| solvent.substance_id.as_str() == "destroy:water"
+                && (solvent.mole_fraction - 0.25).abs() < 1.0e-12));
+        assert!(phases[0]
+            .solvents
+            .iter()
+            .any(|solvent| solvent.substance_id.as_str() == "destroy:ethanol"
+                && (solvent.mole_fraction - 0.75).abs() < 1.0e-12));
+
+        let solute_amounts = mixture.liquid_phase_amounts_of(&registry, &solute).unwrap();
+        assert_eq!(solute_amounts.len(), 1);
+        assert_eq!(solute_amounts[0].phase_id, phases[0].id);
+        assert!((solute_amounts[0].concentration_mol_per_bucket - 0.1).abs() < 1.0e-12);
     }
 
     #[test]
