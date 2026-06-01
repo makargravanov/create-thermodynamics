@@ -1,11 +1,16 @@
 use std::collections::BTreeMap;
 
 use super::error::{ChemistryError, ChemistryResult};
+use super::mixture::{Mixture, MixturePhase, TRACE_CONCENTRATION_MOL_PER_BUCKET};
 use super::molecule::MolecularStructure;
-use super::reaction::{Reaction, ReactionBuilder, ReactionId, StoichiometricTerm};
+use super::reaction::{
+    Reaction, ReactionBuilder, ReactionId, StoichiometricTerm, GAS_CONSTANT_J_PER_MOL_KELVIN,
+};
+use super::registry::ChemistryRegistry;
 use super::substance::SubstanceId;
 
 pub const ELECTRON_EXTERNAL_ID: &str = "redox:electron";
+pub const FARADAY_CONSTANT_COULOMBS_PER_MOL: f64 = 96_485.332_123_310_02;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum OxidationStateRule {
@@ -83,6 +88,7 @@ pub struct RedoxHalfReaction {
     pub electron_count: u32,
     pub electron_side: ElectronSide,
     pub environment: RedoxEnvironment,
+    pub standard_potential_volts: Option<f64>,
 }
 
 impl RedoxHalfReaction {
@@ -145,8 +151,25 @@ impl RedoxHalfReaction {
             electron_count,
             electron_side,
             environment,
+            standard_potential_volts: None,
         }
     }
+
+    pub fn with_standard_potential_volts(mut self, value: f64) -> Self {
+        self.standard_potential_volts = Some(value);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RedoxPotentialEvaluation {
+    pub oxidation_half_id: String,
+    pub reduction_half_id: String,
+    pub oxidation_potential_volts: f64,
+    pub reduction_potential_volts: f64,
+    pub cell_potential_volts: f64,
+    pub equilibrium_constant: f64,
+    pub thermodynamic_rate_factor: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -344,6 +367,15 @@ pub(crate) fn validate_half_reaction_shape(half: &RedoxHalfReaction) -> Chemistr
             reason: "redox half reaction must transfer at least one electron".to_string(),
         });
     }
+    if half
+        .standard_potential_volts
+        .is_some_and(|potential| !potential.is_finite())
+    {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: half.id.clone(),
+            reason: "standard redox potential must be finite when present".to_string(),
+        });
+    }
     for term in half.reactants.iter().chain(half.products.iter()) {
         if term.coefficient == 0 {
             return Err(ChemistryError::InvalidReaction {
@@ -408,6 +440,12 @@ pub(crate) fn validate_redox_annotation(
                 reason: "oxidation half electron count does not match redox annotation".to_string(),
             });
         }
+        if oxidation.standard_potential_volts.is_some() && redox.reduction_half_id.is_none() {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: reaction.id.to_string(),
+                reason: "redox potentials require both oxidation and reduction halves".to_string(),
+            });
+        }
     }
     if let Some(reduction_half_id) = &redox.reduction_half_id {
         let reduction = half_reactions
@@ -425,6 +463,31 @@ pub(crate) fn validate_redox_annotation(
                 reason: "reduction half electron count does not match redox annotation".to_string(),
             });
         }
+        if reduction.standard_potential_volts.is_some() && redox.oxidation_half_id.is_none() {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: reaction.id.to_string(),
+                reason: "redox potentials require both oxidation and reduction halves".to_string(),
+            });
+        }
+    }
+    if let (Some(oxidation_half_id), Some(reduction_half_id)) =
+        (&redox.oxidation_half_id, &redox.reduction_half_id)
+    {
+        let oxidation = half_reactions
+            .get(oxidation_half_id)
+            .ok_or_else(|| ChemistryError::UnknownReaction(oxidation_half_id.clone()))?;
+        let reduction = half_reactions
+            .get(reduction_half_id)
+            .ok_or_else(|| ChemistryError::UnknownReaction(reduction_half_id.clone()))?;
+        if oxidation.standard_potential_volts.is_some()
+            != reduction.standard_potential_volts.is_some()
+        {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: reaction.id.to_string(),
+                reason: "paired redox halves must either both define potentials or both omit them"
+                    .to_string(),
+            });
+        }
     }
     if let Some(reverse_id) = &reaction.reverse_reaction_id {
         if !known_reaction_ids.contains_key(reverse_id) {
@@ -432,6 +495,145 @@ pub(crate) fn validate_redox_annotation(
         }
     }
     Ok(())
+}
+
+pub fn evaluate_redox_potential(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    reaction: &Reaction,
+) -> ChemistryResult<Option<RedoxPotentialEvaluation>> {
+    let Some(redox) = &reaction.redox else {
+        return Ok(None);
+    };
+    let (Some(oxidation_half_id), Some(reduction_half_id)) =
+        (&redox.oxidation_half_id, &redox.reduction_half_id)
+    else {
+        return Ok(None);
+    };
+    let oxidation = registry
+        .redox_half_reaction(oxidation_half_id)
+        .ok_or_else(|| ChemistryError::UnknownReaction(oxidation_half_id.clone()))?;
+    let reduction = registry
+        .redox_half_reaction(reduction_half_id)
+        .ok_or_else(|| ChemistryError::UnknownReaction(reduction_half_id.clone()))?;
+    let (Some(oxidation_standard), Some(reduction_standard)) = (
+        oxidation.standard_potential_volts,
+        reduction.standard_potential_volts,
+    ) else {
+        return Ok(None);
+    };
+    if oxidation.electron_count != reduction.electron_count {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: reaction.id.to_string(),
+            reason: "redox potential requires equal electron counts".to_string(),
+        });
+    }
+    let oxidation_potential =
+        half_potential_volts(registry, mixture, oxidation, oxidation_standard)?;
+    let reduction_potential =
+        half_potential_volts(registry, mixture, reduction, reduction_standard)?;
+    let cell_potential = oxidation_potential + reduction_potential;
+    let electron_count = oxidation.electron_count as f64;
+    let exponent = electron_count * FARADAY_CONSTANT_COULOMBS_PER_MOL * cell_potential
+        / (GAS_CONSTANT_J_PER_MOL_KELVIN * mixture.temperature_kelvin());
+    let equilibrium_constant = if exponent > 700.0 {
+        f64::INFINITY
+    } else {
+        exponent.exp()
+    };
+    let thermodynamic_rate_factor = if exponent > 40.0 {
+        1.0
+    } else if exponent < -40.0 {
+        0.0
+    } else {
+        let value = 1.0 / (1.0 + (-exponent).exp());
+        if value <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            0.0
+        } else {
+            value
+        }
+    };
+    if !cell_potential.is_finite()
+        || !thermodynamic_rate_factor.is_finite()
+        || !(0.0..=1.0).contains(&thermodynamic_rate_factor)
+    {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: reaction.id.to_string(),
+            reason: "redox potential evaluation became invalid".to_string(),
+        });
+    }
+    Ok(Some(RedoxPotentialEvaluation {
+        oxidation_half_id: oxidation_half_id.clone(),
+        reduction_half_id: reduction_half_id.clone(),
+        oxidation_potential_volts: oxidation_potential,
+        reduction_potential_volts: reduction_potential,
+        cell_potential_volts: cell_potential,
+        equilibrium_constant,
+        thermodynamic_rate_factor,
+    }))
+}
+
+fn half_potential_volts(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    half: &RedoxHalfReaction,
+    standard_potential_volts: f64,
+) -> ChemistryResult<f64> {
+    let quotient = half_reaction_quotient(registry, mixture, half)?;
+    if quotient <= 0.0 || !quotient.is_finite() {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: half.id.clone(),
+            reason: "redox half reaction quotient must be positive and finite".to_string(),
+        });
+    }
+    let value = standard_potential_volts
+        - GAS_CONSTANT_J_PER_MOL_KELVIN * mixture.temperature_kelvin()
+            / (half.electron_count as f64 * FARADAY_CONSTANT_COULOMBS_PER_MOL)
+            * quotient.ln();
+    if !value.is_finite() {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: half.id.clone(),
+            reason: "redox half potential became non-finite".to_string(),
+        });
+    }
+    Ok(value)
+}
+
+fn half_reaction_quotient(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    half: &RedoxHalfReaction,
+) -> ChemistryResult<f64> {
+    let products = terms_activity_product(registry, mixture, &half.products)?;
+    let reactants = terms_activity_product(registry, mixture, &half.reactants)?;
+    let quotient = products / reactants;
+    if !quotient.is_finite() || quotient <= 0.0 {
+        return Err(ChemistryError::InvalidReaction {
+            reaction_id: half.id.clone(),
+            reason: "redox half reaction quotient must be positive and finite".to_string(),
+        });
+    }
+    Ok(quotient)
+}
+
+fn terms_activity_product(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    terms: &[StoichiometricTerm],
+) -> ChemistryResult<f64> {
+    let mut product = 1.0;
+    for term in terms {
+        let activity = mixture
+            .activity_of(registry, &term.substance_id, MixturePhase::Aqueous)?
+            .max(TRACE_CONCENTRATION_MOL_PER_BUCKET);
+        product *= activity.powi(term.coefficient as i32);
+    }
+    if !product.is_finite() || product <= 0.0 {
+        return Err(ChemistryError::InvalidMixtureState(
+            "redox activity product must be positive and finite".to_string(),
+        ));
+    }
+    Ok(product)
 }
 
 pub(crate) fn validate_half_reaction_conservation<F>(
@@ -582,7 +784,10 @@ mod tests {
     use crate::chemistry::molecule::{MolecularAtom, MolecularBond, MolecularStructure};
     use crate::chemistry::reaction::Reaction;
     use crate::chemistry::registry::ChemistryRegistryBuilder;
-    use crate::chemistry::simulation::reaction_rate_mol_per_bucket_per_tick;
+    use crate::chemistry::simulation::{
+        reaction_rate_mol_per_bucket_per_tick, reaction_rate_mol_per_bucket_per_tick_with_context,
+        ReactionContext,
+    };
     use crate::chemistry::substance::Substance;
 
     fn redox_test_registry() -> ChemistryRegistryBuilder {
@@ -946,5 +1151,199 @@ mod tests {
             .add_substance(&registry, "destroy:proton", 0.2)
             .unwrap();
         assert!(reaction_rate_mol_per_bucket_per_tick(&registry, &acidic, reaction).unwrap() > 0.0);
+    }
+
+    #[test]
+    fn redox_potential_uses_nernst_activity_and_ph() {
+        let oxidation = RedoxHalfReaction::oxidation(
+            "iron_ii_to_iron_iii",
+            [("destroy:iron_ii".into(), 2)],
+            [("destroy:iron_iii".into(), 2)],
+            2,
+            RedoxEnvironment::Acidic,
+        )
+        .with_standard_potential_volts(-0.771);
+        let reduction = RedoxHalfReaction::reduction(
+            "peroxide_to_water",
+            [
+                ("destroy:hydrogen_peroxide".into(), 1),
+                ("destroy:proton".into(), 2),
+            ],
+            [("destroy:water".into(), 2)],
+            2,
+            RedoxEnvironment::Acidic,
+        )
+        .with_standard_potential_volts(1.776);
+        let reaction = Reaction::builder("destroy:iron_peroxide_redox")
+            .reactant("destroy:iron_ii", 2, 1)
+            .reactant("destroy:hydrogen_peroxide", 1, 1)
+            .reactant("destroy:proton", 2, 1)
+            .product("destroy:iron_iii", 2)
+            .product("destroy:water", 2)
+            .redox_annotation(RedoxAnnotation::from_halves(
+                2,
+                RedoxEnvironment::Acidic,
+                "iron_ii_to_iron_iii",
+                "peroxide_to_water",
+            ))
+            .build();
+        let registry = redox_test_registry()
+            .redox_half_reaction(oxidation)
+            .redox_half_reaction(reduction)
+            .reaction(reaction)
+            .build()
+            .unwrap();
+        let reaction = registry
+            .reaction(&"destroy:iron_peroxide_redox".into())
+            .unwrap();
+
+        let mut acidic = Mixture::new(298.0).unwrap();
+        acidic
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        acidic
+            .add_substance(&registry, "destroy:iron_ii", 0.1)
+            .unwrap();
+        acidic
+            .add_substance(&registry, "destroy:iron_iii", 0.1)
+            .unwrap();
+        acidic
+            .add_substance(&registry, "destroy:hydrogen_peroxide", 0.1)
+            .unwrap();
+        acidic
+            .add_substance(&registry, "destroy:proton", 0.1)
+            .unwrap();
+
+        let mut weakly_acidic = Mixture::new(298.0).unwrap();
+        weakly_acidic
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        weakly_acidic
+            .add_substance(&registry, "destroy:iron_ii", 0.1)
+            .unwrap();
+        weakly_acidic
+            .add_substance(&registry, "destroy:iron_iii", 0.1)
+            .unwrap();
+        weakly_acidic
+            .add_substance(&registry, "destroy:hydrogen_peroxide", 0.1)
+            .unwrap();
+        weakly_acidic
+            .add_substance(&registry, "destroy:proton", 1.0e-6)
+            .unwrap();
+
+        let acidic_potential = evaluate_redox_potential(&registry, &acidic, reaction)
+            .unwrap()
+            .unwrap();
+        let weak_potential = evaluate_redox_potential(&registry, &weakly_acidic, reaction)
+            .unwrap()
+            .unwrap();
+
+        assert!(acidic_potential.cell_potential_volts > weak_potential.cell_potential_volts);
+        assert!(acidic_potential.cell_potential_volts > 0.0);
+    }
+
+    #[test]
+    fn redox_potential_suppresses_unfavorable_closed_reaction_without_context_hack() {
+        let oxidation = RedoxHalfReaction::oxidation(
+            "iron_ii_to_iron_iii",
+            [("destroy:iron_ii".into(), 1)],
+            [("destroy:iron_iii".into(), 1)],
+            1,
+            RedoxEnvironment::Any,
+        )
+        .with_standard_potential_volts(-0.771);
+        let reduction = RedoxHalfReaction::reduction(
+            "iron_iii_to_iron_ii",
+            [("destroy:iron_iii".into(), 1)],
+            [("destroy:iron_ii".into(), 1)],
+            1,
+            RedoxEnvironment::Any,
+        )
+        .with_standard_potential_volts(0.1);
+        let reaction = Reaction::builder("destroy:unfavorable_electron_exchange")
+            .reactant("destroy:iron_ii", 1, 1)
+            .reactant("destroy:iron_iii", 1, 1)
+            .product("destroy:iron_iii", 1)
+            .product("destroy:iron_ii", 1)
+            .redox_annotation(RedoxAnnotation::from_halves(
+                1,
+                RedoxEnvironment::Any,
+                "iron_ii_to_iron_iii",
+                "iron_iii_to_iron_ii",
+            ))
+            .pre_exponential_factor(1.0e12)
+            .activation_energy_kj_per_mol(0.0)
+            .build();
+        let registry = redox_test_registry()
+            .redox_half_reaction(oxidation)
+            .redox_half_reaction(reduction)
+            .reaction(reaction)
+            .build()
+            .unwrap();
+        let reaction = registry
+            .reaction(&"destroy:unfavorable_electron_exchange".into())
+            .unwrap();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:iron_ii", 0.1)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:iron_iii", 0.1)
+            .unwrap();
+
+        let evaluation = evaluate_redox_potential(&registry, &mixture, reaction)
+            .unwrap()
+            .unwrap();
+        let rate = reaction_rate_mol_per_bucket_per_tick_with_context(
+            &registry,
+            &mixture,
+            reaction,
+            &ReactionContext::default(),
+        )
+        .unwrap();
+
+        assert!(evaluation.cell_potential_volts < 0.0);
+        assert_eq!(evaluation.thermodynamic_rate_factor, 0.0);
+        assert_eq!(rate, 0.0);
+    }
+
+    #[test]
+    fn paired_redox_potentials_must_be_complete() {
+        let error = redox_test_registry()
+            .redox_half_reaction(
+                RedoxHalfReaction::oxidation(
+                    "iron_ii_to_iron_iii",
+                    [("destroy:iron_ii".into(), 1)],
+                    [("destroy:iron_iii".into(), 1)],
+                    1,
+                    RedoxEnvironment::Any,
+                )
+                .with_standard_potential_volts(-0.771),
+            )
+            .redox_half_reaction(RedoxHalfReaction::reduction(
+                "iron_iii_to_iron_ii",
+                [("destroy:iron_iii".into(), 1)],
+                [("destroy:iron_ii".into(), 1)],
+                1,
+                RedoxEnvironment::Any,
+            ))
+            .reaction(
+                Reaction::builder("destroy:incomplete_redox_potential")
+                    .reactant("destroy:iron_ii", 1, 1)
+                    .reactant("destroy:iron_iii", 1, 1)
+                    .product("destroy:iron_iii", 1)
+                    .product("destroy:iron_ii", 1)
+                    .redox_annotation(RedoxAnnotation::from_halves(
+                        1,
+                        RedoxEnvironment::Any,
+                        "iron_ii_to_iron_iii",
+                        "iron_iii_to_iron_ii",
+                    ))
+                    .build(),
+            )
+            .build()
+            .unwrap_err();
+
+        assert!(matches!(error, ChemistryError::InvalidReaction { .. }));
     }
 }

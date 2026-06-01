@@ -53,6 +53,11 @@ impl SelectivityEngine {
                         "hydride is quenched in strongly acidic medium; {}",
                         score.reason
                     );
+                } else if context.is_oxidizing() {
+                    score.value *= 0.25;
+                    score.activation_delta += 6.0;
+                    score.reason =
+                        format!("oxidizing medium competes with reduction; {}", score.reason);
                 } else {
                     score.reason = format!("hydride carbonyl reduction: {}", score.reason);
                 }
@@ -673,6 +678,11 @@ fn evaluate_alpha_carbon_profile(
                 value *= 0.35;
                 activation_delta += 10.0;
             }
+            if context.is_water_rich() {
+                value *= 0.65;
+                activation_delta += 2.0;
+                reason.push_str("; water competes with enolate chemistry");
+            }
         }
         ReactionType::AldolDehydration => {
             if context.is_acidic() || context.is_high_temperature() {
@@ -808,7 +818,9 @@ fn evaluate_protecting_group_profile(
         }
         ReactionType::CarbamateCleavage => {
             let acid_path = context.is_acidic() && context.is_water_rich();
-            let hydrogenolysis_path = context.has_hydrogen() && context.palladium_available;
+            let hydrogenolysis_path = context.has_hydrogen()
+                && context.palladium_available
+                && context.has_available_surface();
             if acid_path {
                 value *= 2.5;
                 activation_delta -= 7.0;
@@ -1172,6 +1184,7 @@ mod tests {
             &SelectivityContext {
                 hydrogen_mol_per_bucket: 0.5,
                 palladium_available: true,
+                available_surface_sites_mol_per_bucket: 0.1,
                 ..Default::default()
             },
         );

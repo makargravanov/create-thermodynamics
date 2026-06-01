@@ -6,12 +6,14 @@ use super::error::{ChemistryError, ChemistryResult};
 use super::kinetics::{channel_rate_sum_per_second, LightBand};
 use super::mixture::{Mixture, MixturePhase, TRACE_CONCENTRATION_MOL_PER_BUCKET};
 use super::reaction::Reaction;
-use super::redox::RedoxEnvironment;
+use super::redox::{evaluate_redox_potential, RedoxEnvironment};
 use super::registry::{
     ChemistryRegistry, IndexedReaction, ReactionCandidateScratch, SubstanceIndex,
 };
 use super::selectivity::{SelectivityContext, SelectivityEngine};
 use super::solution::equilibrate_solution_equilibria;
+use super::substance::SubstanceId;
+use super::thermodynamics::reaction_thermodynamic_rate_factor;
 
 pub const TICKS_PER_SECOND: f64 = 20.0;
 pub const EQUILIBRIUM_EPSILON_MOL_PER_BUCKET: f64 = TRACE_CONCENTRATION_MOL_PER_BUCKET;
@@ -33,9 +35,17 @@ pub struct ReactionContext {
     pub external_reactants: BTreeMap<String, f64>,
     pub external_catalysts: BTreeMap<String, f64>,
     pub external_products: BTreeMap<String, f64>,
+    pub gas_atmosphere: Option<GasAtmosphere>,
     pub surfaces: BTreeMap<CatalystSurfaceId, CatalystSurfaceState>,
     pub reaction_results: BTreeMap<String, f64>,
     pub surface_steps: BTreeMap<String, f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GasAtmosphere {
+    pub mole_fractions: Vec<(SubstanceId, f64)>,
+    pub total_pressure_pascal: f64,
+    pub exchange_coefficient_per_tick: f64,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -67,6 +77,7 @@ impl Default for ReactionContext {
             external_reactants: BTreeMap::new(),
             external_catalysts: BTreeMap::new(),
             external_products: BTreeMap::new(),
+            gas_atmosphere: None,
             surfaces: BTreeMap::new(),
             reaction_results: BTreeMap::new(),
             surface_steps: BTreeMap::new(),
@@ -122,6 +133,64 @@ impl ReactionContext {
         } else {
             self.light_power_by_band.get(&band).copied().unwrap_or(0.0)
         }
+    }
+
+    pub fn with_open_atmosphere(
+        mut self,
+        mole_fractions: impl IntoIterator<Item = (SubstanceId, f64)>,
+        total_pressure_pascal: f64,
+        exchange_coefficient_per_tick: f64,
+    ) -> ChemistryResult<Self> {
+        self.set_open_atmosphere(
+            mole_fractions,
+            total_pressure_pascal,
+            exchange_coefficient_per_tick,
+        )?;
+        Ok(self)
+    }
+
+    pub fn set_open_atmosphere(
+        &mut self,
+        mole_fractions: impl IntoIterator<Item = (SubstanceId, f64)>,
+        total_pressure_pascal: f64,
+        exchange_coefficient_per_tick: f64,
+    ) -> ChemistryResult<()> {
+        if !total_pressure_pascal.is_finite() || total_pressure_pascal < 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "atmosphere pressure must be non-negative and finite".to_string(),
+            ));
+        }
+        if !exchange_coefficient_per_tick.is_finite() || exchange_coefficient_per_tick < 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "gas exchange coefficient must be non-negative and finite".to_string(),
+            ));
+        }
+        let mut fractions = Vec::new();
+        let mut fraction_sum = 0.0;
+        for (substance_id, fraction) in mole_fractions {
+            if !fraction.is_finite() || fraction < 0.0 {
+                return Err(ChemistryError::InvalidMixtureState(
+                    "atmosphere gas fraction must be non-negative and finite".to_string(),
+                ));
+            }
+            fraction_sum += fraction;
+            fractions.push((substance_id, fraction));
+        }
+        if fraction_sum > 1.0 + 1.0e-12 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "atmosphere gas fractions must not sum above one".to_string(),
+            ));
+        }
+        self.gas_atmosphere = Some(GasAtmosphere {
+            mole_fractions: fractions,
+            total_pressure_pascal,
+            exchange_coefficient_per_tick,
+        });
+        Ok(())
+    }
+
+    pub fn close_gas_boundary(&mut self) {
+        self.gas_atmosphere = None;
     }
 
     pub fn add_external_reactant(
@@ -229,6 +298,18 @@ pub fn react_for_tick_with_context(
     let mut candidate_scratch = ReactionCandidateScratch::new();
     let mut reactions_with_rates = Vec::new();
     for _ in 0..cycles {
+        if let Some(atmosphere) = &context.gas_atmosphere {
+            let gas_exchange_delta = mixture.exchange_gases_with_atmosphere(
+                registry,
+                &atmosphere.mole_fractions,
+                atmosphere.total_pressure_pascal,
+                atmosphere.exchange_coefficient_per_tick,
+                1.0 / cycles as f64,
+            )?;
+            if gas_exchange_delta > EQUILIBRIUM_EPSILON_MOL_PER_BUCKET {
+                any_changed = true;
+            }
+        }
         let gas_transfer_delta =
             mixture.transfer_gases_toward_solubility_equilibrium(registry, 1.0 / cycles as f64)?;
         if gas_transfer_delta > EQUILIBRIUM_EPSILON_MOL_PER_BUCKET {
@@ -375,6 +456,8 @@ pub fn reaction_rate_mol_per_bucket_per_tick_with_context(
     if !redox_environment_allows_reaction(registry, mixture, reaction)? {
         return Ok(0.0);
     }
+    rate *= reaction_thermodynamic_rate_factor(registry, mixture, reaction)?;
+    rate *= redox_thermodynamic_rate_factor(registry, mixture, reaction)?;
     let condition_evaluation =
         evaluate_reaction_conditions(registry, mixture, &reaction.conditions)?;
     if !condition_evaluation.allowed {
@@ -432,6 +515,8 @@ fn reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
     if !redox_environment_allows_reaction(registry, mixture, reaction)? {
         return Ok(0.0);
     }
+    rate *= reaction_thermodynamic_rate_factor(registry, mixture, reaction)?;
+    rate *= redox_thermodynamic_rate_factor(registry, mixture, reaction)?;
     let condition_evaluation =
         evaluate_reaction_conditions(registry, mixture, &reaction.conditions)?;
     if !condition_evaluation.allowed {
@@ -525,6 +610,16 @@ fn channel_context_can_exist(
         }
         super::kinetics::ChannelConditionEffect::Phase { .. } => true,
     })
+}
+
+fn redox_thermodynamic_rate_factor(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    reaction: &Reaction,
+) -> ChemistryResult<f64> {
+    Ok(evaluate_redox_potential(registry, mixture, reaction)?
+        .map(|evaluation| evaluation.thermodynamic_rate_factor)
+        .unwrap_or(1.0))
 }
 
 fn redox_environment_allows_reaction(

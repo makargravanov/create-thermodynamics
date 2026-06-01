@@ -1,5 +1,7 @@
 use super::error::{ChemistryError, ChemistryResult};
-use super::mixture::{Mixture, MixturePhase, TRACE_CONCENTRATION_MOL_PER_BUCKET};
+use super::mixture::{
+    Mixture, MixturePhase, STANDARD_PRESSURE_PASCAL, TRACE_CONCENTRATION_MOL_PER_BUCKET,
+};
 use super::registry::ChemistryRegistry;
 use super::substance::SubstanceId;
 
@@ -8,12 +10,6 @@ pub enum AcidityCondition {
     Acidic,
     Neutral,
     Basic,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum RedoxCondition {
-    Oxidizing,
-    Reducing,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -34,8 +30,6 @@ pub struct ReactionCondition {
     pub max_oxygen_activity: Option<f64>,
     pub gas_pressure_atm: Option<f64>,
     pub atmosphere: Option<AtmosphereCondition>,
-    pub redox: Option<RedoxCondition>,
-    pub redox_strength: f64,
     pub rate_multiplier: f64,
     pub reason: String,
 }
@@ -60,8 +54,6 @@ impl ReactionCondition {
             max_oxygen_activity: None,
             gas_pressure_atm: None,
             atmosphere: None,
-            redox: None,
-            redox_strength: 0.0,
             rate_multiplier: 1.0,
             reason: reason.into(),
         }
@@ -119,12 +111,6 @@ impl ReactionCondition {
         self
     }
 
-    pub fn redox(mut self, condition: RedoxCondition, strength: f64) -> Self {
-        self.redox = Some(condition);
-        self.redox_strength = strength;
-        self
-    }
-
     pub fn rate_multiplier(mut self, value: f64) -> Self {
         self.rate_multiplier = value;
         self
@@ -179,13 +165,6 @@ impl ReactionCondition {
                         .to_string(),
                 });
             }
-        }
-        if self.redox.is_some() && (!self.redox_strength.is_finite() || self.redox_strength <= 0.0)
-        {
-            return Err(ChemistryError::InvalidReaction {
-                reaction_id: reaction_id.to_string(),
-                reason: "redox condition strength must be positive and finite".to_string(),
-            });
         }
         if !self.rate_multiplier.is_finite() || self.rate_multiplier < 0.0 {
             return Err(ChemistryError::InvalidReaction {
@@ -274,18 +253,10 @@ pub fn evaluate_reaction_conditions(
                 blocked = true;
             }
         }
-        if condition.gas_pressure_atm.is_some() {
-            return Err(ChemistryError::InvalidReaction {
-                reaction_id: "<condition-evaluation>".to_string(),
-                reason: "gas pressure conditions require a pressure field in ReactionContext"
-                    .to_string(),
-            });
-        }
-        if condition.redox.is_some() {
-            return Err(ChemistryError::InvalidReaction {
-                reaction_id: "<condition-evaluation>".to_string(),
-                reason: "redox reaction conditions must be represented by RedoxAnnotation so electron balance remains explicit".to_string(),
-            });
+        if condition.gas_pressure_atm.is_some_and(|minimum| {
+            mixture.gas_pressure_pascal() < minimum * STANDARD_PRESSURE_PASCAL
+        }) {
+            blocked = true;
         }
         if blocked {
             blocked_reasons.push(condition.reason.clone());
@@ -331,7 +302,9 @@ fn validate_optional_unit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chemistry::substance::{Substance, SubstancePhaseProperties};
+    use crate::chemistry::substance::{
+        LiquidPhasePreference, SolventRole, Substance, SubstancePhaseProperties,
+    };
     use crate::chemistry::ChemistryRegistryBuilder;
 
     #[test]
@@ -374,5 +347,52 @@ mod tests {
         )
         .unwrap();
         assert!(acidic.allowed);
+    }
+
+    #[test]
+    fn gas_pressure_condition_uses_mixture_pressure() {
+        let registry = ChemistryRegistryBuilder::new()
+            .substance(
+                Substance::new("destroy:water", 0, 18.0, 1000.0, 373.15, 75.0, 40_000.0)
+                    .with_phase_properties(SubstancePhaseProperties::aqueous_solvent()),
+            )
+            .substance(
+                Substance::new("destroy:oxygen", 0, 32.0, 1_140.0, 90.0, 29.4, 6_820.0)
+                    .with_phase_properties(SubstancePhaseProperties {
+                        preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+                        aqueous_solubility_mol_per_bucket: Some(0.0),
+                        organic_solubility_mol_per_bucket: Some(0.0),
+                        can_precipitate: false,
+                        can_form_liquid_phase: false,
+                        solvent_role: SolventRole::NotSolvent,
+                    }),
+            )
+            .build()
+            .unwrap();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        let blocked = evaluate_reaction_conditions(
+            &registry,
+            &mixture,
+            &[ReactionCondition::new("pressure required").gas_pressure_atm(0.5)],
+        )
+        .unwrap();
+        assert!(!blocked.allowed);
+
+        mixture
+            .exchange_gases_with_atmosphere(
+                &registry,
+                &[(SubstanceId::from("destroy:oxygen"), 1.0)],
+                STANDARD_PRESSURE_PASCAL,
+                10.0,
+                10.0,
+            )
+            .unwrap();
+        let allowed = evaluate_reaction_conditions(
+            &registry,
+            &mixture,
+            &[ReactionCondition::new("pressure required").gas_pressure_atm(0.5)],
+        )
+        .unwrap();
+        assert!(allowed.allowed);
     }
 }

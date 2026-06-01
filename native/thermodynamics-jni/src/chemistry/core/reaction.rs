@@ -9,6 +9,7 @@ use super::mixture::MixturePhase;
 use super::redox::{RedoxAnnotation, ELECTRON_EXTERNAL_ID};
 use super::selectivity::SelectivityProfile;
 use super::substance::SubstanceId;
+use super::thermodynamics::ReactionThermodynamics;
 
 pub const GAS_CONSTANT_J_PER_MOL_KELVIN: f64 = 8.314_462_618_153_24;
 
@@ -91,6 +92,7 @@ pub struct Reaction {
     pub pre_exponential_factor: f64,
     pub activation_energy_kj_per_mol: f64,
     pub enthalpy_change_kj_per_mol: f64,
+    pub thermodynamics: Option<ReactionThermodynamics>,
     pub reverse_reaction_id: Option<ReactionId>,
     pub requires_uv: bool,
     pub display_as_reversible: bool,
@@ -174,6 +176,7 @@ impl Reaction {
                 pre_exponential_factor: 10_000.0,
                 activation_energy_kj_per_mol: 25.0,
                 enthalpy_change_kj_per_mol: 0.0,
+                thermodynamics: None,
                 reverse_reaction_id: None,
                 requires_uv: false,
                 display_as_reversible: false,
@@ -434,6 +437,19 @@ impl Reaction {
                 reason: "enthalpy change must be finite".to_string(),
             });
         }
+        if let Some(thermodynamics) = &self.thermodynamics {
+            if !self.products.is_empty()
+                && self.product_distribution.is_none()
+                && self.channels.is_empty()
+            {
+                thermodynamics.validate(&reaction_id)?;
+            } else {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: reaction_id.clone(),
+                    reason: "thermodynamics requires a single direct product set".to_string(),
+                });
+            }
+        }
         if let Some(redox) = &self.redox {
             if redox.transferred_electrons == 0 {
                 return Err(ChemistryError::InvalidReaction {
@@ -643,6 +659,46 @@ impl ReactionBuilder {
     pub fn enthalpy_change_kj_per_mol(mut self, value: f64) -> Self {
         self.reaction.enthalpy_change_kj_per_mol = value;
         self
+    }
+
+    pub fn gibbs_free_energy_change_kj_per_mol(mut self, value: f64) -> Self {
+        self.reaction.thermodynamics =
+            Some(ReactionThermodynamics::from_gibbs_free_energy_change_kj_per_mol(value));
+        self
+    }
+
+    pub fn gibbs_free_energy_change_at_kelvin(
+        mut self,
+        value: f64,
+        temperature_kelvin: f64,
+    ) -> Self {
+        self.reaction.thermodynamics = Some(
+            ReactionThermodynamics::from_gibbs_free_energy_change_at_kelvin(
+                value,
+                temperature_kelvin,
+            ),
+        );
+        self
+    }
+
+    pub fn equilibrium_constant(mut self, value: f64) -> ChemistryResult<Self> {
+        self.reaction.thermodynamics =
+            Some(ReactionThermodynamics::from_equilibrium_constant(value)?);
+        Ok(self)
+    }
+
+    pub fn equilibrium_constant_at_kelvin(
+        mut self,
+        value: f64,
+        temperature_kelvin: f64,
+    ) -> ChemistryResult<Self> {
+        self.reaction.thermodynamics = Some(
+            ReactionThermodynamics::from_equilibrium_constant_at_kelvin(
+                value,
+                temperature_kelvin,
+            )?,
+        );
+        Ok(self)
     }
 
     pub fn reverse_reaction_id(mut self, id: impl Into<ReactionId>) -> Self {

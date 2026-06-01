@@ -11,6 +11,14 @@ const EQUILIBRIUM_QUOTIENT_TOLERANCE: f64 = 1.0e-8;
 const EQUILIBRIUM_MIN_EXTENT_MOL_PER_BUCKET: f64 = 1.0e-12;
 const SOLUTION_EQUILIBRIUM_DELTA_TOLERANCE_MOL_PER_BUCKET: f64 = 1.0e-10;
 const EQUILIBRIUM_MAX_PASSES: usize = 256;
+const ACID_BASE_LOG_H_MIN: f64 = -16.0;
+const ACID_BASE_LOG_H_MAX: f64 = 2.0;
+const ACID_BASE_BISECTION_STEPS: usize = 96;
+const ACID_BASE_NEWTON_STEPS: usize = 12;
+const ACID_BASE_CHARGE_TOLERANCE: f64 = 1.0e-12;
+const ACID_BASE_ACTIVITY_PASSES: usize = 64;
+const ACID_BASE_ACTIVITY_DELTA_TOLERANCE_MOL_PER_BUCKET: f64 = 1.0e-8;
+const WATER_ION_PRODUCT: f64 = 1.0e-14;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SolutionState {
@@ -27,6 +35,85 @@ pub struct LiquidPhaseSolutionState {
     pub proton_activity_mol_per_bucket: Option<f64>,
     pub ph: Option<f64>,
     pub activity_coefficients: BTreeMap<SubstanceId, f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AqueousEquilibriumSystem {
+    pub phase_id: LiquidPhaseId,
+    pub representative_solvent_id: SubstanceId,
+    pub temperature_kelvin: f64,
+    pub ionic_strength_mol_per_bucket: f64,
+    pub species: Vec<AqueousSpeciesAmount>,
+    pub acid_base_pairs: Vec<AqueousAcidBaseForm>,
+    pub complex_forms: Vec<AqueousComplexForm>,
+    pub precipitation_constraints: Vec<AqueousPrecipitationConstraint>,
+}
+
+impl AqueousEquilibriumSystem {
+    pub fn species_amount(&self, substance_id: &SubstanceId) -> f64 {
+        self.species
+            .iter()
+            .find(|species| &species.substance_id == substance_id)
+            .map(|species| species.concentration_mol_per_bucket)
+            .unwrap_or(0.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AqueousSpeciesAmount {
+    pub substance_id: SubstanceId,
+    pub charge: i32,
+    pub concentration_mol_per_bucket: f64,
+    pub activity_coefficient: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AqueousAcidBaseForm {
+    pub id: String,
+    pub acid: SubstanceId,
+    pub(crate) acid_index: SubstanceIndex,
+    pub(crate) acid_charge: i32,
+    pub conjugate_base: SubstanceId,
+    pub(crate) conjugate_base_index: SubstanceIndex,
+    pub(crate) conjugate_base_charge: i32,
+    pub(crate) conjugate_base_activity_coefficient: f64,
+    pub proton: SubstanceId,
+    pub pka: f64,
+    pub acid_constant: f64,
+    pub acid_total_mol_per_bucket: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AqueousComplexForm {
+    pub id: SubstanceId,
+    pub central_ion: SubstanceId,
+    pub ligands: Vec<AqueousComplexLigandForm>,
+    pub charge: i32,
+    pub coordination_number: u32,
+    pub formation_constant: f64,
+    pub complex_concentration_mol_per_bucket: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AqueousComplexLigandForm {
+    pub substance_id: SubstanceId,
+    pub count: u32,
+    pub denticity: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AqueousPrecipitationConstraint {
+    pub id: String,
+    pub solid: SubstanceId,
+    pub ions: Vec<AqueousPrecipitationIon>,
+    pub solubility_product: f64,
+    pub solid_concentration_mol_per_bucket: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AqueousPrecipitationIon {
+    pub substance_id: SubstanceId,
+    pub coefficient: u32,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -234,8 +321,7 @@ impl PrecipitationSpec {
     pub(crate) fn constant_at(&self, temperature_kelvin: f64) -> ChemistryResult<f64> {
         if !temperature_kelvin.is_finite() || temperature_kelvin <= 0.0 {
             return Err(ChemistryError::InvalidMixtureState(
-                "temperature must be positive and finite for precipitation equilibrium"
-                    .to_string(),
+                "temperature must be positive and finite for precipitation equilibrium".to_string(),
             ));
         }
         if self.enthalpy_change_kj_per_mol == 0.0 {
@@ -347,6 +433,36 @@ pub fn solution_state(
     Ok(SolutionState { ph, liquid_phases })
 }
 
+pub fn aqueous_equilibrium_systems(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+) -> ChemistryResult<Vec<AqueousEquilibriumSystem>> {
+    let phase_states = liquid_phase_solution_states(registry, mixture)?;
+    let aqueous_phases = phase_states
+        .into_iter()
+        .filter(|phase| phase.coarse_phase == MixturePhase::Aqueous)
+        .collect::<Vec<_>>();
+    let mut systems = Vec::with_capacity(aqueous_phases.len());
+    for phase in aqueous_phases {
+        let species = aqueous_species_amounts(registry, mixture, &phase)?;
+        let acid_base_pairs = aqueous_acid_base_forms(registry, mixture, &phase)?;
+        let complex_forms = aqueous_complex_forms(registry, mixture, phase.phase_id)?;
+        let precipitation_constraints =
+            aqueous_precipitation_constraints(registry, mixture, phase.phase_id)?;
+        systems.push(AqueousEquilibriumSystem {
+            phase_id: phase.phase_id,
+            representative_solvent_id: phase.representative_solvent_id,
+            temperature_kelvin: mixture.temperature_kelvin(),
+            ionic_strength_mol_per_bucket: phase.ionic_strength_mol_per_bucket,
+            species,
+            acid_base_pairs,
+            complex_forms,
+            precipitation_constraints,
+        });
+    }
+    Ok(systems)
+}
+
 fn liquid_phase_solution_states(
     registry: &ChemistryRegistry,
     mixture: &Mixture,
@@ -413,6 +529,183 @@ fn unambiguous_aqueous_ph(phases: &[LiquidPhaseSolutionState]) -> ChemistryResul
     }
 }
 
+fn aqueous_species_amounts(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    phase: &LiquidPhaseSolutionState,
+) -> ChemistryResult<Vec<AqueousSpeciesAmount>> {
+    let mut species = Vec::new();
+    for substance in registry.substances() {
+        let concentration = mixture
+            .liquid_phase_amounts_of(registry, &substance.id)?
+            .into_iter()
+            .find(|amount| amount.phase_id == phase.phase_id)
+            .map(|amount| amount.concentration_mol_per_bucket)
+            .unwrap_or(0.0);
+        if concentration <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            continue;
+        }
+        if !concentration.is_finite() || concentration < 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "aqueous equilibrium species '{}' has invalid concentration {concentration}",
+                substance.id
+            )));
+        }
+        let activity_coefficient = phase
+            .activity_coefficients
+            .get(&substance.id)
+            .copied()
+            .ok_or_else(|| {
+                ChemistryError::InvalidMixtureState(format!(
+                    "missing activity coefficient for aqueous species '{}'",
+                    substance.id
+                ))
+            })?;
+        species.push(AqueousSpeciesAmount {
+            substance_id: substance.id.clone(),
+            charge: substance.charge,
+            concentration_mol_per_bucket: concentration,
+            activity_coefficient,
+        });
+    }
+    Ok(species)
+}
+
+fn aqueous_acid_base_forms(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    phase: &LiquidPhaseSolutionState,
+) -> ChemistryResult<Vec<AqueousAcidBaseForm>> {
+    registry
+        .acid_base_specs()
+        .map(|spec| {
+            let acid_total =
+                liquid_phase_concentration(registry, mixture, &spec.acid, phase.phase_id)?
+                    + liquid_phase_concentration(
+                        registry,
+                        mixture,
+                        &spec.conjugate_base,
+                        phase.phase_id,
+                    )?;
+            let acid_index = registry.substance_index(&spec.acid).ok_or_else(|| {
+                ChemistryError::InvalidMixtureState(format!(
+                    "unknown acid substance '{}'",
+                    spec.acid
+                ))
+            })?;
+            let acid = registry.substance_by_index(acid_index)?;
+            let conjugate_base_index =
+                registry
+                    .substance_index(&spec.conjugate_base)
+                    .ok_or_else(|| {
+                        ChemistryError::InvalidMixtureState(format!(
+                            "unknown conjugate base substance '{}'",
+                            spec.conjugate_base
+                        ))
+                    })?;
+            let conjugate_base = registry.substance_by_index(conjugate_base_index)?;
+            let conjugate_base_activity_coefficient = ActivityModel::default().coefficient(
+                conjugate_base.charge,
+                phase.ionic_strength_mol_per_bucket,
+                mixture.temperature_kelvin(),
+            )?;
+            Ok(AqueousAcidBaseForm {
+                id: spec.id.clone(),
+                acid: spec.acid.clone(),
+                acid_index,
+                acid_charge: acid.charge,
+                conjugate_base: spec.conjugate_base.clone(),
+                conjugate_base_index,
+                conjugate_base_charge: conjugate_base.charge,
+                conjugate_base_activity_coefficient,
+                proton: spec.proton.clone(),
+                pka: spec.pka,
+                acid_constant: 10.0_f64.powf(-spec.pka),
+                acid_total_mol_per_bucket: acid_total,
+            })
+        })
+        .collect()
+}
+
+fn aqueous_complex_forms(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    phase_id: LiquidPhaseId,
+) -> ChemistryResult<Vec<AqueousComplexForm>> {
+    registry
+        .complex_specs()
+        .filter(|spec| spec.phase == MixturePhase::Aqueous)
+        .map(|spec| {
+            Ok(AqueousComplexForm {
+                id: spec.id.clone(),
+                central_ion: spec.central_ion.clone(),
+                ligands: spec
+                    .ligands
+                    .iter()
+                    .map(|ligand| AqueousComplexLigandForm {
+                        substance_id: ligand.substance_id.clone(),
+                        count: ligand.count,
+                        denticity: ligand.denticity,
+                    })
+                    .collect(),
+                charge: spec.charge,
+                coordination_number: spec.coordination_number,
+                formation_constant: spec.formation_constant,
+                complex_concentration_mol_per_bucket: liquid_phase_concentration(
+                    registry, mixture, &spec.id, phase_id,
+                )?,
+            })
+        })
+        .collect()
+}
+
+fn aqueous_precipitation_constraints(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    _phase_id: LiquidPhaseId,
+) -> ChemistryResult<Vec<AqueousPrecipitationConstraint>> {
+    registry
+        .indexed_precipitations()
+        .iter()
+        .map(|precipitation| {
+            let solid = registry.substance_by_index(precipitation.solid)?.id.clone();
+            Ok(AqueousPrecipitationConstraint {
+                id: precipitation.spec.id.clone(),
+                solid: solid.clone(),
+                ions: precipitation
+                    .ions
+                    .iter()
+                    .map(|ion| {
+                        Ok(AqueousPrecipitationIon {
+                            substance_id: registry.substance_by_index(ion.substance)?.id.clone(),
+                            coefficient: ion.coefficient,
+                        })
+                    })
+                    .collect::<ChemistryResult<Vec<_>>>()?,
+                solubility_product: precipitation
+                    .spec
+                    .constant_at(mixture.temperature_kelvin())?,
+                solid_concentration_mol_per_bucket: mixture
+                    .concentration_in_phase(&solid, MixturePhase::Solid),
+            })
+        })
+        .collect()
+}
+
+fn liquid_phase_concentration(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    substance_id: &SubstanceId,
+    phase_id: LiquidPhaseId,
+) -> ChemistryResult<f64> {
+    Ok(mixture
+        .liquid_phase_amounts_of(registry, substance_id)?
+        .into_iter()
+        .find(|amount| amount.phase_id == phase_id)
+        .map(|amount| amount.concentration_mol_per_bucket)
+        .unwrap_or(0.0))
+}
+
 fn activity_coefficients_for_strength(
     registry: &ChemistryRegistry,
     ionic_strength_mol_per_bucket: f64,
@@ -459,10 +752,16 @@ pub(crate) fn equilibrate_solution_equilibria(
     registry: &ChemistryRegistry,
     mixture: &mut Mixture,
 ) -> ChemistryResult<f64> {
+    let use_aqueous_acid_base_solver = registry.acid_base_specs().next().is_some();
+    let acid_base_delta = equilibrate_aqueous_acid_base_systems(registry, mixture)?;
     let mut max_delta = 0.0_f64;
     for _ in 0..EQUILIBRIUM_MAX_PASSES {
         let mut pass_delta = 0.0_f64;
-        for equilibrium in registry.indexed_equilibria() {
+        for equilibrium in registry.indexed_equilibria().iter().filter(|equilibrium| {
+            !is_acid_base_equilibrium(registry, &equilibrium.spec)
+                && (!use_aqueous_acid_base_solver
+                    || !is_water_autoionization_equilibrium(&equilibrium.spec))
+        }) {
             pass_delta = pass_delta.max(apply_equilibrium(registry, mixture, equilibrium)?);
         }
         for precipitation in registry.indexed_precipitations() {
@@ -470,7 +769,7 @@ pub(crate) fn equilibrate_solution_equilibria(
         }
         max_delta = max_delta.max(pass_delta);
         if pass_delta <= SOLUTION_EQUILIBRIUM_DELTA_TOLERANCE_MOL_PER_BUCKET {
-            return Ok(max_delta);
+            return Ok(max_delta.max(acid_base_delta));
         }
     }
     Err(ChemistryError::EquilibriumInvariantViolation {
@@ -479,17 +778,338 @@ pub(crate) fn equilibrate_solution_equilibria(
     })
 }
 
+fn is_acid_base_equilibrium(registry: &ChemistryRegistry, equilibrium: &EquilibriumSpec) -> bool {
+    registry.acid_base_specs().any(|spec| {
+        equilibrium.id == format!("{}.acid_base_equilibrium", spec.id)
+            || equilibrium.id == format!("{}.neutralization_equilibrium", spec.id)
+            || equilibrium.id == format!("{}.base_hydrolysis_equilibrium", spec.id)
+    })
+}
+
+fn is_water_autoionization_equilibrium(equilibrium: &EquilibriumSpec) -> bool {
+    if equilibrium.reactants.len() != 1 || equilibrium.products.len() != 2 {
+        return false;
+    }
+    let water = SubstanceId::from("destroy:water");
+    let proton = SubstanceId::from("destroy:proton");
+    let hydroxide = SubstanceId::from("destroy:hydroxide");
+    equilibrium.reactants[0].substance_id == water
+        && equilibrium.reactants[0].phase == MixturePhase::Aqueous
+        && equilibrium
+            .products
+            .iter()
+            .any(|term| term.substance_id == proton && term.phase == MixturePhase::Aqueous)
+        && equilibrium
+            .products
+            .iter()
+            .any(|term| term.substance_id == hydroxide && term.phase == MixturePhase::Aqueous)
+}
+
+fn equilibrate_aqueous_acid_base_systems(
+    registry: &ChemistryRegistry,
+    mixture: &mut Mixture,
+) -> ChemistryResult<f64> {
+    if registry.acid_base_specs().next().is_none() {
+        return Ok(0.0);
+    }
+    let mut max_delta = 0.0_f64;
+    for _ in 0..ACID_BASE_ACTIVITY_PASSES {
+        let systems = aqueous_equilibrium_systems(registry, mixture)?;
+        let aqueous_count = systems.len();
+        if aqueous_count > 1 {
+            return Err(ChemistryError::EquilibriumInvariantViolation {
+                equilibrium_id: "<acid-base>".to_string(),
+                reason: "acid-base equilibrium solver does not yet support multiple aqueous phases"
+                    .to_string(),
+            });
+        }
+        let Some(system) = systems.first() else {
+            return Ok(max_delta);
+        };
+        if system.acid_base_pairs.is_empty() {
+            return Ok(max_delta);
+        }
+        let solved = solve_aqueous_acid_base_system(registry, system)?;
+        let delta = apply_aqueous_acid_base_solution(registry, mixture, &solved)?;
+        max_delta = max_delta.max(delta);
+        if delta <= ACID_BASE_ACTIVITY_DELTA_TOLERANCE_MOL_PER_BUCKET {
+            return Ok(max_delta);
+        }
+    }
+    Err(ChemistryError::EquilibriumInvariantViolation {
+        equilibrium_id: "<acid-base>".to_string(),
+        reason: "acid-base activity iteration did not reach a fixed point".to_string(),
+    })
+}
+
+#[derive(Debug, Clone)]
+struct AcidBaseSolution {
+    targets: Vec<AcidBaseTarget>,
+}
+
+#[derive(Debug, Clone)]
+struct AcidBaseTarget {
+    substance: SubstanceIndex,
+    concentration_mol_per_bucket: f64,
+}
+
+#[derive(Debug, Clone)]
+struct AcidBaseNumericalSystem {
+    target_charge: f64,
+    fixed_charge: f64,
+    proton: SubstanceIndex,
+    proton_charge: i32,
+    proton_activity_coefficient: f64,
+    hydroxide: SubstanceIndex,
+    hydroxide_charge: i32,
+    hydroxide_activity_coefficient: f64,
+    pairs: Vec<AcidBaseNumericalPair>,
+}
+
+#[derive(Debug, Clone)]
+struct AcidBaseNumericalPair {
+    acid: SubstanceIndex,
+    acid_charge: i32,
+    conjugate_base: SubstanceIndex,
+    conjugate_base_charge: i32,
+    conjugate_base_activity_coefficient: f64,
+    acid_constant: f64,
+    total_mol_per_bucket: f64,
+}
+
+fn solve_aqueous_acid_base_system(
+    registry: &ChemistryRegistry,
+    system: &AqueousEquilibriumSystem,
+) -> ChemistryResult<AcidBaseSolution> {
+    let numerical = build_acid_base_numerical_system(registry, system)?;
+    let log_h = solve_log_h_for_charge_balance(&numerical)?;
+    let targets = acid_base_targets_at_log_h(&numerical, log_h)?;
+    Ok(AcidBaseSolution { targets })
+}
+
+fn build_acid_base_numerical_system(
+    registry: &ChemistryRegistry,
+    system: &AqueousEquilibriumSystem,
+) -> ChemistryResult<AcidBaseNumericalSystem> {
+    let proton_id = SubstanceId::from("destroy:proton");
+    let hydroxide_id = SubstanceId::from("destroy:hydroxide");
+    let proton = registry.substance_index(&proton_id).ok_or_else(|| {
+        ChemistryError::InvalidMixtureState("proton is missing from acid-base system".to_string())
+    })?;
+    let hydroxide = registry.substance_index(&hydroxide_id).ok_or_else(|| {
+        ChemistryError::InvalidMixtureState(
+            "hydroxide is missing from acid-base system".to_string(),
+        )
+    })?;
+    let proton_charge = registry.substance_by_index(proton)?.charge;
+    let hydroxide_charge = registry.substance_by_index(hydroxide)?.charge;
+    let proton_activity_coefficient = ActivityModel::default().coefficient(
+        proton_charge,
+        system.ionic_strength_mol_per_bucket,
+        system.temperature_kelvin,
+    )?;
+    let hydroxide_activity_coefficient = ActivityModel::default().coefficient(
+        hydroxide_charge,
+        system.ionic_strength_mol_per_bucket,
+        system.temperature_kelvin,
+    )?;
+
+    let mut acid_base_species = Vec::with_capacity(system.acid_base_pairs.len() * 2);
+    let pairs = system
+        .acid_base_pairs
+        .iter()
+        .map(|pair| {
+            acid_base_species.push(pair.acid_index);
+            acid_base_species.push(pair.conjugate_base_index);
+            AcidBaseNumericalPair {
+                acid: pair.acid_index,
+                acid_charge: pair.acid_charge,
+                conjugate_base: pair.conjugate_base_index,
+                conjugate_base_charge: pair.conjugate_base_charge,
+                conjugate_base_activity_coefficient: pair.conjugate_base_activity_coefficient,
+                acid_constant: pair.acid_constant,
+                total_mol_per_bucket: pair.acid_total_mol_per_bucket,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut target_charge = 0.0;
+    let mut fixed_charge = 0.0;
+    for species in &system.species {
+        target_charge += species.concentration_mol_per_bucket * species.charge as f64;
+        let index = registry
+            .substance_index(&species.substance_id)
+            .ok_or_else(|| {
+                ChemistryError::InvalidMixtureState(format!(
+                    "unknown aqueous species '{}'",
+                    species.substance_id
+                ))
+            })?;
+        if index == proton || index == hydroxide || acid_base_species.contains(&index) {
+            continue;
+        }
+        fixed_charge += species.concentration_mol_per_bucket * species.charge as f64;
+    }
+
+    Ok(AcidBaseNumericalSystem {
+        target_charge,
+        fixed_charge,
+        proton,
+        proton_charge,
+        proton_activity_coefficient,
+        hydroxide,
+        hydroxide_charge,
+        hydroxide_activity_coefficient,
+        pairs,
+    })
+}
+
+fn solve_log_h_for_charge_balance(system: &AcidBaseNumericalSystem) -> ChemistryResult<f64> {
+    let mut low = ACID_BASE_LOG_H_MIN;
+    let mut high = ACID_BASE_LOG_H_MAX;
+    let mut low_residual = acid_base_charge_residual(system, low)?;
+    let high_residual = acid_base_charge_residual(system, high)?;
+
+    if low_residual.signum() == high_residual.signum() {
+        let low_abs = low_residual.abs();
+        let high_abs = high_residual.abs();
+        return Ok(if low_abs <= high_abs { low } else { high });
+    }
+
+    for _ in 0..ACID_BASE_BISECTION_STEPS {
+        let mid = 0.5 * (low + high);
+        let residual = acid_base_charge_residual(system, mid)?;
+        if residual.abs() <= ACID_BASE_CHARGE_TOLERANCE {
+            low = mid;
+            high = mid;
+            break;
+        }
+        if residual.signum() == low_residual.signum() {
+            low = mid;
+            low_residual = residual;
+        } else {
+            high = mid;
+        }
+    }
+
+    let mut value = 0.5 * (low + high);
+    for _ in 0..ACID_BASE_NEWTON_STEPS {
+        let residual = acid_base_charge_residual(system, value)?;
+        if residual.abs() <= ACID_BASE_CHARGE_TOLERANCE {
+            return Ok(value);
+        }
+        let step = 1.0e-5;
+        let left = acid_base_charge_residual(system, value - step)?;
+        let right = acid_base_charge_residual(system, value + step)?;
+        let derivative = (right - left) / (2.0 * step);
+        if !derivative.is_finite() || derivative.abs() <= f64::EPSILON {
+            break;
+        }
+        let next = (value - residual / derivative).clamp(low, high);
+        if (next - value).abs() <= 1.0e-12 {
+            return Ok(next);
+        }
+        value = next;
+    }
+    Ok(value)
+}
+
+fn acid_base_charge_residual(system: &AcidBaseNumericalSystem, log_h: f64) -> ChemistryResult<f64> {
+    let h = 10.0_f64.powf(log_h);
+    let oh = WATER_ION_PRODUCT
+        / (system.proton_activity_coefficient * system.hydroxide_activity_coefficient * h);
+    let mut charge =
+        system.fixed_charge + system.proton_charge as f64 * h + system.hydroxide_charge as f64 * oh;
+    for pair in &system.pairs {
+        let denominator = pair.acid_constant
+            + system.proton_activity_coefficient * pair.conjugate_base_activity_coefficient * h;
+        if !denominator.is_finite() || denominator <= 0.0 {
+            return Err(ChemistryError::EquilibriumInvariantViolation {
+                equilibrium_id: "<acid-base>".to_string(),
+                reason: "acid-base distribution denominator became invalid".to_string(),
+            });
+        }
+        let base = pair.total_mol_per_bucket * pair.acid_constant / denominator;
+        let acid = pair.total_mol_per_bucket - base;
+        charge += pair.acid_charge as f64 * acid + pair.conjugate_base_charge as f64 * base;
+    }
+    Ok(charge - system.target_charge)
+}
+
+fn acid_base_targets_at_log_h(
+    system: &AcidBaseNumericalSystem,
+    log_h: f64,
+) -> ChemistryResult<Vec<AcidBaseTarget>> {
+    let h = 10.0_f64.powf(log_h);
+    let oh = WATER_ION_PRODUCT
+        / (system.proton_activity_coefficient * system.hydroxide_activity_coefficient * h);
+    let mut targets = Vec::with_capacity(2 + system.pairs.len() * 2);
+    targets.push(AcidBaseTarget {
+        substance: system.proton,
+        concentration_mol_per_bucket: h,
+    });
+    targets.push(AcidBaseTarget {
+        substance: system.hydroxide,
+        concentration_mol_per_bucket: oh,
+    });
+
+    for pair in &system.pairs {
+        if pair.total_mol_per_bucket <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            targets.push(AcidBaseTarget {
+                substance: pair.acid,
+                concentration_mol_per_bucket: 0.0,
+            });
+            targets.push(AcidBaseTarget {
+                substance: pair.conjugate_base,
+                concentration_mol_per_bucket: 0.0,
+            });
+            continue;
+        }
+        let denominator = pair.acid_constant
+            + system.proton_activity_coefficient * pair.conjugate_base_activity_coefficient * h;
+        if !denominator.is_finite() || denominator <= 0.0 {
+            return Err(ChemistryError::EquilibriumInvariantViolation {
+                equilibrium_id: "<acid-base>".to_string(),
+                reason: "acid-base distribution denominator became invalid".to_string(),
+            });
+        }
+        let base = pair.total_mol_per_bucket * pair.acid_constant / denominator;
+        let acid = pair.total_mol_per_bucket - base;
+        targets.push(AcidBaseTarget {
+            substance: pair.acid,
+            concentration_mol_per_bucket: acid.max(0.0),
+        });
+        targets.push(AcidBaseTarget {
+            substance: pair.conjugate_base,
+            concentration_mol_per_bucket: base.max(0.0),
+        });
+    }
+    Ok(targets)
+}
+
+fn apply_aqueous_acid_base_solution(
+    registry: &ChemistryRegistry,
+    mixture: &mut Mixture,
+    solution: &AcidBaseSolution,
+) -> ChemistryResult<f64> {
+    let mut targets = Vec::with_capacity(solution.targets.len());
+    for target in &solution.targets {
+        targets.push((target.substance, target.concentration_mol_per_bucket));
+    }
+    mixture.apply_aqueous_targets_by_index(registry, &targets)
+}
+
 fn apply_precipitation(
     registry: &ChemistryRegistry,
     mixture: &mut Mixture,
     precipitation: &IndexedPrecipitation,
 ) -> ChemistryResult<f64> {
-    let constant = precipitation.spec.constant_at(mixture.temperature_kelvin())?;
+    let constant = precipitation
+        .spec
+        .constant_at(mixture.temperature_kelvin())?;
     let ion_product = precipitation_ion_product(registry, mixture, precipitation)?;
-    let solid_amount = mixture.concentration_of_index_in_phases(
-        precipitation.solid,
-        &[MixturePhase::Solid],
-    );
+    let solid_amount =
+        mixture.concentration_of_index_in_phases(precipitation.solid, &[MixturePhase::Solid]);
     if ion_product == 0.0 && solid_amount <= EQUILIBRIUM_MIN_EXTENT_MOL_PER_BUCKET {
         return Ok(0.0);
     }
@@ -525,7 +1145,8 @@ fn apply_precipitation(
     let initial_distance = equilibrium_distance(constant, ion_product);
     for _ in 0..80 {
         let mid = (low + high) * 0.5;
-        let trial = trial_precipitation_ion_product(registry, mixture, precipitation, precipitate, mid)?;
+        let trial =
+            trial_precipitation_ion_product(registry, mixture, precipitation, precipitate, mid)?;
         let distance = equilibrium_distance(constant, trial);
         let on_target_side = if precipitate {
             trial >= constant
@@ -575,7 +1196,13 @@ fn apply_precipitation_extent(
         let reactants = precipitation
             .ions
             .iter()
-            .map(|term| (term.substance, term.coefficient, vec![MixturePhase::Aqueous]))
+            .map(|term| {
+                (
+                    term.substance,
+                    term.coefficient,
+                    vec![MixturePhase::Aqueous],
+                )
+            })
             .collect::<Vec<_>>();
         let products = vec![(precipitation.solid, 1.0, MixturePhase::Solid)];
         mixture.apply_reaction_phase_deltas_by_index(registry, &reactants, &products, extent)
@@ -584,7 +1211,13 @@ fn apply_precipitation_extent(
         let products = precipitation
             .ions
             .iter()
-            .map(|term| (term.substance, term.coefficient as f64, MixturePhase::Aqueous))
+            .map(|term| {
+                (
+                    term.substance,
+                    term.coefficient as f64,
+                    MixturePhase::Aqueous,
+                )
+            })
             .collect::<Vec<_>>();
         mixture.apply_reaction_phase_deltas_by_index(registry, &reactants, &products, extent)
     }
@@ -751,15 +1384,16 @@ mod tests {
     }
 
     fn precipitating_solid(id: &str, mass: f64) -> Substance {
-        Substance::new(id, 0, mass, 1_000.0, 1_000.0, 75.0, 20_000.0)
-            .with_phase_properties(SubstancePhaseProperties {
+        Substance::new(id, 0, mass, 1_000.0, 1_000.0, 75.0, 20_000.0).with_phase_properties(
+            SubstancePhaseProperties {
                 preferred_liquid_phase: LiquidPhasePreference::Aqueous,
                 aqueous_solubility_mol_per_bucket: Some(0.0),
                 organic_solubility_mol_per_bucket: Some(0.0),
                 can_precipitate: true,
                 can_form_liquid_phase: false,
                 solvent_role: SolventRole::NotSolvent,
-            })
+            },
+        )
     }
 
     fn acid_registry() -> ChemistryRegistry {
@@ -897,6 +1531,66 @@ mod tests {
     }
 
     #[test]
+    fn acid_base_solver_uses_single_charge_balance_for_weak_acid() {
+        let registry = acid_registry();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:weak_acid", 0.1)
+            .unwrap();
+
+        let delta = mixture.equilibrate_solution(&registry).unwrap();
+
+        let acid = mixture.concentration_in_phase(
+            &SubstanceId::from("destroy:weak_acid"),
+            MixturePhase::Aqueous,
+        );
+        let base = mixture.concentration_in_phase(
+            &SubstanceId::from("destroy:weak_base"),
+            MixturePhase::Aqueous,
+        );
+        let proton = mixture
+            .activity_of(
+                &registry,
+                &SubstanceId::from("destroy:proton"),
+                MixturePhase::Aqueous,
+            )
+            .unwrap();
+        let base_activity = mixture
+            .activity_of(
+                &registry,
+                &SubstanceId::from("destroy:weak_base"),
+                MixturePhase::Aqueous,
+            )
+            .unwrap();
+        let quotient = proton * base_activity / acid;
+
+        assert!(delta > 0.0);
+        assert!(((acid + base) - 0.1).abs() < 1.0e-9);
+        assert!((quotient / 10.0_f64.powf(-4.76)).ln().abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn acid_base_solver_preserves_explicit_charge_imbalance() {
+        let registry = acid_registry();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:proton", 0.01)
+            .unwrap();
+        mixture.equilibrate_solution(&registry).unwrap();
+
+        let proton = mixture
+            .concentration_in_phase(&SubstanceId::from("destroy:proton"), MixturePhase::Aqueous);
+
+        assert!((proton - 0.01).abs() < 1.0e-9, "proton was {proton}");
+    }
+
+    #[test]
     fn weak_base_hydrolysis_uses_water_autoionization() {
         let registry = acid_registry();
         let mut mixture = Mixture::new(298.0).unwrap();
@@ -939,7 +1633,10 @@ mod tests {
             * mixture
                 .activity_of(&registry, &chloride, MixturePhase::Aqueous)
                 .unwrap();
-        assert!((product / 1.0e-4).ln().abs() < 1.0e-5, "ion product was {product}");
+        assert!(
+            (product / 1.0e-4).ln().abs() < 1.0e-5,
+            "ion product was {product}"
+        );
         assert!(
             mixture.concentration_in_phase(
                 &SubstanceId::from("destroy:silver_chloride"),
@@ -1110,5 +1807,85 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, ChemistryError::InvalidReaction { .. }));
+    }
+
+    #[test]
+    fn aqueous_equilibrium_system_collects_phase_species_and_constraints() {
+        let registry = ChemistryRegistryBuilder::new()
+            .substance(aqueous_substance("destroy:water", 0, 18.0))
+            .substance(aqueous_substance("destroy:proton", 1, 1.0))
+            .substance(aqueous_substance("destroy:hydroxide", -1, 17.0))
+            .substance(aqueous_substance("destroy:weak_acid", 0, 60.0))
+            .substance(aqueous_substance("destroy:weak_base", -1, 59.0))
+            .substance(aqueous_substance("destroy:metal", 2, 50.0))
+            .substance(aqueous_substance("destroy:ligand", 0, 10.0))
+            .substance(precipitating_solid("destroy:metal_hydroxide", 84.0))
+            .acid_base_pair(AcidBaseSpec::new(
+                "destroy:weak_acid",
+                "destroy:weak_acid",
+                "destroy:weak_base",
+                4.76,
+            ))
+            .complex_spec(
+                crate::chemistry::complex::ComplexSpec::new(
+                    "destroy:metal_ligand_2",
+                    "destroy:metal",
+                    [crate::chemistry::complex::ComplexLigand::new(
+                        "destroy:ligand",
+                        2,
+                    )],
+                    2,
+                    1.0e6,
+                )
+                .with_coordination_number(2)
+                .with_geometry(crate::chemistry::complex::ComplexGeometry::Linear),
+            )
+            .precipitation(PrecipitationSpec::new(
+                "destroy:metal_hydroxide",
+                "destroy:metal_hydroxide",
+                [
+                    (SubstanceId::from("destroy:metal"), 1),
+                    (SubstanceId::from("destroy:hydroxide"), 2),
+                ],
+                1.0e-8,
+            ))
+            .build()
+            .unwrap();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:weak_acid", 0.1)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:metal", 0.01)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:ligand", 0.04)
+            .unwrap();
+
+        let systems = mixture.aqueous_equilibrium_systems(&registry).unwrap();
+
+        assert_eq!(systems.len(), 1);
+        let system = &systems[0];
+        assert_eq!(
+            system.representative_solvent_id,
+            SubstanceId::from("destroy:water")
+        );
+        assert!(system.species_amount(&SubstanceId::from("destroy:water")) > 55.0);
+        assert_eq!(system.acid_base_pairs.len(), 1);
+        assert_eq!(
+            system.acid_base_pairs[0].acid,
+            SubstanceId::from("destroy:weak_acid")
+        );
+        assert_eq!(system.complex_forms.len(), 1);
+        assert_eq!(system.complex_forms[0].coordination_number, 2);
+        assert_eq!(system.complex_forms[0].ligands[0].denticity, 1);
+        assert_eq!(system.precipitation_constraints.len(), 1);
+        assert_eq!(
+            system.precipitation_constraints[0].solid,
+            SubstanceId::from("destroy:metal_hydroxide")
+        );
     }
 }

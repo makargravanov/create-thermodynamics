@@ -296,6 +296,10 @@ impl ChemistryRegistry {
         self.redox_half_reactions.values()
     }
 
+    pub fn redox_half_reaction(&self, id: &str) -> Option<&RedoxHalfReaction> {
+        self.redox_half_reactions.get(id)
+    }
+
     pub fn catalyst_surface_spec(&self, id: &CatalystSurfaceId) -> Option<&CatalystSurfaceSpec> {
         self.catalyst_surface_specs.get(id)
     }
@@ -816,6 +820,41 @@ impl ChemistryRegistry {
                         reverse_id: reverse_id.to_string(),
                         reason: "enthalpy changes must sum to zero".to_string(),
                     });
+                }
+                match (&reaction.thermodynamics, &reverse.thermodynamics) {
+                    (Some(forward), Some(backward)) => {
+                        if (forward.reference_temperature_kelvin
+                            - backward.reference_temperature_kelvin)
+                            .abs()
+                            > THERMO_TOLERANCE
+                        {
+                            return Err(ChemistryError::ReversibleThermodynamicsMismatch {
+                                reaction_id: reaction.id.to_string(),
+                                reverse_id: reverse_id.to_string(),
+                                reason: "thermodynamic reference temperatures must match"
+                                    .to_string(),
+                            });
+                        }
+                        if (forward.gibbs_free_energy_change_kj_per_mol
+                            + backward.gibbs_free_energy_change_kj_per_mol)
+                            .abs()
+                            > THERMO_TOLERANCE
+                        {
+                            return Err(ChemistryError::ReversibleThermodynamicsMismatch {
+                                reaction_id: reaction.id.to_string(),
+                                reverse_id: reverse_id.to_string(),
+                                reason: "Gibbs free energy changes must sum to zero".to_string(),
+                            });
+                        }
+                    }
+                    (None, None) => {}
+                    _ => {
+                        return Err(ChemistryError::ReversibleThermodynamicsMismatch {
+                            reaction_id: reaction.id.to_string(),
+                            reverse_id: reverse_id.to_string(),
+                            reason: "paired reverse reactions must either both define thermodynamics or both omit it".to_string(),
+                        });
+                    }
                 }
                 let expected_reverse_activation =
                     reaction.activation_energy_kj_per_mol - reaction.enthalpy_change_kj_per_mol;

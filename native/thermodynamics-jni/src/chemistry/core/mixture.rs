@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::error::{ChemistryError, ChemistryResult};
 use super::reaction::GAS_CONSTANT_J_PER_MOL_KELVIN;
 use super::registry::{ChemistryRegistry, GasSolubilityModel, SolventMiscibility, SubstanceIndex};
-use super::solution::{self, SolutionState};
+use super::solution::{self, AqueousEquilibriumSystem, SolutionState};
 use super::substance::{
     LiquidPhasePreference, SolventRole, Substance, SubstanceAggregateState, SubstanceId,
     SubstanceTagId,
@@ -11,7 +11,8 @@ use super::substance::{
 
 pub const DEFAULT_TEMPERATURE_KELVIN: f64 = 298.0;
 pub const TRACE_CONCENTRATION_MOL_PER_BUCKET: f64 = 1.0 / 512.0 / 512.0;
-const BUCKET_VOLUME_CUBIC_METERS: f64 = 0.001;
+pub const STANDARD_PRESSURE_PASCAL: f64 = 101_325.0;
+pub const DEFAULT_GAS_VOLUME_CUBIC_METERS: f64 = 0.001;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MixturePhase {
@@ -95,6 +96,7 @@ struct LiquidPhaseState {
 #[derive(Debug, Clone)]
 pub struct Mixture {
     temperature_kelvin: f64,
+    gas_volume_cubic_meters: f64,
     components: Vec<MixtureComponent>,
     positions_by_substance: Vec<Option<usize>>,
 }
@@ -120,6 +122,7 @@ struct ComponentPhaseAmounts {
 #[derive(Debug, Clone)]
 pub(crate) struct MixtureCheckpoint {
     temperature_kelvin: f64,
+    gas_volume_cubic_meters: f64,
     components: Vec<ComponentCheckpoint>,
 }
 
@@ -138,6 +141,7 @@ impl Mixture {
         }
         Ok(Self {
             temperature_kelvin,
+            gas_volume_cubic_meters: DEFAULT_GAS_VOLUME_CUBIC_METERS,
             components: Vec::new(),
             positions_by_substance: Vec::new(),
         })
@@ -149,6 +153,23 @@ impl Mixture {
 
     pub fn temperature_kelvin(&self) -> f64 {
         self.temperature_kelvin
+    }
+
+    pub fn gas_volume_cubic_meters(&self) -> f64 {
+        self.gas_volume_cubic_meters
+    }
+
+    pub fn set_gas_volume_cubic_meters(
+        &mut self,
+        gas_volume_cubic_meters: f64,
+    ) -> ChemistryResult<()> {
+        if !gas_volume_cubic_meters.is_finite() || gas_volume_cubic_meters <= 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "gas volume must be positive and finite".to_string(),
+            ));
+        }
+        self.gas_volume_cubic_meters = gas_volume_cubic_meters;
+        Ok(())
     }
 
     pub fn concentration_of(&self, substance_id: &SubstanceId) -> f64 {
@@ -291,7 +312,21 @@ impl Mixture {
             .map(|component| component.amount_in_phase(MixturePhase::Gas))
             .sum::<f64>();
         gas_mol_per_bucket * GAS_CONSTANT_J_PER_MOL_KELVIN * self.temperature_kelvin
-            / BUCKET_VOLUME_CUBIC_METERS
+            / self.gas_volume_cubic_meters
+    }
+
+    pub fn gas_partial_pressure_pascal(&self, substance_id: &SubstanceId) -> f64 {
+        self.components
+            .iter()
+            .find(|component| &component.substance_id == substance_id)
+            .map(|component| {
+                gas_pressure_for_moles(
+                    component.amount_in_phase(MixturePhase::Gas),
+                    self.temperature_kelvin,
+                    self.gas_volume_cubic_meters,
+                )
+            })
+            .unwrap_or(0.0)
     }
 
     pub fn aqueous_ionic_strength(&self, registry: &ChemistryRegistry) -> ChemistryResult<f64> {
@@ -366,6 +401,13 @@ impl Mixture {
         solution::solution_state(registry, self)
     }
 
+    pub fn aqueous_equilibrium_systems(
+        &self,
+        registry: &ChemistryRegistry,
+    ) -> ChemistryResult<Vec<AqueousEquilibriumSystem>> {
+        solution::aqueous_equilibrium_systems(registry, self)
+    }
+
     pub fn equilibrate_solution(&mut self, registry: &ChemistryRegistry) -> ChemistryResult<f64> {
         solution::equilibrate_solution_equilibria(registry, self)
     }
@@ -384,7 +426,6 @@ impl Mixture {
             return self.validate(registry).map(|_| 0.0);
         }
         self.validate_registry_shape(registry)?;
-        let gas_pressure_pascal = self.gas_pressure_pascal();
         let ionic_strength = self.aqueous_ionic_strength(registry)?;
         let mut max_delta = 0.0_f64;
         let gas_substances = self
@@ -397,6 +438,14 @@ impl Mixture {
             })
             .collect::<Vec<_>>();
         for (substance, model) in gas_substances {
+            let Some(position) = self.position_of_substance(substance) else {
+                continue;
+            };
+            let gas_pressure_pascal = gas_pressure_for_moles(
+                self.components[position].amount_in_phase(MixturePhase::Gas),
+                self.temperature_kelvin,
+                self.gas_volume_cubic_meters,
+            );
             let target_dissolved = gas_dissolved_limit(
                 Some(&model),
                 gas_pressure_pascal,
@@ -408,9 +457,6 @@ impl Mixture {
             if fraction <= 0.0 {
                 continue;
             }
-            let Some(position) = self.position_of_substance(substance) else {
-                continue;
-            };
             let current_dissolved = self.components[position]
                 .amount_in_phases(&[MixturePhase::Aqueous, MixturePhase::Organic]);
             let difference = target_dissolved - current_dissolved;
@@ -447,6 +493,123 @@ impl Mixture {
         Ok(max_delta)
     }
 
+    pub fn exchange_gases_with_atmosphere(
+        &mut self,
+        registry: &ChemistryRegistry,
+        atmosphere_mole_fractions: &[(SubstanceId, f64)],
+        total_pressure_pascal: f64,
+        exchange_coefficient_per_tick: f64,
+        ticks: f64,
+    ) -> ChemistryResult<f64> {
+        if !total_pressure_pascal.is_finite() || total_pressure_pascal < 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "atmosphere pressure must be non-negative and finite".to_string(),
+            ));
+        }
+        if !exchange_coefficient_per_tick.is_finite() || exchange_coefficient_per_tick < 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "gas exchange coefficient must be non-negative and finite".to_string(),
+            ));
+        }
+        if !ticks.is_finite() || ticks < 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "gas exchange time must be non-negative and finite".to_string(),
+            ));
+        }
+        if self.temperature_kelvin <= 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "gas exchange requires positive mixture temperature".to_string(),
+            ));
+        }
+        if exchange_coefficient_per_tick == 0.0 || ticks == 0.0 {
+            return self.validate(registry).map(|_| 0.0);
+        }
+        self.validate_registry_shape(registry)?;
+        self.ensure_position_capacity(registry);
+
+        let mut target_pressures = BTreeMap::<SubstanceIndex, f64>::new();
+        let mut fraction_sum = 0.0;
+        for (substance_id, fraction) in atmosphere_mole_fractions {
+            if !fraction.is_finite() || *fraction < 0.0 {
+                return Err(ChemistryError::InvalidMixtureState(
+                    "atmosphere gas fraction must be non-negative and finite".to_string(),
+                ));
+            }
+            fraction_sum += fraction;
+            let substance = registry.substance_index(substance_id).ok_or_else(|| {
+                ChemistryError::InvalidMixtureState(format!(
+                    "unknown atmosphere gas substance '{substance_id}'"
+                ))
+            })?;
+            if registry
+                .substance_by_index(substance)?
+                .aggregate_state_at(self.temperature_kelvin)?
+                != SubstanceAggregateState::Gas
+            {
+                return Err(ChemistryError::InvalidMixtureState(format!(
+                    "atmosphere substance '{substance_id}' is not a gas at current temperature"
+                )));
+            }
+            if target_pressures
+                .insert(substance, total_pressure_pascal * fraction)
+                .is_some()
+            {
+                return Err(ChemistryError::InvalidMixtureState(format!(
+                    "duplicate atmosphere gas substance '{substance_id}'"
+                )));
+            }
+        }
+        if fraction_sum > 1.0 + 1.0e-12 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "atmosphere gas fractions must not sum above one".to_string(),
+            ));
+        }
+
+        let mut gas_substances = self
+            .components
+            .iter()
+            .filter(|component| component.amount_in_phase(MixturePhase::Gas) > 0.0)
+            .map(|component| component.substance)
+            .collect::<BTreeSet<_>>();
+        gas_substances.extend(target_pressures.keys().copied());
+
+        let fraction = 1.0 - (-exchange_coefficient_per_tick * ticks).exp();
+        let mut max_delta = 0.0_f64;
+        for substance in gas_substances {
+            let target_pressure = target_pressures.get(&substance).copied().unwrap_or(0.0);
+            let target_gas = gas_moles_for_pressure(
+                target_pressure,
+                self.temperature_kelvin,
+                self.gas_volume_cubic_meters,
+            )?;
+            let current_gas =
+                self.concentration_of_index_in_phases(substance, &[MixturePhase::Gas]);
+            let delta = (target_gas - current_gas) * fraction;
+            if delta.abs() <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                continue;
+            }
+            max_delta = max_delta.max(delta.abs());
+            if delta > 0.0 {
+                let substance_id = registry.substance_by_index(substance)?.id.clone();
+                self.change_concentration_by_index_unchecked(
+                    registry,
+                    substance,
+                    substance_id,
+                    delta,
+                    MixturePhase::Gas,
+                )?;
+            } else if let Some(position) = self.position_of_substance(substance) {
+                let removed = (-delta).min(current_gas);
+                self.components[position].remove_from_phase(MixturePhase::Gas, removed)?;
+                self.remove_trace_component(registry, substance)?;
+            }
+        }
+
+        self.equilibrate_phases(registry)?;
+        self.validate(registry)?;
+        Ok(max_delta)
+    }
+
     pub fn substances(&self) -> impl Iterator<Item = &SubstanceId> {
         self.components
             .iter()
@@ -471,6 +634,51 @@ impl Mixture {
         self.position_of_substance(substance)
             .map(|position| self.components[position].amount_in_phases(phases))
             .unwrap_or(0.0)
+    }
+
+    pub(crate) fn apply_aqueous_targets_by_index(
+        &mut self,
+        registry: &ChemistryRegistry,
+        targets: &[(SubstanceIndex, f64)],
+    ) -> ChemistryResult<f64> {
+        self.ensure_position_capacity(registry);
+        let mut max_delta = 0.0_f64;
+        let mut touched = Vec::with_capacity(targets.len());
+        for (substance, target) in targets {
+            registry.substance_by_index(*substance)?;
+            if !target.is_finite() || *target < 0.0 {
+                return Err(ChemistryError::InvalidMixtureState(
+                    "aqueous target concentration must be non-negative and finite".to_string(),
+                ));
+            }
+            let current =
+                self.concentration_of_index_in_phases(*substance, &[MixturePhase::Aqueous]);
+            max_delta = max_delta.max((target - current).abs());
+            touched.push(*substance);
+        }
+        for (substance, target) in targets {
+            if let Some(position) = self.position_of_substance(*substance) {
+                self.components[position].aqueous_mol_per_bucket = *target;
+            } else {
+                let substance_data = registry.substance_by_index(*substance)?;
+                let trace_threshold = if substance_data.charge == 0 {
+                    TRACE_CONCENTRATION_MOL_PER_BUCKET
+                } else {
+                    1.0e-14
+                };
+                if *target <= trace_threshold {
+                    continue;
+                }
+                let substance_id = substance_data.id.clone();
+                self.insert_component(*substance, substance_id, *target, MixturePhase::Aqueous);
+            }
+        }
+        for substance in touched {
+            self.remove_trace_component(registry, substance)?;
+        }
+        self.equilibrate_phases(registry)?;
+        self.validate(registry)?;
+        Ok(max_delta)
     }
 
     pub fn move_between_phases(
@@ -851,6 +1059,7 @@ impl Mixture {
         }
         MixtureCheckpoint {
             temperature_kelvin: self.temperature_kelvin,
+            gas_volume_cubic_meters: self.gas_volume_cubic_meters,
             components: substances
                 .into_iter()
                 .map(|substance| ComponentCheckpoint {
@@ -865,6 +1074,7 @@ impl Mixture {
 
     pub(crate) fn restore_checkpoint(&mut self, checkpoint: MixtureCheckpoint) {
         self.temperature_kelvin = checkpoint.temperature_kelvin;
+        self.gas_volume_cubic_meters = checkpoint.gas_volume_cubic_meters;
         for component in checkpoint.components {
             match component.previous {
                 Some(previous) => {
@@ -972,6 +1182,11 @@ impl Mixture {
         }
 
         let mut result = Mixture::new(0.0)?;
+        result.gas_volume_cubic_meters = mixtures
+            .iter()
+            .map(|(mixture, amount)| mixture.gas_volume_cubic_meters * amount)
+            .sum::<f64>()
+            / total_amount;
         result.ensure_position_capacity(registry);
         for (substance_id, phase_amounts) in moles_by_substance {
             let substance_index = registry.substance_index(&substance_id).ok_or_else(|| {
@@ -995,6 +1210,27 @@ impl Mixture {
             .iter()
             .map(|component| (component.substance, component.total_concentration()))
             .collect::<Vec<_>>();
+        self.redistribute_condensed_phases(registry)?;
+        let vapor_liquid_delta = self.equilibrate_vapor_liquid(registry)?;
+        if vapor_liquid_delta > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            self.redistribute_condensed_phases(registry)?;
+        }
+        for (substance, before) in totals_before {
+            let after = self.concentration_of_index(substance);
+            if (before - after).abs() > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                let substance_id = &registry.substance_by_index(substance)?.id;
+                return Err(ChemistryError::InvalidMixtureState(format!(
+                    "phase equilibration changed amount of '{substance_id}': before {before}, after {after}"
+                )));
+            }
+        }
+        self.validate(registry)
+    }
+
+    fn redistribute_condensed_phases(
+        &mut self,
+        registry: &ChemistryRegistry,
+    ) -> ChemistryResult<()> {
         let liquid_phases = self.liquid_phases(registry)?;
         for position in 0..self.components.len() {
             let substance = registry.substance_by_index(self.components[position].substance)?;
@@ -1044,34 +1280,111 @@ impl Mixture {
                     }
                 }
                 SubstanceAggregateState::Liquid => {
+                    let current_gas = if substance
+                        .vapor_pressure_pascal(self.temperature_kelvin)?
+                        .is_some()
+                    {
+                        self.components[position].amount_in_phase(MixturePhase::Gas)
+                    } else {
+                        0.0
+                    };
+                    let condensed = (total - current_gas).max(0.0);
+                    next.gas_mol_per_bucket = current_gas.min(total);
                     distribute_condensed_amount(
                         registry,
                         substance,
                         &liquid_phases,
                         substance.phase_properties.can_precipitate,
-                        total,
+                        condensed,
                         &mut next,
                     )?;
                 }
             }
             self.components[position].set_phase_amounts(next);
         }
-        for (substance, before) in totals_before {
-            let after = self.concentration_of_index(substance);
-            if (before - after).abs() > TRACE_CONCENTRATION_MOL_PER_BUCKET {
-                let substance_id = &registry.substance_by_index(substance)?.id;
+        Ok(())
+    }
+
+    pub fn equilibrate_vapor_liquid(
+        &mut self,
+        registry: &ChemistryRegistry,
+    ) -> ChemistryResult<f64> {
+        self.validate_registry_shape(registry)?;
+        if self.temperature_kelvin <= 0.0 {
+            return self.validate(registry).map(|_| 0.0);
+        }
+        let mut max_delta = 0.0_f64;
+        let substances = self
+            .components
+            .iter()
+            .map(|component| component.substance)
+            .collect::<Vec<_>>();
+        for substance_index in substances {
+            let substance = registry.substance_by_index(substance_index)?;
+            if substance.charge != 0 {
+                continue;
+            }
+            let Some(critical_temperature) = substance.critical_temperature_kelvin else {
+                continue;
+            };
+            if substance.critical_pressure_pascal.is_none() {
                 return Err(ChemistryError::InvalidMixtureState(format!(
-                    "phase equilibration changed amount of '{substance_id}': before {before}, after {after}"
+                    "substance '{}' has critical temperature without critical pressure",
+                    substance.id
                 )));
             }
+            if self.temperature_kelvin >= critical_temperature {
+                let liquid = self.liquid_concentration_of_index(substance_index);
+                if liquid > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                    self.move_liquid_to_gas(substance_index, liquid)?;
+                    max_delta = max_delta.max(liquid);
+                }
+                continue;
+            }
+            if substance.aggregate_state_at(self.temperature_kelvin)?
+                == SubstanceAggregateState::Solid
+            {
+                continue;
+            }
+            let Some(vapor_pressure) = substance.vapor_pressure_pascal(self.temperature_kelvin)?
+            else {
+                continue;
+            };
+            let target_gas = gas_moles_for_pressure(
+                vapor_pressure,
+                self.temperature_kelvin,
+                self.gas_volume_cubic_meters,
+            )?;
+            let total = self.concentration_of_index(substance_index);
+            let current_gas =
+                self.concentration_of_index_in_phases(substance_index, &[MixturePhase::Gas]);
+            let current_liquid = self.liquid_concentration_of_index(substance_index);
+            let desired_gas = total.min(target_gas);
+            if current_gas > desired_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                let condensed = current_gas - desired_gas;
+                self.move_gas_to_preferred_liquid(registry, substance_index, condensed)?;
+                max_delta = max_delta.max(condensed);
+            } else if current_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET < desired_gas
+                && current_liquid > TRACE_CONCENTRATION_MOL_PER_BUCKET
+            {
+                let evaporated = (desired_gas - current_gas).min(current_liquid);
+                self.move_liquid_to_gas(substance_index, evaporated)?;
+                max_delta = max_delta.max(evaporated);
+            }
         }
-        self.validate(registry)
+        self.validate(registry)?;
+        Ok(max_delta)
     }
 
     pub fn validate(&self, registry: &ChemistryRegistry) -> ChemistryResult<()> {
         if !self.temperature_kelvin.is_finite() || self.temperature_kelvin < 0.0 {
             return Err(ChemistryError::InvalidMixtureState(
                 "temperature must be non-negative and finite".to_string(),
+            ));
+        }
+        if !self.gas_volume_cubic_meters.is_finite() || self.gas_volume_cubic_meters <= 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "gas volume must be positive and finite".to_string(),
             ));
         }
         self.validate_registry_shape(registry)?;
@@ -1546,10 +1859,11 @@ impl Mixture {
                 let substance = registry.substance_by_index(component.substance).ok()?;
                 (substance_is_solvent(substance)
                     && component.total_concentration() > TRACE_CONCENTRATION_MOL_PER_BUCKET
-                    && substance
-                        .aggregate_state_at(self.temperature_kelvin)
-                        .ok()
-                        .is_some_and(|state| state == SubstanceAggregateState::Liquid))
+                    && (component.condensed_concentration() > TRACE_CONCENTRATION_MOL_PER_BUCKET
+                        || substance
+                            .aggregate_state_at(self.temperature_kelvin)
+                            .ok()
+                            .is_some_and(|state| state == SubstanceAggregateState::Liquid)))
                 .then_some(component.substance)
             })
             .collect::<Vec<_>>();
@@ -1990,6 +2304,38 @@ fn gas_dissolved_limit(
     }
 }
 
+fn gas_pressure_for_moles(
+    moles_per_bucket: f64,
+    temperature_kelvin: f64,
+    gas_volume_cubic_meters: f64,
+) -> f64 {
+    moles_per_bucket * GAS_CONSTANT_J_PER_MOL_KELVIN * temperature_kelvin / gas_volume_cubic_meters
+}
+
+fn gas_moles_for_pressure(
+    pressure_pascal: f64,
+    temperature_kelvin: f64,
+    gas_volume_cubic_meters: f64,
+) -> ChemistryResult<f64> {
+    if !pressure_pascal.is_finite() || pressure_pascal < 0.0 {
+        return Err(ChemistryError::InvalidMixtureState(
+            "gas pressure must be non-negative and finite".to_string(),
+        ));
+    }
+    if !temperature_kelvin.is_finite() || temperature_kelvin <= 0.0 {
+        return Err(ChemistryError::InvalidMixtureState(
+            "temperature must be positive and finite for gas pressure conversion".to_string(),
+        ));
+    }
+    if !gas_volume_cubic_meters.is_finite() || gas_volume_cubic_meters <= 0.0 {
+        return Err(ChemistryError::InvalidMixtureState(
+            "gas volume must be positive and finite".to_string(),
+        ));
+    }
+    Ok(pressure_pascal * gas_volume_cubic_meters
+        / (GAS_CONSTANT_J_PER_MOL_KELVIN * temperature_kelvin))
+}
+
 fn gas_transfer_coefficient_per_tick(model: &GasSolubilityModel) -> f64 {
     match model {
         GasSolubilityModel::Henry {
@@ -2158,6 +2504,7 @@ mod tests {
         ChemistryRegistryBuilder::new()
             .substance(
                 Substance::new("destroy:water", 0, 18.0, 18_000.0, 373.0, 75.0, 40_650.0)
+                    .with_critical_point(647.0, 22_064_000.0)
                     .with_phase_properties(SubstancePhaseProperties::aqueous_solvent()),
             )
             .substance(
@@ -2195,6 +2542,69 @@ mod tests {
                     transfer_coefficient_per_tick: 0.25,
                     estimated: false,
                 },
+            )
+            .build()
+            .unwrap()
+    }
+
+    fn vapor_liquid_registry() -> ChemistryRegistry {
+        ChemistryRegistryBuilder::new()
+            .substance(
+                Substance::new("destroy:water", 0, 18.0, 18_000.0, 373.0, 75.0, 40_650.0)
+                    .with_critical_point(647.0, 22_064_000.0)
+                    .with_phase_properties(SubstancePhaseProperties::aqueous_solvent()),
+            )
+            .substance(
+                Substance::new(
+                    "destroy:liquefiable_gas",
+                    0,
+                    58.0,
+                    580.0,
+                    272.0,
+                    110.0,
+                    21_000.0,
+                )
+                .with_critical_point(425.0, 3_800_000.0)
+                .with_vapor_pressure_model(
+                    crate::chemistry::substance::VaporPressureModel::ClausiusClapeyron {
+                        reference_temperature_kelvin: 298.0,
+                        reference_pressure_pascal: 200_000.0,
+                        enthalpy_j_per_mol: 21_000.0,
+                    },
+                )
+                .with_phase_properties(SubstancePhaseProperties::organic_unlimited(0.0)),
+            )
+            .substance(
+                Substance::new(
+                    "destroy:supercritical_gas",
+                    0,
+                    44.0,
+                    440.0,
+                    272.0,
+                    90.0,
+                    16_000.0,
+                )
+                .with_critical_point(290.0, 7_000_000.0)
+                .with_phase_properties(SubstancePhaseProperties::organic_unlimited(0.0)),
+            )
+            .substance(
+                Substance::new(
+                    "destroy:volatile_solute",
+                    0,
+                    120.0,
+                    120_000.0,
+                    520.0,
+                    100.0,
+                    20_000.0,
+                )
+                .with_phase_properties(SubstancePhaseProperties {
+                    preferred_liquid_phase: LiquidPhasePreference::Organic,
+                    aqueous_solubility_mol_per_bucket: Some(0.0),
+                    organic_solubility_mol_per_bucket: Some(0.2),
+                    can_precipitate: true,
+                    can_form_liquid_phase: false,
+                    solvent_role: SolventRole::NotSolvent,
+                }),
             )
             .build()
             .unwrap()
@@ -2494,6 +2904,85 @@ mod tests {
     }
 
     #[test]
+    fn gas_solubility_uses_partial_pressure_of_that_gas() {
+        let registry = gas_registry();
+        let oxygen: SubstanceId = "destroy:oxygen".into();
+        let ballast: SubstanceId = "destroy:unknown_gas".into();
+        let mut oxygen_only = Mixture::new(298.0).unwrap();
+        oxygen_only
+            .add_substance(&registry, "destroy:water", 1.0)
+            .unwrap();
+        oxygen_only
+            .add_substance(&registry, oxygen.clone(), 1.0)
+            .unwrap();
+        oxygen_only
+            .transfer_gases_toward_solubility_equilibrium(&registry, 1.0)
+            .unwrap();
+
+        let mut with_ballast = Mixture::new(298.0).unwrap();
+        with_ballast
+            .add_substance(&registry, "destroy:water", 1.0)
+            .unwrap();
+        with_ballast
+            .add_substance(&registry, oxygen.clone(), 1.0)
+            .unwrap();
+        with_ballast.add_substance(&registry, ballast, 1.0).unwrap();
+        with_ballast
+            .transfer_gases_toward_solubility_equilibrium(&registry, 1.0)
+            .unwrap();
+
+        let oxygen_only_dissolved =
+            oxygen_only.concentration_in_phase(&oxygen, MixturePhase::Aqueous);
+        let with_ballast_dissolved =
+            with_ballast.concentration_in_phase(&oxygen, MixturePhase::Aqueous);
+
+        assert!(
+            (oxygen_only_dissolved - with_ballast_dissolved).abs() < 1.0e-12,
+            "oxygen-only dissolved {oxygen_only_dissolved}, with ballast {with_ballast_dissolved}"
+        );
+        assert!(
+            with_ballast.gas_pressure_pascal() > oxygen_only.gas_pressure_pascal(),
+            "ballast gas should still raise total pressure"
+        );
+    }
+
+    #[test]
+    fn open_atmosphere_exchange_sets_gas_phase_by_partial_pressures() {
+        let registry = gas_registry();
+        let oxygen: SubstanceId = "destroy:oxygen".into();
+        let ballast: SubstanceId = "destroy:unknown_gas".into();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, oxygen.clone(), 1.0)
+            .unwrap();
+
+        let delta = mixture
+            .exchange_gases_with_atmosphere(
+                &registry,
+                &[(oxygen.clone(), 0.21), (ballast.clone(), 0.79)],
+                STANDARD_PRESSURE_PASCAL,
+                10.0,
+                10.0,
+            )
+            .unwrap();
+
+        assert!(delta > 0.0);
+        assert!(
+            (mixture.gas_pressure_pascal() / STANDARD_PRESSURE_PASCAL - 1.0).abs() < 1.0e-6,
+            "open gas pressure was {} Pa",
+            mixture.gas_pressure_pascal()
+        );
+        assert!(
+            (mixture.gas_partial_pressure_pascal(&oxygen) / STANDARD_PRESSURE_PASCAL - 0.21).abs()
+                < 1.0e-6
+        );
+        assert!(
+            (mixture.gas_partial_pressure_pascal(&ballast) / STANDARD_PRESSURE_PASCAL - 0.79).abs()
+                < 1.0e-6
+        );
+    }
+
+    #[test]
     fn gas_without_solubility_data_does_not_enter_solution() {
         let registry = gas_registry();
         let gas: SubstanceId = "destroy:unknown_gas".into();
@@ -2539,6 +3028,151 @@ mod tests {
         assert!(after_first > 0.0);
         assert!(after_second > after_first);
         assert!(mixture.concentration_in_phase(&oxygen, MixturePhase::Gas) > 0.0);
+    }
+
+    #[test]
+    fn volatile_liquid_evaporates_to_saturation_pressure() {
+        let registry = vapor_liquid_registry();
+        let water: SubstanceId = "destroy:water".into();
+        let mut mixture = Mixture::new(373.0).unwrap();
+
+        mixture
+            .add_substance(&registry, water.clone(), 1.0)
+            .unwrap();
+
+        assert!(mixture.concentration_in_phase(&water, MixturePhase::Aqueous) > 0.9);
+        assert!(mixture.concentration_in_phase(&water, MixturePhase::Gas) > 0.0);
+        assert!(
+            (mixture.gas_partial_pressure_pascal(&water) / STANDARD_PRESSURE_PASCAL - 1.0).abs()
+                < 1.0e-6,
+            "water vapor pressure was {} Pa",
+            mixture.gas_partial_pressure_pascal(&water)
+        );
+    }
+
+    #[test]
+    fn gas_pressure_depends_on_headspace_volume() {
+        let registry = gas_registry();
+        let oxygen: SubstanceId = "destroy:oxygen".into();
+        let mut small_headspace = Mixture::new(298.0).unwrap();
+        let mut large_headspace = Mixture::new(298.0).unwrap();
+        large_headspace
+            .set_gas_volume_cubic_meters(DEFAULT_GAS_VOLUME_CUBIC_METERS * 4.0)
+            .unwrap();
+
+        small_headspace
+            .add_substance(&registry, oxygen.clone(), 1.0)
+            .unwrap();
+        large_headspace
+            .add_substance(&registry, oxygen, 1.0)
+            .unwrap();
+
+        assert!(
+            (small_headspace.gas_pressure_pascal() / large_headspace.gas_pressure_pascal() - 4.0)
+                .abs()
+                < 1.0e-9
+        );
+    }
+
+    #[test]
+    fn larger_headspace_evaporates_more_liquid_to_same_vapor_pressure() {
+        let registry = vapor_liquid_registry();
+        let water: SubstanceId = "destroy:water".into();
+        let mut small_headspace = Mixture::new(373.0).unwrap();
+        let mut large_headspace = Mixture::new(373.0).unwrap();
+        large_headspace
+            .set_gas_volume_cubic_meters(DEFAULT_GAS_VOLUME_CUBIC_METERS * 3.0)
+            .unwrap();
+
+        small_headspace
+            .add_substance(&registry, water.clone(), 1.0)
+            .unwrap();
+        large_headspace
+            .add_substance(&registry, water.clone(), 1.0)
+            .unwrap();
+
+        let small_gas = small_headspace.concentration_in_phase(&water, MixturePhase::Gas);
+        let large_gas = large_headspace.concentration_in_phase(&water, MixturePhase::Gas);
+
+        assert!(
+            (small_headspace.gas_partial_pressure_pascal(&water)
+                / large_headspace.gas_partial_pressure_pascal(&water)
+                - 1.0)
+                .abs()
+                < 1.0e-9
+        );
+        assert!(
+            (large_gas / small_gas - 3.0).abs() < 1.0e-9,
+            "small gas {small_gas}, large gas {large_gas}"
+        );
+    }
+
+    #[test]
+    fn gas_condenses_when_partial_pressure_exceeds_saturation_pressure() {
+        let registry = vapor_liquid_registry();
+        let gas: SubstanceId = "destroy:liquefiable_gas".into();
+        let mut mixture = Mixture::new(298.0).unwrap();
+
+        mixture.add_substance(&registry, gas.clone(), 1.0).unwrap();
+
+        assert!(mixture.concentration_in_phase(&gas, MixturePhase::Organic) > 0.0);
+        assert!(mixture.concentration_in_phase(&gas, MixturePhase::Gas) > 0.0);
+        assert!(
+            (mixture.gas_partial_pressure_pascal(&gas) / 200_000.0 - 1.0).abs() < 1.0e-6,
+            "partial pressure was {} Pa",
+            mixture.gas_partial_pressure_pascal(&gas)
+        );
+    }
+
+    #[test]
+    fn condensation_creates_phase_then_solutes_redistribute_into_it() {
+        let registry = vapor_liquid_registry();
+        let gas: SubstanceId = "destroy:liquefiable_gas".into();
+        let solute: SubstanceId = "destroy:volatile_solute".into();
+        let mut mixture = Mixture::new(298.0).unwrap();
+
+        mixture
+            .add_substance(&registry, solute.clone(), 0.3)
+            .unwrap();
+        assert_eq!(
+            mixture.concentration_in_phase(&solute, MixturePhase::Organic),
+            0.0
+        );
+        assert_eq!(
+            mixture.concentration_in_phase(&solute, MixturePhase::Solid),
+            0.3
+        );
+
+        mixture.add_substance(&registry, gas, 1.0).unwrap();
+
+        assert!(
+            mixture.concentration_in_phase(&solute, MixturePhase::Organic) > 0.0,
+            "solute did not enter the liquid phase created by gas condensation"
+        );
+        assert!(
+            mixture.concentration_in_phase(&solute, MixturePhase::Solid) < 0.3,
+            "solute stayed fully precipitated after solvent condensation"
+        );
+    }
+
+    #[test]
+    fn supercritical_substance_cannot_keep_condensed_phase() {
+        let registry = vapor_liquid_registry();
+        let gas: SubstanceId = "destroy:supercritical_gas".into();
+        let mut mixture = Mixture::new(298.0).unwrap();
+
+        mixture.add_substance(&registry, gas.clone(), 1.0).unwrap();
+        mixture
+            .set_gaseous_fraction(&registry, gas.clone(), 0.5)
+            .unwrap();
+        let delta = mixture.equilibrate_vapor_liquid(&registry).unwrap();
+
+        assert!(delta > 0.0);
+        assert_eq!(
+            mixture.concentration_in_phase(&gas, MixturePhase::Organic),
+            0.0
+        );
+        assert_eq!(mixture.concentration_in_phase(&gas, MixturePhase::Gas), 1.0);
     }
 
     #[test]
