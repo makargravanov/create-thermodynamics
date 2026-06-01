@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use super::error::{ChemistryError, ChemistryResult};
-use super::mixture::{Mixture, MixturePhase, TRACE_CONCENTRATION_MOL_PER_BUCKET};
+use super::mixture::{
+    LiquidPhaseId, Mixture, MixturePhase, TRACE_CONCENTRATION_MOL_PER_BUCKET,
+};
 use super::registry::{ChemistryRegistry, SubstanceIndex};
 use super::substance::SubstanceId;
 
@@ -13,7 +15,16 @@ const EQUILIBRIUM_MAX_PASSES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SolutionState {
-    pub aqueous_ionic_strength_mol_per_bucket: f64,
+    pub ph: Option<f64>,
+    pub liquid_phases: Vec<LiquidPhaseSolutionState>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiquidPhaseSolutionState {
+    pub phase_id: LiquidPhaseId,
+    pub coarse_phase: MixturePhase,
+    pub representative_solvent_id: SubstanceId,
+    pub ionic_strength_mol_per_bucket: f64,
     pub proton_activity_mol_per_bucket: Option<f64>,
     pub ph: Option<f64>,
     pub activity_coefficients: BTreeMap<SubstanceId, f64>,
@@ -242,36 +253,98 @@ pub fn solution_state(
     registry: &ChemistryRegistry,
     mixture: &Mixture,
 ) -> ChemistryResult<SolutionState> {
-    let ionic_strength = mixture.aqueous_ionic_strength(registry)?;
+    let liquid_phases = liquid_phase_solution_states(registry, mixture)?;
+    let ph = unambiguous_aqueous_ph(&liquid_phases)?;
+    Ok(SolutionState {
+        ph,
+        liquid_phases,
+    })
+}
+
+fn liquid_phase_solution_states(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+) -> ChemistryResult<Vec<LiquidPhaseSolutionState>> {
+    let proton = SubstanceId::from("destroy:proton");
+    let proton_amounts = if registry.substance(&proton).is_ok() {
+        mixture
+            .liquid_phase_amounts_of(registry, &proton)?
+            .into_iter()
+            .map(|amount| (amount.phase_id, amount.concentration_mol_per_bucket))
+            .collect::<BTreeMap<_, _>>()
+    } else {
+        BTreeMap::new()
+    };
+    mixture
+        .liquid_phase_ionic_strengths(registry)?
+        .into_iter()
+        .map(|phase| {
+            let activity_coefficients = activity_coefficients_for_strength(
+                registry,
+                phase.ionic_strength_mol_per_bucket,
+                mixture.temperature_kelvin(),
+            )?;
+            let proton_activity_mol_per_bucket =
+                if phase.coarse_phase == MixturePhase::Aqueous && registry.substance(&proton).is_ok()
+                {
+                    let proton_coefficient = activity_coefficients
+                        .get(&proton)
+                        .copied()
+                        .ok_or_else(|| ChemistryError::InvalidMixtureState(
+                            "proton activity coefficient missing from phase solution state"
+                                .to_string(),
+                        ))?;
+                    let concentration = proton_amounts
+                        .get(&phase.phase_id)
+                        .copied()
+                        .unwrap_or(0.0);
+                    Some((concentration * proton_coefficient).max(PH_PROTON_ACTIVITY_FLOOR))
+                } else {
+                    None
+                };
+            let ph = proton_activity_mol_per_bucket.map(|activity| -activity.log10());
+            Ok(LiquidPhaseSolutionState {
+                phase_id: phase.phase_id,
+                coarse_phase: phase.coarse_phase,
+                representative_solvent_id: phase.representative_solvent_id,
+                ionic_strength_mol_per_bucket: phase.ionic_strength_mol_per_bucket,
+                proton_activity_mol_per_bucket,
+                ph,
+                activity_coefficients,
+            })
+        })
+        .collect()
+}
+
+fn unambiguous_aqueous_ph(phases: &[LiquidPhaseSolutionState]) -> ChemistryResult<Option<f64>> {
+    let aqueous_phases = phases
+        .iter()
+        .filter(|phase| phase.coarse_phase == MixturePhase::Aqueous)
+        .collect::<Vec<_>>();
+    match aqueous_phases.as_slice() {
+        [] => Ok(None),
+        [phase] => Ok(phase.ph),
+        _ => Err(ChemistryError::InvalidMixtureState(
+            "global pH is ambiguous because multiple aqueous liquid phases are present".to_string(),
+        )),
+    }
+}
+
+fn activity_coefficients_for_strength(
+    registry: &ChemistryRegistry,
+    ionic_strength_mol_per_bucket: f64,
+    temperature_kelvin: f64,
+) -> ChemistryResult<BTreeMap<SubstanceId, f64>> {
     let mut coefficients = BTreeMap::new();
     for substance in registry.substances() {
         let coefficient = ActivityModel::default().coefficient(
             substance.charge,
-            ionic_strength,
-            mixture.temperature_kelvin(),
+            ionic_strength_mol_per_bucket,
+            temperature_kelvin,
         )?;
         coefficients.insert(substance.id.clone(), coefficient);
     }
-
-    let proton: SubstanceId = "destroy:proton".into();
-    let has_aqueous_phase =
-        mixture.total_in_phase(MixturePhase::Aqueous) > TRACE_CONCENTRATION_MOL_PER_BUCKET;
-    if !has_aqueous_phase {
-        return Ok(SolutionState {
-            aqueous_ionic_strength_mol_per_bucket: ionic_strength,
-            proton_activity_mol_per_bucket: None,
-            ph: None,
-            activity_coefficients: coefficients,
-        });
-    }
-    let proton_activity = activity_of(registry, mixture, &proton, MixturePhase::Aqueous)?
-        .max(PH_PROTON_ACTIVITY_FLOOR);
-    Ok(SolutionState {
-        aqueous_ionic_strength_mol_per_bucket: ionic_strength,
-        proton_activity_mol_per_bucket: Some(proton_activity),
-        ph: Some(-proton_activity.log10()),
-        activity_coefficients: coefficients,
-    })
+    Ok(coefficients)
 }
 
 pub fn activity_of(
@@ -623,6 +696,40 @@ mod tests {
                 < dilute
                     .activity_of(&registry, &"destroy:proton".into(), MixturePhase::Aqueous)
                     .unwrap()
+        );
+    }
+
+    #[test]
+    fn solution_state_exposes_activity_coefficients_by_liquid_phase() {
+        let registry = acid_registry();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:salt_cation", 0.5)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:salt_anion", 0.5)
+            .unwrap();
+
+        let state = mixture.solution_state(&registry).unwrap();
+
+        assert_eq!(state.liquid_phases.len(), 1);
+        assert_eq!(state.liquid_phases[0].coarse_phase, MixturePhase::Aqueous);
+        assert!(state.ph.is_some());
+        assert_eq!(state.ph, state.liquid_phases[0].ph);
+        assert!(state.liquid_phases[0].proton_activity_mol_per_bucket.is_some());
+        assert!(
+            (state.liquid_phases[0].ionic_strength_mol_per_bucket - 0.5).abs() < 1.0e-12
+        );
+        assert!(
+            state.liquid_phases[0]
+                .activity_coefficients
+                .get(&SubstanceId::from("destroy:proton"))
+                .copied()
+                .unwrap()
+                < 1.0
         );
     }
 

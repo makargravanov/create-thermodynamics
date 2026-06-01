@@ -75,6 +75,14 @@ pub struct LiquidPhaseSubstanceAmount {
     pub concentration_mol_per_bucket: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiquidPhaseIonicStrength {
+    pub phase_id: LiquidPhaseId,
+    pub coarse_phase: MixturePhase,
+    pub representative_solvent_id: SubstanceId,
+    pub ionic_strength_mol_per_bucket: f64,
+}
+
 #[derive(Debug, Clone)]
 struct LiquidPhaseState {
     id: LiquidPhaseId,
@@ -303,6 +311,42 @@ impl Mixture {
             )));
         }
         Ok(ionic_strength)
+    }
+
+    pub fn liquid_phase_ionic_strengths(
+        &self,
+        registry: &ChemistryRegistry,
+    ) -> ChemistryResult<Vec<LiquidPhaseIonicStrength>> {
+        self.validate_registry_shape(registry)?;
+        let properties = registry.substance_properties();
+        self.liquid_phases(registry)?
+            .into_iter()
+            .map(|phase| {
+                let mut ionic_strength = 0.0;
+                for component in &self.components {
+                    let charge = properties.charge[component.substance.as_usize()] as f64;
+                    if charge == 0.0 {
+                        continue;
+                    }
+                    let amount = component.amount_in_liquid_phase(&phase);
+                    ionic_strength += 0.5 * amount * charge * charge;
+                }
+                if !ionic_strength.is_finite() || ionic_strength < 0.0 {
+                    return Err(ChemistryError::InvalidMixtureState(format!(
+                        "liquid phase ionic strength must be non-negative and finite: {ionic_strength}"
+                    )));
+                }
+                Ok(LiquidPhaseIonicStrength {
+                    phase_id: phase.id,
+                    coarse_phase: phase.coarse_phase,
+                    representative_solvent_id: registry
+                        .substance_by_index(phase.representative_solvent)?
+                        .id
+                        .clone(),
+                    ionic_strength_mol_per_bucket: ionic_strength,
+                })
+            })
+            .collect()
     }
 
     pub fn activity_of(
