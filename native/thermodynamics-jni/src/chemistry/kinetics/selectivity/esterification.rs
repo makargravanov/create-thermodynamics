@@ -183,6 +183,7 @@ mod tests {
             solvent_type: SolventType::Acidic,
             temperature: 373.0, // 100°C
             ph: Some(2.0),
+            ..Default::default()
         };
 
         let acetic = acid_site(SubstitutionDegree::Primary, 0.0);
@@ -200,6 +201,7 @@ mod tests {
             solvent_type: SolventType::Acidic,
             temperature: 350.0,
             ph: Some(2.0),
+            ..Default::default()
         };
 
         let acetic = acid_site(SubstitutionDegree::Primary, 0.0);
@@ -217,12 +219,14 @@ mod tests {
             solvent_type: SolventType::Acidic,
             temperature: 330.0, // ~60°C
             ph: Some(2.0),
+            ..Default::default()
         };
 
         let hot_context = SelectivityContext {
             solvent_type: SolventType::Acidic,
             temperature: 420.0, // ~150°C
             ph: Some(2.0),
+            ..Default::default()
         };
 
         let acetic = acid_site(SubstitutionDegree::Primary, 0.0);
@@ -247,6 +251,7 @@ mod tests {
             solvent_type: SolventType::Acidic,
             temperature: 373.0,
             ph: Some(2.0),
+            ..Default::default()
         };
 
         let pivalic = acid_site(SubstitutionDegree::Tertiary, 0.6); // (CH3)3CCOOH
@@ -265,6 +270,7 @@ mod tests {
             solvent_type: SolventType::Acidic,
             temperature: 350.0,
             ph: Some(2.0),
+            ..Default::default()
         };
 
         let acetic = acid_site(SubstitutionDegree::Primary, 0.0);
@@ -286,6 +292,7 @@ mod tests {
             solvent_type: SolventType::Acidic,
             temperature: 350.0,
             ph: Some(2.0),
+            ..Default::default()
         };
 
         let acetic = acid_site(SubstitutionDegree::Primary, 0.0);

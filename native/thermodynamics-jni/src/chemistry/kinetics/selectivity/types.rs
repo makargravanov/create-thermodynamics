@@ -6,7 +6,7 @@ use crate::chemistry::error::ChemistryResult;
 use crate::chemistry::mixture::{Mixture, MixturePhase, TRACE_CONCENTRATION_MOL_PER_BUCKET};
 use crate::chemistry::registry::ChemistryRegistry;
 use crate::chemistry::simulation::ReactionContext;
-use crate::chemistry::substance::{LiquidPhasePreference, SolventRole};
+use crate::chemistry::substance::{LiquidPhasePreference, SolventRole, SubstanceId};
 
 /// Substitution degree at a reactive center
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -118,6 +118,10 @@ pub struct SelectivityContext {
     pub ph: Option<f64>,
     /// Solvent type
     pub solvent_type: SolventType,
+    pub water_activity: f64,
+    pub fluoride_mol_per_bucket: f64,
+    pub hydrogen_mol_per_bucket: f64,
+    pub palladium_available: bool,
 }
 
 impl Default for SelectivityContext {
@@ -126,6 +130,10 @@ impl Default for SelectivityContext {
             temperature: 298.15, // 25°C
             ph: None,
             solvent_type: SolventType::Neutral,
+            water_activity: 0.0,
+            fluoride_mol_per_bucket: 0.0,
+            hydrogen_mol_per_bucket: 0.0,
+            palladium_available: false,
         }
     }
 }
@@ -138,13 +146,48 @@ impl SelectivityContext {
     pub fn from_mixture(
         registry: &ChemistryRegistry,
         mixture: &Mixture,
-        _reaction_context: &ReactionContext,
+        reaction_context: &ReactionContext,
     ) -> ChemistryResult<Self> {
         let ph = mixture.ph(registry)?;
+        let water = SubstanceId::from("destroy:water");
+        let water_activity = registry
+            .substance(&water)
+            .ok()
+            .map(|_| mixture.activity_of(registry, &water, MixturePhase::Aqueous))
+            .transpose()?
+            .unwrap_or(0.0);
+        let fluoride = SubstanceId::from("destroy:fluoride");
+        let fluoride_mol_per_bucket = registry
+            .substance(&fluoride)
+            .ok()
+            .map(|_| mixture.concentration_of(&fluoride))
+            .unwrap_or(0.0);
+        let hydrogen = SubstanceId::from("destroy:hydrogen");
+        let hydrogen_mol_per_bucket = registry
+            .substance(&hydrogen)
+            .ok()
+            .map(|_| mixture.concentration_of(&hydrogen))
+            .unwrap_or(0.0);
+        let palladium_available = reaction_context.external_catalysts.iter().any(
+            |(description, amount)| {
+                *amount > TRACE_CONCENTRATION_MOL_PER_BUCKET
+                    && description.to_ascii_lowercase().contains("palladium")
+            },
+        ) || reaction_context
+            .surfaces
+            .iter()
+            .any(|(surface_id, surface)| {
+                surface.free_sites() > TRACE_CONCENTRATION_MOL_PER_BUCKET
+                    && surface_id.as_str().to_ascii_lowercase().contains("palladium")
+            });
         let mut context = Self {
             temperature: mixture.temperature_kelvin(),
             ph,
             solvent_type: SolventType::Neutral,
+            water_activity,
+            fluoride_mol_per_bucket,
+            hydrogen_mol_per_bucket,
+            palladium_available,
         };
         context.solvent_type = if context.is_basic() {
             SolventType::Basic
@@ -182,6 +225,21 @@ impl SelectivityContext {
     /// Check if temperature is very high (> 150°C)
     pub fn is_very_high_temperature(&self) -> bool {
         self.temperature > 423.15 // 150°C
+    }
+    pub fn is_water_rich(&self) -> bool {
+        self.water_activity >= 0.35
+    }
+
+    pub fn is_water_poor(&self) -> bool {
+        self.water_activity <= 0.2
+    }
+
+    pub fn has_fluoride(&self) -> bool {
+        self.fluoride_mol_per_bucket > TRACE_CONCENTRATION_MOL_PER_BUCKET
+    }
+
+    pub fn has_hydrogen(&self) -> bool {
+        self.hydrogen_mol_per_bucket > TRACE_CONCENTRATION_MOL_PER_BUCKET
     }
 }
 
@@ -247,17 +305,17 @@ pub enum ReactionType {
     SilylEtherFormation,
     /// Deprotection of a silyl ether
     SilylEtherCleavage,
-    /// Formation of an acetal (aldehyde protection)
+    /// Formation of an acetal or ketal from a carbonyl and alcohol
     AcetalFormation,
-    /// Hydrolysis of an acetal (deprotection)
+    /// Hydrolysis of an acetal or ketal
     AcetalHydrolysis,
-    /// Formation of a carbamate (amine protection)
+    /// Formation of a Boc or Cbz carbamate
     CarbamateFormation,
-    /// Cleavage of a carbamate (amine deprotection)
+    /// Acidic or hydrogenolytic carbamate cleavage
     CarbamateCleavage,
-    /// Formation of an ester (carboxylic acid protection)
+    /// Formation of an ester protecting group
     EsterProtection,
-    /// Hydrolysis of an ester (deprotection)
+    /// Hydrolysis or cleavage of an ester protecting group
     EsterHydrolysis,
 }
 

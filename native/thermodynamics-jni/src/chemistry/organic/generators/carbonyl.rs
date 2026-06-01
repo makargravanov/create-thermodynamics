@@ -65,8 +65,10 @@ pub(crate) fn generate_acetal_formation(
         builder = builder.product("destroy:water", 1);
         builder = builder.activation_energy_kj_per_mol(base_ea);
         builder = builder.selectivity_profile(
-            SelectivityProfile::new(ReactionType::CarbonylAddition, carbonyl_desc)
-                .with_nucleophile_strength(NucleophileStrength::Weak),
+            SelectivityProfile::new(ReactionType::AcetalFormation, carbonyl_desc)
+                .with_secondary_site(SiteDescriptorBuilder::from_alcohol_site(alcohol_site))
+                .with_nucleophile_strength(NucleophileStrength::Weak)
+                .never_suppress(),
         );
     } else {
         for variant in product_variants {
@@ -80,8 +82,10 @@ pub(crate) fn generate_acetal_formation(
                     base_ea + variant.activation_delta_kj_per_mol,
                 )
                 .with_selectivity_profile(
-                    SelectivityProfile::new(ReactionType::CarbonylAddition, carbonyl_desc.clone())
-                        .with_nucleophile_strength(NucleophileStrength::Weak),
+                    SelectivityProfile::new(ReactionType::AcetalFormation, carbonyl_desc.clone())
+                        .with_secondary_site(SiteDescriptorBuilder::from_alcohol_site(alcohol_site))
+                        .with_nucleophile_strength(NucleophileStrength::Weak)
+                        .never_suppress(),
                 ),
             );
         }

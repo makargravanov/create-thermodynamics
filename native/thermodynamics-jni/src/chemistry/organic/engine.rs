@@ -146,14 +146,27 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 let reaction = generate_amide_hydrolysis(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
+            ReactiveSiteKind::Ester => {
+                let site = participant.clone().ester_site()?;
+                let reaction = generate_ester_hydrolysis(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+            }
             ReactiveSiteKind::PrimaryAmine => {
                 let site = participant.clone().amine_site()?;
                 let reaction = generate_amine_phosgenation(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                let reaction = generate_amine_boc_protection(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                let reaction = generate_amine_cbz_protection(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             ReactiveSiteKind::NonTertiaryAmine => {
                 let site = participant.clone().amine_site()?;
                 let reaction = generate_cyanamide_addition(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                let reaction = generate_amine_boc_protection(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                let reaction = generate_amine_cbz_protection(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             ReactiveSiteKind::PhosphoniumSalt => {
@@ -257,9 +270,21 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 let reaction = generate_silyl_ether_deprotection(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
-            // TODO: Implement deprotection reactions for other protecting groups
-            // (Acetal, BocCarbamate, CbzCarbamate, EsterProtectedAcid)
-            // when the structures can be properly parsed and represented
+            ReactiveSiteKind::Acetal | ReactiveSiteKind::Ketal => {
+                let site = participant.clone().acetal_center()?;
+                let reaction = generate_acetal_deprotection(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+            }
+            ReactiveSiteKind::BocCarbamate => {
+                let site = participant.clone().boc_carbamate_center()?;
+                let reaction = generate_boc_deprotection(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+            }
+            ReactiveSiteKind::CbzCarbamate => {
+                let site = participant.clone().cbz_carbamate_center()?;
+                let reaction = generate_cbz_deprotection(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+            }
             _ => {}
         }
 
@@ -339,6 +364,10 @@ fn is_generator_seed_site(kind: &ReactiveSiteKind) -> bool {
             | ReactiveSiteKind::PhosphoniumSalt
             | ReactiveSiteKind::PhosphorusYlide
             | ReactiveSiteKind::SilylEther
+            | ReactiveSiteKind::Acetal
+            | ReactiveSiteKind::Ketal
+            | ReactiveSiteKind::BocCarbamate
+            | ReactiveSiteKind::CbzCarbamate
             | ReactiveSiteKind::PhosphonateCarbanion
             | ReactiveSiteKind::SulfoneCarbanion
             | ReactiveSiteKind::Isocyanate

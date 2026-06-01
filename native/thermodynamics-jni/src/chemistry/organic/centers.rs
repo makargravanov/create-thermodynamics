@@ -216,6 +216,33 @@ pub(crate) struct SilylEtherCenter<'a> {
     pub(crate) silicon: usize,
 }
 
+#[derive(Clone)]
+pub(crate) struct AcetalCenter<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) acetal_carbon: usize,
+    pub(crate) oxygen_a: usize,
+    pub(crate) oxygen_b: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct BocCarbamateCenter<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) nitrogen: usize,
+    pub(crate) carbonyl_carbon: usize,
+    pub(crate) carbonyl_oxygen: usize,
+    pub(crate) alkoxy_oxygen: usize,
+    pub(crate) tert_butyl_carbon: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct CbzCarbamateCenter<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) nitrogen: usize,
+    pub(crate) carbonyl_carbon: usize,
+    pub(crate) carbonyl_oxygen: usize,
+    pub(crate) alkoxy_oxygen: usize,
+}
+
 impl<'a> SiteParticipant<'a> {
     pub(crate) fn require_kind(&self, expected: ReactiveSiteKind) -> ChemistryResult<()> {
         if self.site.kind == expected {
@@ -772,6 +799,109 @@ impl<'a> SiteParticipant<'a> {
             participant: self,
             oxygen,
             silicon,
+        })
+    }
+
+    pub(crate) fn acetal_center(self) -> ChemistryResult<AcetalCenter<'a>> {
+        if !matches!(self.site.kind, ReactiveSiteKind::Acetal | ReactiveSiteKind::Ketal) {
+            return Err(self.site_error("site is not an acetal or ketal center"));
+        }
+        let acetal_carbon = self.site_atom_by_element("C", "acetal carbon")?;
+        let oxygens = self
+            .structure
+            .neighbors(acetal_carbon)
+            .into_iter()
+            .filter_map(|(neighbor, order)| {
+                (self.structure.atoms[neighbor].element == "O"
+                    && crate::chemistry::molecule::bond_order_matches(order, 1.0))
+                .then_some(neighbor)
+            })
+            .collect::<Vec<_>>();
+        if oxygens.len() < 2 {
+            return Err(self.site_error("acetal center must have two single-bonded oxygens"));
+        }
+        Ok(AcetalCenter {
+            participant: self,
+            acetal_carbon,
+            oxygen_a: oxygens[0],
+            oxygen_b: oxygens[1],
+        })
+    }
+
+    pub(crate) fn boc_carbamate_center(self) -> ChemistryResult<BocCarbamateCenter<'a>> {
+        self.require_kind(ReactiveSiteKind::BocCarbamate)?;
+        let nitrogen = self.site_atom_by_element("N", "Boc carbamate nitrogen")?;
+        let carbonyl_carbon =
+            self.bonded_site_atom(nitrogen, "C", 1.0, "Boc carbamate carbonyl carbon")?;
+        let carbonyl_oxygen =
+            self.bonded_site_atom(carbonyl_carbon, "O", 2.0, "Boc carbonyl oxygen")?;
+        let alkoxy_oxygen = self
+            .structure
+            .neighbors(carbonyl_carbon)
+            .into_iter()
+            .find_map(|(neighbor, order)| {
+                (neighbor != carbonyl_oxygen
+                    && self.structure.atoms[neighbor].element == "O"
+                    && crate::chemistry::molecule::bond_order_matches(order, 1.0))
+                .then_some(neighbor)
+            })
+            .ok_or_else(|| self.site_error("Boc carbamate has no alkoxy oxygen"))?;
+        let tert_butyl_carbon = self
+            .structure
+            .neighbors(alkoxy_oxygen)
+            .into_iter()
+            .find_map(|(neighbor, order)| {
+                (neighbor != carbonyl_carbon
+                    && self.structure.atoms[neighbor].element == "C"
+                    && crate::chemistry::molecule::bond_order_matches(order, 1.0))
+                .then_some(neighbor)
+            })
+            .ok_or_else(|| self.site_error("Boc carbamate has no tert-butyl carbon"))?;
+        Ok(BocCarbamateCenter {
+            participant: self,
+            nitrogen,
+            carbonyl_carbon,
+            carbonyl_oxygen,
+            alkoxy_oxygen,
+            tert_butyl_carbon,
+        })
+    }
+
+    pub(crate) fn cbz_carbamate_center(self) -> ChemistryResult<CbzCarbamateCenter<'a>> {
+        self.require_kind(ReactiveSiteKind::CbzCarbamate)?;
+        let nitrogen = self.site_atom_by_element("N", "Cbz carbamate nitrogen")?;
+        let carbonyl_carbon =
+            self.bonded_site_atom(nitrogen, "C", 1.0, "Cbz carbamate carbonyl carbon")?;
+        let carbonyl_oxygen =
+            self.bonded_site_atom(carbonyl_carbon, "O", 2.0, "Cbz carbonyl oxygen")?;
+        let alkoxy_oxygen = self
+            .structure
+            .neighbors(carbonyl_carbon)
+            .into_iter()
+            .find_map(|(neighbor, order)| {
+                (neighbor != carbonyl_oxygen
+                    && self.structure.atoms[neighbor].element == "O"
+                    && crate::chemistry::molecule::bond_order_matches(order, 1.0))
+                .then_some(neighbor)
+            })
+            .ok_or_else(|| self.site_error("Cbz carbamate has no alkoxy oxygen"))?;
+        self
+            .structure
+            .neighbors(alkoxy_oxygen)
+            .into_iter()
+            .find_map(|(neighbor, order)| {
+                (neighbor != carbonyl_carbon
+                    && self.structure.atoms[neighbor].element == "C"
+                    && crate::chemistry::molecule::bond_order_matches(order, 1.0))
+                .then_some(neighbor)
+            })
+            .ok_or_else(|| self.site_error("Cbz carbamate has no benzyl carbon"))?;
+        Ok(CbzCarbamateCenter {
+            participant: self,
+            nitrogen,
+            carbonyl_carbon,
+            carbonyl_oxygen,
+            alkoxy_oxygen,
         })
     }
 

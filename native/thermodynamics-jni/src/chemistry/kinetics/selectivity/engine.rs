@@ -63,6 +63,14 @@ impl SelectivityEngine {
                 1.0,
                 "electrophilic addition has no specialized selectivity profile yet",
             ),
+            ReactionType::SilylEtherFormation
+            | ReactionType::SilylEtherCleavage
+            | ReactionType::AcetalFormation
+            | ReactionType::AcetalHydrolysis
+            | ReactionType::CarbamateFormation
+            | ReactionType::CarbamateCleavage
+            | ReactionType::EsterProtection
+            | ReactionType::EsterHydrolysis => evaluate_protecting_group_profile(profile, context),
             ReactionType::AlphaHalogenation
             | ReactionType::AldolAddition
             | ReactionType::AldolDehydration
@@ -71,15 +79,7 @@ impl SelectivityEngine {
             | ReactionType::MichaelAddition
             | ReactionType::ClaisenCondensation
             | ReactionType::PhosphoniumSaltFormation
-            | ReactionType::PhosphoniumYlideFormation
-            | ReactionType::SilylEtherFormation
-            | ReactionType::SilylEtherCleavage
-            | ReactionType::AcetalFormation
-            | ReactionType::AcetalHydrolysis
-            | ReactionType::CarbamateFormation
-            | ReactionType::CarbamateCleavage
-            | ReactionType::EsterProtection
-            | ReactionType::EsterHydrolysis => {
+            | ReactionType::PhosphoniumYlideFormation => {
                 evaluate_alpha_carbon_profile(profile, context)
             }
         };
@@ -421,6 +421,58 @@ impl SiteDescriptorBuilder {
         )
     }
 
+    pub fn silyl_ether() -> SiteDescriptor {
+        Self::build(
+            ReactiveSiteKind::SilylEther,
+            SubstitutionDegree::Primary,
+            0,
+            0,
+            1,
+            false,
+            false,
+            false,
+        )
+    }
+
+    pub fn acetal() -> SiteDescriptor {
+        Self::build(
+            ReactiveSiteKind::Acetal,
+            SubstitutionDegree::Secondary,
+            0,
+            1,
+            1,
+            false,
+            false,
+            false,
+        )
+    }
+
+    pub fn boc_carbamate() -> SiteDescriptor {
+        Self::build(
+            ReactiveSiteKind::BocCarbamate,
+            SubstitutionDegree::Secondary,
+            0,
+            1,
+            2,
+            false,
+            true,
+            false,
+        )
+    }
+
+    pub fn cbz_carbamate() -> SiteDescriptor {
+        Self::build(
+            ReactiveSiteKind::CbzCarbamate,
+            SubstitutionDegree::Secondary,
+            0,
+            1,
+            2,
+            false,
+            true,
+            true,
+        )
+    }
+
     // Integration methods for creating descriptors from actual site data
 
     /// Create descriptor from alcohol site
@@ -478,6 +530,23 @@ impl SiteDescriptorBuilder {
             ReactiveSiteKind::Halide,
             site.carbon,
             site.degree,
+        )
+    }
+
+    pub(crate) fn from_amine_site(
+        site: &crate::chemistry::organic::centers::AmineSite,
+    ) -> SiteDescriptor {
+        let degree = match site.participant.structure.carbon_degree(site.nitrogen) {
+            0 | 1 => SubstitutionDegree::Primary,
+            2 => SubstitutionDegree::Secondary,
+            _ => SubstitutionDegree::Tertiary,
+        };
+        SiteDescriptor::new(
+            site.participant.site.kind.clone(),
+            degree,
+            electronic_environment(site.participant.structure, site.nitrogen),
+            bulky_substituent_count(site.participant.structure, site.nitrogen),
+            has_beta_hydrogen(site.participant.structure, site.nitrogen),
         )
     }
 
@@ -616,87 +685,183 @@ fn evaluate_alpha_carbon_profile(
                 activation_delta += 8.0;
             }
         }
-        // Protecting group reactions
-        ReactionType::SilylEtherFormation => {
-            // Silyl protection is fast under dry basic conditions
-            if context.is_basic() {
-                value *= 1.5;
-                activation_delta -= 3.0;
-            }
-            if context.is_acidic() {
-                value *= 0.2; // Acid is not good for silylation
-                activation_delta += 10.0;
-            }
-        }
-        ReactionType::SilylEtherCleavage => {
-            // Fluoride-mediated cleavage - needs fluoride, not pH dependent
-            // In our simplified model, this happens with basic or acidic conditions
-            // but is faster with fluoride (not explicitly modeled)
-            if context.is_basic() {
-                value *= 0.5; // Base alone is slow
-                activation_delta += 5.0;
-            }
-        }
-        ReactionType::AcetalFormation => {
-            // Acetal formation requires acidic, anhydrous conditions
-            if context.is_acidic() && !context.is_basic() {
-                value *= 2.0;
-                activation_delta -= 4.0;
-            } else {
-                value *= 0.1; // Very slow without acid
-                activation_delta += 15.0;
-            }
-        }
-        ReactionType::AcetalHydrolysis => {
-            // Acetal hydrolysis requires acidic aqueous conditions
-            if context.is_acidic() {
-                value *= 1.8;
-                activation_delta -= 3.0;
-            } else {
-                value *= 0.05; // Very slow without acid
-                activation_delta += 20.0;
-            }
-        }
-        ReactionType::CarbamateFormation => {
-            // Carbamate (Boc/Cbz) formation is generally fast under basic conditions
-            if context.is_basic() {
-                value *= 1.3;
-                activation_delta -= 2.0;
-            }
-        }
-        ReactionType::CarbamateCleavage => {
-            // Boc cleavage requires acid
-            // Cbz cleavage requires hydrogenolysis (Pd/H2)
-            if context.is_acidic() {
-                value *= 2.5; // Very fast with acid (Boc)
-                activation_delta -= 8.0;
-            } else {
-                value *= 0.1; // Slow without acid
-                activation_delta += 15.0;
-            }
-        }
-        ReactionType::EsterProtection => {
-            // Ester formation from acid + alcohol
-            if context.is_acidic() {
-                value *= 1.4;
-                activation_delta -= 2.0;
-            }
-        }
-        ReactionType::EsterHydrolysis => {
-            // Ester hydrolysis - acid or base catalyzed
-            if context.is_acidic() || context.is_basic() {
-                value *= 1.5;
-                activation_delta -= 3.0;
-            } else {
-                value *= 0.2;
-                activation_delta += 10.0;
-            }
-        }
         _ => {}
     }
 
     ReactivityScore::with_activation_delta(activation_delta, reason)
         .with_pre_exp_multiplier(value.max(0.05))
+}
+
+fn evaluate_protecting_group_profile(
+    profile: &SelectivityProfile,
+    context: &SelectivityContext,
+) -> ReactivityScore {
+    let mut value: f64 = 1.0;
+    let mut activation_delta = 0.0;
+    let mut reasons = Vec::new();
+
+    match profile.mechanism {
+        ReactionType::SilylEtherFormation => {
+            if context.is_water_poor() {
+                value *= 2.0;
+                activation_delta -= 4.0;
+                reasons.push("dry medium favors silyl ether formation");
+            } else {
+                value *= 0.15;
+                activation_delta += 12.0;
+                reasons.push("water suppresses silyl ether formation");
+            }
+            if context.is_basic() {
+                value *= 1.4;
+                activation_delta -= 2.0;
+                reasons.push("basic medium scavenges acid during silylation");
+            }
+            if context.is_acidic() {
+                value *= 0.25;
+                activation_delta += 8.0;
+                reasons.push("acidic medium destabilizes silyl ether formation");
+            }
+        }
+        ReactionType::SilylEtherCleavage => {
+            if context.has_fluoride() {
+                value *= 4.0;
+                activation_delta -= 10.0;
+                reasons.push("fluoride accelerates silyl ether cleavage");
+            } else {
+                value *= 0.02;
+                activation_delta += 22.0;
+                reasons.push("silyl ether cleavage lacks fluoride");
+            }
+            if context.is_water_rich() || context.is_acidic() {
+                value *= 1.25;
+                activation_delta -= 1.5;
+                reasons.push("protic conditions help proton transfer after cleavage");
+            }
+        }
+        ReactionType::AcetalFormation => {
+            if context.is_acidic() {
+                value *= 2.2;
+                activation_delta -= 5.0;
+                reasons.push("acid catalyzes acetal formation");
+            } else {
+                value *= 0.08;
+                activation_delta += 16.0;
+                reasons.push("acetal formation lacks acid catalysis");
+            }
+            if context.is_water_poor() {
+                value *= 2.0;
+                activation_delta -= 4.0;
+                reasons.push("dry medium shifts acetal equilibrium toward product");
+            } else {
+                value *= 0.12;
+                activation_delta += 14.0;
+                reasons.push("water suppresses acetal formation");
+            }
+        }
+        ReactionType::AcetalHydrolysis => {
+            if context.is_acidic() {
+                value *= 2.0;
+                activation_delta -= 4.0;
+                reasons.push("acid catalyzes acetal hydrolysis");
+            } else {
+                value *= 0.05;
+                activation_delta += 18.0;
+                reasons.push("acetal hydrolysis lacks acid catalysis");
+            }
+            if context.is_water_rich() {
+                value *= 2.5;
+                activation_delta -= 5.0;
+                reasons.push("water-rich medium drives acetal hydrolysis");
+            } else {
+                value *= 0.15;
+                activation_delta += 12.0;
+                reasons.push("dry medium suppresses acetal hydrolysis");
+            }
+        }
+        ReactionType::CarbamateFormation => {
+            if context.is_basic() {
+                value *= 1.8;
+                activation_delta -= 4.0;
+                reasons.push("basic medium favors carbamate protection");
+            } else {
+                value *= 0.4;
+                activation_delta += 6.0;
+                reasons.push("carbamate protection lacks basic acid scavenging");
+            }
+            if context.is_water_poor() {
+                value *= 1.5;
+                activation_delta -= 2.5;
+                reasons.push("water-poor medium favors carbamate formation");
+            } else {
+                value *= 0.35;
+                activation_delta += 7.0;
+                reasons.push("water competes with carbamate formation");
+            }
+        }
+        ReactionType::CarbamateCleavage => {
+            let acid_path = context.is_acidic() && context.is_water_rich();
+            let hydrogenolysis_path =
+                context.has_hydrogen() && context.palladium_available;
+            if acid_path {
+                value *= 2.5;
+                activation_delta -= 7.0;
+                reasons.push("acidic water-rich medium cleaves acid-labile carbamates");
+            }
+            if hydrogenolysis_path {
+                value *= 3.0;
+                activation_delta -= 9.0;
+                reasons.push("hydrogen and palladium enable carbamate hydrogenolysis");
+            }
+            if !acid_path && !hydrogenolysis_path {
+                value *= 0.03;
+                activation_delta += 24.0;
+                reasons.push("carbamate cleavage lacks acid hydrolysis or hydrogenolysis conditions");
+            }
+        }
+        ReactionType::EsterProtection => {
+            if context.is_acidic() {
+                value *= 1.5;
+                activation_delta -= 3.0;
+                reasons.push("acid catalyzes ester protection");
+            }
+            if context.is_water_poor() {
+                value *= 1.8;
+                activation_delta -= 3.5;
+                reasons.push("dry medium shifts esterification toward ester");
+            } else {
+                value *= 0.25;
+                activation_delta += 9.0;
+                reasons.push("water suppresses ester protection");
+            }
+        }
+        ReactionType::EsterHydrolysis => {
+            if context.is_acidic() || context.is_basic() {
+                value *= 1.8;
+                activation_delta -= 4.0;
+                reasons.push("acid or base catalyzes ester hydrolysis");
+            } else {
+                value *= 0.2;
+                activation_delta += 10.0;
+                reasons.push("ester hydrolysis lacks acid or base catalysis");
+            }
+            if context.is_water_rich() {
+                value *= 1.8;
+                activation_delta -= 3.5;
+                reasons.push("water-rich medium favors ester hydrolysis");
+            } else {
+                value *= 0.25;
+                activation_delta += 8.0;
+                reasons.push("dry medium suppresses ester hydrolysis");
+            }
+        }
+        _ => {}
+    }
+
+    ReactivityScore::with_activation_delta(
+        activation_delta,
+        reasons.join("; "),
+    )
+    .with_pre_exp_multiplier(value.max(0.01))
 }
 
 fn descriptor_from_carbon(
@@ -907,6 +1072,7 @@ mod tests {
             solvent_type: SolventType::Acidic,
             temperature: 380.0,
             ph: Some(2.0),
+            ..Default::default()
         };
 
         let result = SelectivityEngine::fischer_esterification(&acid, &alcohol, &context);
@@ -932,6 +1098,80 @@ mod tests {
             NucleophileStrength::Moderate,
             &context
         ));
+    }
+
+    #[test]
+    fn protecting_group_profiles_respond_to_water_acid_and_fluoride() {
+        let silylation = SelectivityProfile::new(
+            ReactionType::SilylEtherFormation,
+            SiteDescriptorBuilder::primary_alcohol(),
+        )
+        .never_suppress();
+        let dry_basic = SelectivityContext {
+            solvent_type: SolventType::Basic,
+            ph: Some(10.0),
+            water_activity: 0.02,
+            ..Default::default()
+        };
+        let wet_acidic = SelectivityContext {
+            solvent_type: SolventType::Acidic,
+            ph: Some(2.0),
+            water_activity: 0.8,
+            ..Default::default()
+        };
+        let dry_effect = SelectivityEngine::evaluate_profile(&silylation, &dry_basic);
+        let wet_effect = SelectivityEngine::evaluate_profile(&silylation, &wet_acidic);
+        assert!(dry_effect.rate_multiplier > wet_effect.rate_multiplier);
+        assert!(dry_effect.activation_delta_kj_per_mol < wet_effect.activation_delta_kj_per_mol);
+
+        let cleavage = SelectivityProfile::new(
+            ReactionType::SilylEtherCleavage,
+            SiteDescriptorBuilder::silyl_ether(),
+        )
+        .never_suppress();
+        let no_fluoride = SelectivityEngine::evaluate_profile(&cleavage, &SelectivityContext::default());
+        let with_fluoride = SelectivityEngine::evaluate_profile(
+            &cleavage,
+            &SelectivityContext {
+                fluoride_mol_per_bucket: 0.1,
+                water_activity: 0.5,
+                ..Default::default()
+            },
+        );
+        assert!(with_fluoride.rate_multiplier > no_fluoride.rate_multiplier);
+        assert!(
+            with_fluoride.activation_delta_kj_per_mol
+                < no_fluoride.activation_delta_kj_per_mol
+        );
+    }
+
+    #[test]
+    fn carbamate_cleavage_profile_sees_acid_hydrolysis_and_hydrogenolysis() {
+        let profile = SelectivityProfile::new(
+            ReactionType::CarbamateCleavage,
+            SiteDescriptorBuilder::boc_carbamate(),
+        )
+        .never_suppress();
+        let neutral = SelectivityEngine::evaluate_profile(&profile, &SelectivityContext::default());
+        let acid_water = SelectivityEngine::evaluate_profile(
+            &profile,
+            &SelectivityContext {
+                solvent_type: SolventType::Acidic,
+                ph: Some(2.0),
+                water_activity: 0.8,
+                ..Default::default()
+            },
+        );
+        let hydrogenolysis = SelectivityEngine::evaluate_profile(
+            &profile,
+            &SelectivityContext {
+                hydrogen_mol_per_bucket: 0.5,
+                palladium_available: true,
+                ..Default::default()
+            },
+        );
+        assert!(acid_water.rate_multiplier > neutral.rate_multiplier);
+        assert!(hydrogenolysis.rate_multiplier > neutral.rate_multiplier);
     }
 
     #[test]

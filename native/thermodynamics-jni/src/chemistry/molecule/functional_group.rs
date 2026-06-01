@@ -29,17 +29,11 @@ pub enum FunctionalGroupType {
     PhosphorusYlide,
     SulfoneCarbanion,
     UnsubstitutedAmide,
-    // Protecting groups
     SilylEther,
     Acetal,
     Ketal,
     BocCarbamate,
     CbzCarbamate,
-    FmocCarbamate,
-    AcylProtectedAmine,
-    EsterProtectedAcid,
-    ProtectedThiol,
-    Thioacetal,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -450,188 +444,124 @@ fn add_protecting_groups(structure: &MolecularStructure, groups: &mut Vec<Functi
         }
     }
 
-    // Detect acetals/ketals: C with two ether oxygens (not part of carbonyl)
+    for nitrogen in 0..structure.atoms.len() {
+        if structure.atoms[nitrogen].element != "N" {
+            continue;
+        }
+        for (carbonyl_carbon, n_bond) in structure.neighbors(nitrogen) {
+            if structure.atoms[carbonyl_carbon].element != "C"
+                || !bond_order_matches(n_bond, 1.0)
+            {
+                continue;
+            }
+            let carbonyl_oxygens = bonded(structure, carbonyl_carbon, "O", Some(2.0));
+            if carbonyl_oxygens.len() != 1 {
+                continue;
+            }
+            let alkoxy_oxygen = bonded(structure, carbonyl_carbon, "O", Some(1.0))
+                .into_iter()
+                .find(|oxygen| *oxygen != carbonyl_oxygens[0]);
+            let Some(alkoxy_oxygen) = alkoxy_oxygen else {
+                continue;
+            };
+            let Some(tert_butyl_carbon) = bonded(structure, alkoxy_oxygen, "C", Some(1.0))
+                .into_iter()
+                .find(|carbon| *carbon != carbonyl_carbon)
+            else {
+                continue;
+            };
+            let methyl_carbons = bonded(structure, tert_butyl_carbon, "C", Some(1.0));
+            if methyl_carbons.len() == 3 && methyl_carbons.iter().all(|methyl| {
+                bonded(structure, *methyl, "H", Some(1.0)).len() == 3
+                    && bonded(structure, *methyl, "C", Some(1.0)).len() == 1
+            }) {
+                let mut atoms = vec![
+                    nitrogen,
+                    carbonyl_carbon,
+                    carbonyl_oxygens[0],
+                    alkoxy_oxygen,
+                    tert_butyl_carbon,
+                ];
+                atoms.extend(methyl_carbons);
+                groups.push(FunctionalGroup::new(FunctionalGroupType::BocCarbamate, atoms));
+            }
+            let benzyl_carbons = bonded(structure, alkoxy_oxygen, "C", Some(1.0))
+                .into_iter()
+                .filter(|carbon| *carbon != carbonyl_carbon)
+                .collect::<Vec<_>>();
+            for benzyl_carbon in benzyl_carbons {
+                if bonded(structure, benzyl_carbon, "H", Some(1.0)).len() != 2 {
+                    continue;
+                }
+                let aromatic_carbons = structure
+                    .neighbors(benzyl_carbon)
+                    .into_iter()
+                    .filter_map(|(neighbor, order)| {
+                        (neighbor != alkoxy_oxygen
+                            && structure.atoms[neighbor].element == "C"
+                            && bond_order_matches(order, 1.0)
+                            && structure.neighbors(neighbor).into_iter().any(
+                                |(aromatic_neighbor, aromatic_order)| {
+                                    aromatic_neighbor != benzyl_carbon
+                                        && structure.atoms[aromatic_neighbor].element == "C"
+                                        && bond_order_matches(aromatic_order, 1.5)
+                                },
+                            ))
+                        .then_some(neighbor)
+                    })
+                    .collect::<Vec<_>>();
+                if aromatic_carbons.len() == 1 {
+                    groups.push(FunctionalGroup::new(
+                        FunctionalGroupType::CbzCarbamate,
+                        vec![
+                            nitrogen,
+                            carbonyl_carbon,
+                            carbonyl_oxygens[0],
+                            alkoxy_oxygen,
+                            benzyl_carbon,
+                            aromatic_carbons[0],
+                        ],
+                    ));
+                }
+            }
+        }
+    }
+
     for carbon in 0..structure.atoms.len() {
         if structure.atoms[carbon].element != "C" {
             continue;
         }
         let neighbors = structure.neighbors(carbon);
-        
-        // Check if this carbon has two single-bonded oxygens that are not carbonyl oxygens
-        let ether_oxygens: Vec<usize> = neighbors
+        let ether_oxygens = neighbors
             .iter()
-            .filter(|(atom, order)| {
-                if structure.atoms[*atom].element != "O" || !bond_order_matches(*order, 1.0) {
-                    return false;
-                }
-                // Verify oxygen is not part of a carbonyl (not double-bonded to any carbon)
-                !structure.neighbors(*atom).iter().any(|(n, o)| {
-                    structure.atoms[*n].element == "C" && bond_order_matches(*o, 2.0)
-                })
+            .filter_map(|(atom, order)| {
+                (structure.atoms[*atom].element == "O"
+                    && bond_order_matches(*order, 1.0)
+                    && structure.hydrogen_count(*atom) == 0)
+                    .then_some(*atom)
             })
-            .map(|(atom, _)| *atom)
-            .collect();
-        
-        if ether_oxygens.len() >= 2 {
-            // This is an acetal/ketal
-            let mut atoms = vec![carbon];
-            atoms.extend(ether_oxygens.iter().copied().take(2));
-            
-            // Determine if it's an acetal (one hydrogen on central carbon) or ketal (two carbons)
-            let carbon_neighbors_count = neighbors
-                .iter()
-                .filter(|(atom, order)| {
-                    structure.atoms[*atom].element == "C" && bond_order_matches(*order, 1.0)
-                })
-                .count();
-            
-            // Count hydrogens on the central carbon
-            let hydrogen_count = structure.hydrogen_count(carbon);
-            
-            if hydrogen_count >= 1 && carbon_neighbors_count == 1 {
-                groups.push(FunctionalGroup::new(FunctionalGroupType::Acetal, atoms));
-            } else if carbon_neighbors_count == 2 {
-                groups.push(FunctionalGroup::new(FunctionalGroupType::Ketal, atoms));
-            }
-        }
-    }
-
-    // Detect carbamate-protected amines: N-C(=O)-O-R pattern
-    for nitrogen in 0..structure.atoms.len() {
-        if structure.atoms[nitrogen].element != "N" {
+            .collect::<Vec<_>>();
+        if ether_oxygens.len() < 2 {
             continue;
         }
-        // Find carbonyl carbon attached to nitrogen
-        let carbamate_carbonyl = structure.neighbors(nitrogen).iter().find_map(|(atom, order)| {
-            if structure.atoms[*atom].element == "C" && bond_order_matches(*order, 1.0) {
-                // Check if this carbon has a double-bonded oxygen (carbonyl)
-                let has_carbonyl_oxygen = structure.neighbors(*atom).iter().any(|(n, o)| {
-                    structure.atoms[*n].element == "O" && bond_order_matches(*o, 2.0)
-                });
-                // And a single-bonded oxygen
-                let has_ether_oxygen = structure.neighbors(*atom).iter().any(|(n, o)| {
-                    structure.atoms[*n].element == "O" && bond_order_matches(*o, 1.0)
-                });
-                if has_carbonyl_oxygen && has_ether_oxygen {
-                    return Some(*atom);
-                }
-            }
-            None
-        });
-        
-        if let Some(carbonyl_carbon) = carbamate_carbonyl {
-            // Determine protecting group kind based on the alkyl group on oxygen
-            let oxygen = structure.neighbors(carbonyl_carbon).iter().find_map(|(atom, order)| {
-                if structure.atoms[*atom].element == "O" && bond_order_matches(*order, 1.0) {
-                    Some(*atom)
-                } else {
-                    None
-                }
-            });
-            
-            let protecting_kind = if let Some(oxy) = oxygen {
-                // Check what's attached to the oxygen
-                let oxy_neighbors = structure.neighbors(oxy);
-                // Look for tert-butyl pattern (central carbon with 3 methyl groups)
-                let has_tert_butyl = oxy_neighbors.iter().any(|(atom, order)| {
-                    if structure.atoms[*atom].element != "C" || !bond_order_matches(*order, 1.0) {
-                        return false;
-                    }
-                    let carbon_neighbors = structure.neighbors(*atom)
-                        .iter()
-                        .filter(|(n, o)| {
-                            structure.atoms[*n].element == "C" && bond_order_matches(*o, 1.0)
-                        })
-                        .count();
-                    carbon_neighbors >= 3
-                });
-                
-                // Look for benzyl pattern (carbon attached to aromatic ring)
-                let has_benzyl = oxy_neighbors.iter().any(|(atom, order)| {
-                    if structure.atoms[*atom].element != "C" || !bond_order_matches(*order, 1.0) {
-                        return false;
-                    }
-                    structure.neighbors(*atom).iter().any(|(n, o)| {
-                        bond_order_matches(*o, 1.5) && structure.atoms[*n].element == "C"
-                    })
-                });
-                
-                // Look for fluorenyl pattern (complex polycyclic)
-                let has_fluorenyl = oxy_neighbors.iter().any(|(atom, order)| {
-                    if structure.atoms[*atom].element != "C" || !bond_order_matches(*order, 1.0) {
-                        return false;
-                    }
-                    // Fluorenyl has multiple aromatic carbons attached
-                    let aromatic_neighbors = structure.neighbors(*atom)
-                        .iter()
-                        .filter(|(n, o)| {
-                            bond_order_matches(*o, 1.5) && structure.atoms[*n].element == "C"
-                        })
-                        .count();
-                    aromatic_neighbors >= 2
-                });
-                
-                if has_tert_butyl {
-                    FunctionalGroupType::BocCarbamate
-                } else if has_fluorenyl {
-                    FunctionalGroupType::FmocCarbamate
-                } else if has_benzyl {
-                    FunctionalGroupType::CbzCarbamate
-                } else {
-                    FunctionalGroupType::AcylProtectedAmine
-                }
-            } else {
-                FunctionalGroupType::AcylProtectedAmine
-            };
-            
-            groups.push(FunctionalGroup::new(protecting_kind, vec![nitrogen, carbonyl_carbon]));
-        }
-    }
-
-    // Detect ester-protected acids (already detected as Ester, but mark specifically as protected)
-    // These are already found as regular esters, we just need to make sure they don't 
-    // also get detected as carboxylic acids
-    // The existing logic handles this - esters are separate from acids
-
-    // Detect thioacetals: C with two sulfur atoms
-    for carbon in 0..structure.atoms.len() {
-        if structure.atoms[carbon].element != "C" {
-            continue;
-        }
-        let sulfur_neighbors: Vec<usize> = structure.neighbors(carbon)
-            .iter()
-            .filter(|(atom, order)| {
-                structure.atoms[*atom].element == "S" && bond_order_matches(*order, 1.0)
-            })
-            .map(|(atom, _)| *atom)
-            .collect();
-        
-        if sulfur_neighbors.len() >= 2 {
-            let mut atoms = vec![carbon];
-            atoms.extend(sulfur_neighbors.iter().copied().take(2));
-            groups.push(FunctionalGroup::new(FunctionalGroupType::Thioacetal, atoms));
-        }
-    }
-
-    // Detect protected thiols: C-S-C (thioether) - marked as protected thiol
-    for sulfur in 0..structure.atoms.len() {
-        if structure.atoms[sulfur].element != "S" {
-            continue;
-        }
-        let carbon_neighbors: Vec<usize> = structure.neighbors(sulfur)
+        let carbon_neighbors = neighbors
             .iter()
             .filter(|(atom, order)| {
                 structure.atoms[*atom].element == "C" && bond_order_matches(*order, 1.0)
             })
-            .map(|(atom, _)| *atom)
-            .collect();
-        
-        if carbon_neighbors.len() >= 2 && !structure.neighbors(sulfur).iter().any(|(atom, _)| structure.atoms[*atom].element == "H") {
-            // This is a protected thiol (thioether) - no hydrogen on sulfur
-            let mut atoms = vec![sulfur];
-            atoms.extend(carbon_neighbors.iter().copied().take(2));
-            groups.push(FunctionalGroup::new(FunctionalGroupType::ProtectedThiol, atoms));
-        }
+            .count();
+        let hydrogen_count = structure.hydrogen_count(carbon);
+        let group_type = if hydrogen_count >= 1 {
+            FunctionalGroupType::Acetal
+        } else if carbon_neighbors >= 2 {
+            FunctionalGroupType::Ketal
+        } else {
+            continue;
+        };
+        groups.push(FunctionalGroup::new(
+            group_type,
+            vec![carbon, ether_oxygens[0], ether_oxygens[1]],
+        ));
     }
 }
 

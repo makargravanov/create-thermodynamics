@@ -4,7 +4,7 @@ use crate::chemistry::mixture::Mixture;
 use crate::chemistry::molecule::{StereoDescriptor, Stereochemistry};
 use crate::chemistry::organic::generators::expand_stereo_product_distribution;
 use crate::chemistry::reaction::Reaction;
-use crate::chemistry::reactive_site::ReactiveSiteKind;
+use crate::chemistry::reactive_site::{try_find_reactive_sites, ReactiveSiteKind};
 use crate::chemistry::registry::ChemistryRegistry;
 use crate::chemistry::simulation::reaction_rate_mol_per_bucket_per_tick;
 use crate::chemistry::substance::SubstanceId;
@@ -835,6 +835,147 @@ fn reaction_for_reactants<'a>(
 }
 
 #[test]
+fn alcohol_acyl_protection_uses_regular_ester_chemistry() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let ethanol = SubstanceId::from("destroy:ethanol");
+    let acetyl_chloride = SubstanceId::from("destroy:acetyl_chloride");
+
+    dynamic
+        .generate_reactions_for_substances([ethanol.clone(), acetyl_chloride.clone()], 1)
+        .expect("acetyl chloride and ethanol must generate esterification");
+    let registry = dynamic.to_registry().expect("dynamic registry must convert");
+    let esterification = reaction_for_reactants(
+        &registry,
+        "acyl_chloride_esterification",
+        &[acetyl_chloride.clone(), ethanol.clone()],
+    )
+    .expect("acetyl chloride must acyl-protect ethanol as a regular ester");
+    let ester = esterification
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:hydrochloric_acid")
+        .expect("esterification must produce an ester")
+        .substance_id
+        .clone();
+
+    let ester_structure = dynamic
+        .substance(&ester)
+        .expect("ester product must be registered")
+        .molecular_structure
+        .as_ref()
+        .expect("ester product must have a molecular graph");
+    let ester_sites = try_find_reactive_sites(ester_structure).expect("ester sites must be valid");
+    assert!(
+        ester_sites
+            .iter()
+            .any(|site| site.kind == ReactiveSiteKind::Ester),
+        "acyl-protected alcohol must be represented as an ordinary ester"
+    );
+    assert!(
+        !ester_sites
+            .iter()
+            .any(|site| site.kind == ReactiveSiteKind::Alcohol),
+        "acyl-protected alcohol must not expose a free alcohol center"
+    );
+
+    dynamic
+        .generate_reactions_for_substances([ester.clone()], 1)
+        .expect("ester product must generate hydrolysis");
+    let registry = dynamic.to_registry().expect("dynamic registry must convert");
+    let hydrolysis = reaction_for_reactants(&registry, "ester_hydrolysis", &[ester])
+        .expect("acyl-protected alcohol must deprotect through ester hydrolysis");
+    assert!(
+        hydrolysis
+            .products
+            .iter()
+            .any(|term| term.substance_id.as_str() == "destroy:acetic_acid"),
+        "ester hydrolysis must restore the acyl fragment as acetic acid"
+    );
+    assert!(
+        hydrolysis
+            .products
+            .iter()
+            .any(|term| term.substance_id.as_str() == "destroy:ethanol"),
+        "ester hydrolysis must restore the protected alcohol"
+    );
+}
+
+#[test]
+fn carboxylic_acid_protection_uses_concrete_ester_products() {
+    let alcohols = [
+        SubstanceId::from("destroy:methanol"),
+        SubstanceId::from("destroy:ethanol"),
+        SubstanceId::from("destroy:tert_butanol"),
+    ];
+
+    for alcohol in alcohols {
+        let mut dynamic =
+            super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let acid = SubstanceId::from("destroy:acetic_acid");
+        dynamic
+            .generate_reactions_for_substances([acid.clone(), alcohol.clone()], 1)
+            .expect("carboxylic acid and alcohol must generate ester protection");
+        let registry = dynamic.to_registry().expect("dynamic registry must convert");
+        let esterification = reaction_for_reactants(
+            &registry,
+            "carboxylic_acid_esterification",
+            &[acid.clone(), alcohol.clone()],
+        )
+        .expect("acid protection must be represented by ordinary esterification");
+
+        let ester = esterification
+            .products
+            .iter()
+            .find(|term| term.substance_id.as_str() != "destroy:water")
+            .expect("esterification must produce an ester")
+            .substance_id
+            .clone();
+        let ester_structure = dynamic
+            .substance(&ester)
+            .expect("ester product must be registered")
+            .molecular_structure
+            .as_ref()
+            .expect("ester product must have a molecular graph");
+        let ester_sites =
+            try_find_reactive_sites(ester_structure).expect("ester sites must be valid");
+        assert!(
+            ester_sites
+                .iter()
+                .any(|site| site.kind == ReactiveSiteKind::Ester),
+            "protected acid must be represented as an ester"
+        );
+        assert!(
+            !ester_sites
+                .iter()
+                .any(|site| site.kind == ReactiveSiteKind::CarboxylicAcid),
+            "protected acid must not expose a free carboxylic acid center"
+        );
+
+        dynamic
+            .generate_reactions_for_substances([ester.clone()], 1)
+            .expect("acid-protecting ester must generate hydrolysis");
+        let registry = dynamic.to_registry().expect("dynamic registry must convert");
+        let hydrolysis = reaction_for_reactants(&registry, "ester_hydrolysis", &[ester])
+            .expect("protected acid must deprotect through ester hydrolysis");
+        assert!(
+            hydrolysis
+                .products
+                .iter()
+                .any(|term| term.substance_id == acid),
+            "ester hydrolysis must restore the carboxylic acid"
+        );
+        assert!(
+            hydrolysis
+                .products
+                .iter()
+                .any(|term| term.substance_id == alcohol),
+            "ester hydrolysis must restore the protecting alcohol"
+        );
+    }
+}
+
+#[test]
 fn test_aromatic_eas_directing_groups_and_deactivation() {
     let mut dynamic =
         super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
@@ -1097,77 +1238,374 @@ fn snar_on_nitrochlorobenzene() {
 }
 
 #[test]
-fn protecting_groups_silyl_ether_detection() {
-    // Test that silyl ethers are detected as protected centers
-    // For now, we test the infrastructure is in place
+fn tms_protection_creates_protected_ether_without_free_alcohol_site() {
     let mut dynamic =
         super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
-
-    // TMS-ethanol: CH3-CH2-O-Si(CH3)3
-    // Since Si isn't supported in the FROWNS parser, we simulate by checking
-    // that the reaction infrastructure exists
     let ethanol = SubstanceId::from("destroy:ethanol");
-
-    // Generate reactions for ethanol - should have standard alcohol reactions
     dynamic
         .generate_reactions_for_substances([ethanol.clone()], 1)
         .unwrap();
 
-    // Regular ethanol should have alcohol oxidation
-    let has_alcohol_oxidation = dynamic.reactions().any(|r| {
-        r.id.as_str().starts_with("alcohol_oxidation/")
-            && r.reactants.iter().any(|t| t.substance_id == ethanol)
-    });
+    let protection = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("alcohol_silyl_protection/")
+                && reaction.reactants.iter().any(|term| term.substance_id == ethanol)
+        })
+        .expect("ethanol must generate TMS protection");
+    assert!(protection
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:trimethylsilyl_chloride"));
+    assert!(protection
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:hydrochloric_acid"));
+
+    let protected_id = protection
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:hydrochloric_acid")
+        .unwrap()
+        .substance_id
+        .clone();
+    let protected = dynamic.substance(&protected_id).unwrap();
+    let protected_structure = protected.molecular_structure.as_ref().unwrap();
+    let site_kinds = try_find_reactive_sites(protected_structure)
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
     assert!(
-        has_alcohol_oxidation,
-        "Regular ethanol should have alcohol oxidation"
+        site_kinds.contains(&ReactiveSiteKind::SilylEther),
+        "TMS product must expose a silyl ether site"
     );
+    assert!(
+        !site_kinds.contains(&ReactiveSiteKind::Alcohol),
+        "TMS-protected ethanol must not expose a free alcohol site"
+    );
+
+    dynamic.to_registry().unwrap();
 }
 
 #[test]
-fn protecting_groups_acetal_detection() {
-    // Test that acetal chemistry is available in the model
-    // For now, we verify that the reaction infrastructure exists
-    let registry = generated_registry();
-
-    // Check that acetal formation reaction exists for catalog substances
-    // Benzaldehyde + methanol -> acetal
-    let acetal_formation = registry.reactions().find(|r| {
-        r.id.as_str().contains("acetal_formation")
-    });
-
-    // Acetal formation may not be generated without the proper substrate
-    // but the infrastructure should be in place
-    if let Some(formation) = acetal_formation {
-        // Requires acidic conditions
-        assert!(
-            formation
-                .conditions
-                .iter()
-                .any(|c| c.acidity == Some(AcidityCondition::Acidic)),
-            "Acetal formation requires acid catalysis"
-        );
-    }
-}
-
-#[test]
-fn protecting_groups_infrastructure_available() {
-    // Test that protecting group reaction types are defined
-    // This verifies the infrastructure is in place even if
-    // full molecule detection isn't yet implemented
+fn tms_deprotection_restores_original_alcohol() {
     let mut dynamic =
         super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
-
-    // Just verify the registry loads without error
-    // and basic alcohol chemistry works
     let ethanol = SubstanceId::from("destroy:ethanol");
     dynamic
         .generate_reactions_for_substances([ethanol.clone()], 1)
         .unwrap();
 
-    // Regular ethanol should have standard reactions
-    let has_reactions = dynamic.reactions().any(|r| {
-        r.reactants.iter().any(|t| t.substance_id == ethanol)
-    });
-    assert!(has_reactions, "Ethanol should have generated reactions");
+    let protected_id = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("alcohol_silyl_protection/")
+                && reaction.reactants.iter().any(|term| term.substance_id == ethanol)
+        })
+        .unwrap()
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:hydrochloric_acid")
+        .unwrap()
+        .substance_id
+        .clone();
+
+    dynamic
+        .generate_reactions_for_substances([protected_id.clone()], 1)
+        .unwrap();
+    let deprotection = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("silyl_ether_deprotection/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == protected_id)
+        })
+        .expect("TMS ether must generate fluoride deprotection");
+    assert!(deprotection
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:fluoride"));
+    assert!(deprotection
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:proton"));
+    assert!(deprotection
+        .products
+        .iter()
+        .any(|term| term.substance_id == ethanol));
+    assert!(deprotection
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:trimethylsilyl_fluoride"));
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn acetal_hydrolysis_restores_carbonyl_and_concrete_alcohols() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let acetaldehyde = dynamic.resolve_frowns("CC=O").unwrap();
+    let ethanol = SubstanceId::from("destroy:ethanol");
+    dynamic
+        .generate_reactions_for_substances([acetaldehyde.clone(), ethanol.clone()], 1)
+        .unwrap();
+
+    let acetal_reaction = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("acetal_formation/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == acetaldehyde)
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == ethanol)
+        })
+        .expect("acetaldehyde and ethanol must generate an acetal");
+    let acetal_id = acetal_reaction
+        .products
+        .iter()
+        .chain(
+            acetal_reaction
+                .channels
+                .iter()
+                .flat_map(|channel| channel.products.iter()),
+        )
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("acetal formation must have a concrete acetal product")
+        .substance_id
+        .clone();
+
+    let acetal = dynamic.substance(&acetal_id).unwrap();
+    let site_kinds = try_find_reactive_sites(acetal.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(site_kinds.contains(&ReactiveSiteKind::Acetal));
+    assert!(!site_kinds.contains(&ReactiveSiteKind::Carbonyl));
+    assert!(!site_kinds.contains(&ReactiveSiteKind::Aldehyde));
+
+    dynamic
+        .generate_reactions_for_substances([acetal_id.clone()], 1)
+        .unwrap();
+    let hydrolysis = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("acetal_deprotection/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == acetal_id)
+        })
+        .expect("acetal must generate hydrolysis");
+    assert!(hydrolysis
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:water"));
+    assert!(hydrolysis
+        .orders
+        .keys()
+        .any(|substance| substance.as_str() == "destroy:proton"));
+    assert!(hydrolysis
+        .products
+        .iter()
+        .any(|term| term.substance_id == acetaldehyde));
+    assert_eq!(
+        hydrolysis
+            .products
+            .iter()
+            .filter(|term| term.substance_id == ethanol)
+            .map(|term| term.coefficient)
+            .sum::<u32>(),
+        2
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn boc_protection_blocks_free_amine_and_deprotection_restores_it() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let methylamine = dynamic.resolve_frowns("CN").unwrap();
+    dynamic
+        .generate_reactions_for_substances([methylamine.clone()], 1)
+        .unwrap();
+
+    let protection = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("amine_boc_protection/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == methylamine)
+        })
+        .expect("methylamine must generate Boc protection");
+    assert!(protection
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:di_tert_butyl_dicarbonate"));
+    assert!(protection
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:tert_butanol"));
+    assert!(protection
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:carbon_dioxide"));
+
+    let boc_id = protection
+        .products
+        .iter()
+        .find(|term| {
+            !matches!(
+                term.substance_id.as_str(),
+                "destroy:tert_butanol" | "destroy:carbon_dioxide"
+            )
+        })
+        .expect("Boc protection must create a protected amine product")
+        .substance_id
+        .clone();
+    let boc = dynamic.substance(&boc_id).unwrap();
+    let site_kinds = try_find_reactive_sites(boc.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(site_kinds.contains(&ReactiveSiteKind::BocCarbamate));
+    assert!(!site_kinds.contains(&ReactiveSiteKind::PrimaryAmine));
+    assert!(!site_kinds.contains(&ReactiveSiteKind::NonTertiaryAmine));
+
+    dynamic
+        .generate_reactions_for_substances([boc_id.clone()], 1)
+        .unwrap();
+    let deprotection = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("boc_deprotection/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == boc_id)
+        })
+        .expect("Boc carbamate must generate acidic hydrolysis");
+    assert!(deprotection
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:water"));
+    assert!(deprotection
+        .orders
+        .keys()
+        .any(|substance| substance.as_str() == "destroy:proton"));
+    assert!(deprotection
+        .products
+        .iter()
+        .any(|term| term.substance_id == methylamine));
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn cbz_protection_blocks_free_amine_and_hydrogenolysis_restores_it() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let methylamine = dynamic.resolve_frowns("CN").unwrap();
+    dynamic
+        .generate_reactions_for_substances([methylamine.clone()], 1)
+        .unwrap();
+
+    let protection = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("amine_cbz_protection/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == methylamine)
+        })
+        .expect("methylamine must generate Cbz protection");
+    assert!(protection
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:benzyl_chloroformate"));
+    assert!(protection
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:hydrochloric_acid"));
+
+    let cbz_id = protection
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:hydrochloric_acid")
+        .expect("Cbz protection must create a protected amine product")
+        .substance_id
+        .clone();
+    let cbz = dynamic.substance(&cbz_id).unwrap();
+    let site_kinds = try_find_reactive_sites(cbz.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(site_kinds.contains(&ReactiveSiteKind::CbzCarbamate));
+    assert!(!site_kinds.contains(&ReactiveSiteKind::PrimaryAmine));
+    assert!(!site_kinds.contains(&ReactiveSiteKind::NonTertiaryAmine));
+
+    dynamic
+        .generate_reactions_for_substances([cbz_id.clone()], 1)
+        .unwrap();
+    let deprotection = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("cbz_deprotection/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == cbz_id)
+        })
+        .expect("Cbz carbamate must generate hydrogenolysis");
+    assert!(deprotection
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:hydrogen"));
+    assert!(deprotection
+        .external_catalysts
+        .iter()
+        .any(|catalyst| catalyst.description == "forge:dusts/palladium"));
+    assert!(deprotection
+        .products
+        .iter()
+        .any(|term| term.substance_id == methylamine));
+    assert!(deprotection
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:toluene"));
+    assert!(deprotection
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:carbon_dioxide"));
+
+    dynamic.to_registry().unwrap();
 }

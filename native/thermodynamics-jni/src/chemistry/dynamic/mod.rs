@@ -93,6 +93,13 @@ enum OrganicGeneratorKind {
     WittigOlefination,
     HornerWadsworthEmmonsOlefination,
     JuliaOlefination,
+    AlcoholSilylProtection,
+    SilylEtherDeprotection,
+    AcetalDeprotection,
+    AmineBocProtection,
+    BocDeprotection,
+    AmineCbzProtection,
+    CbzDeprotection,
 }
 
 impl OrganicGeneratorKind {
@@ -157,6 +164,13 @@ impl OrganicGeneratorKind {
             OrganicGeneratorKind::WittigOlefination => 52,
             OrganicGeneratorKind::HornerWadsworthEmmonsOlefination => 53,
             OrganicGeneratorKind::JuliaOlefination => 54,
+            OrganicGeneratorKind::AlcoholSilylProtection => 55,
+            OrganicGeneratorKind::SilylEtherDeprotection => 56,
+            OrganicGeneratorKind::AcetalDeprotection => 57,
+            OrganicGeneratorKind::AmineBocProtection => 58,
+            OrganicGeneratorKind::BocDeprotection => 59,
+            OrganicGeneratorKind::AmineCbzProtection => 60,
+            OrganicGeneratorKind::CbzDeprotection => 61,
         }
     }
 }
@@ -1336,9 +1350,14 @@ fn generators_for_site(
             OrganicGeneratorKind::AlcoholOxidation,
             OrganicGeneratorKind::AlcoholDehydration,
             OrganicGeneratorKind::ThionylChlorideSubstitution,
+            OrganicGeneratorKind::AlcoholSilylProtection,
             OrganicGeneratorKind::CarboxylicAcidEsterification,
             OrganicGeneratorKind::AcylChlorideEsterification,
         ],
+        ReactiveSiteKind::SilylEther => &[OrganicGeneratorKind::SilylEtherDeprotection],
+        ReactiveSiteKind::Acetal | ReactiveSiteKind::Ketal => {
+            &[OrganicGeneratorKind::AcetalDeprotection]
+        }
         ReactiveSiteKind::Alkoxide => &[OrganicGeneratorKind::AlkoxideProtonation],
         ReactiveSiteKind::Ester => &[OrganicGeneratorKind::ClaisenCondensation],
         ReactiveSiteKind::Nitrile => &[
@@ -1370,7 +1389,11 @@ fn generators_for_site(
             OrganicGeneratorKind::EnamineFormation,
         ],
         ReactiveSiteKind::Amide => &[OrganicGeneratorKind::AmideHydrolysis],
-        ReactiveSiteKind::PrimaryAmine => &[OrganicGeneratorKind::AminePhosgenation],
+        ReactiveSiteKind::PrimaryAmine => &[
+            OrganicGeneratorKind::AminePhosgenation,
+            OrganicGeneratorKind::AmineBocProtection,
+            OrganicGeneratorKind::AmineCbzProtection,
+        ],
         ReactiveSiteKind::Phosphine => &[OrganicGeneratorKind::PhosphoniumSaltFormation],
         ReactiveSiteKind::PhosphoniumSalt => &[OrganicGeneratorKind::PhosphoniumYlideFormation],
         ReactiveSiteKind::PhosphorusYlide => &[OrganicGeneratorKind::WittigOlefination],
@@ -1382,7 +1405,11 @@ fn generators_for_site(
             OrganicGeneratorKind::CyanamideAddition,
             OrganicGeneratorKind::HalideAmineSubstitution,
             OrganicGeneratorKind::EnamineFormation,
+            OrganicGeneratorKind::AmineBocProtection,
+            OrganicGeneratorKind::AmineCbzProtection,
         ],
+        ReactiveSiteKind::BocCarbamate => &[OrganicGeneratorKind::BocDeprotection],
+        ReactiveSiteKind::CbzCarbamate => &[OrganicGeneratorKind::CbzDeprotection],
         ReactiveSiteKind::Isocyanate => &[OrganicGeneratorKind::IsocyanateHydrolysis],
         ReactiveSiteKind::Borane => &[OrganicGeneratorKind::BoraneOxidation],
         ReactiveSiteKind::BorateEster => &[OrganicGeneratorKind::BorateEsterHydrolysis],

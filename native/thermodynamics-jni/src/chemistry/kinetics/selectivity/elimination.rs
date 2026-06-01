@@ -211,6 +211,7 @@ mod tests {
             solvent_type: SolventType::Basic,
             temperature: 350.0,
             ph: Some(12.0),
+            ..Default::default()
         };
 
         let with_beta = test_site(SubstitutionDegree::Secondary, true);
@@ -229,6 +230,7 @@ mod tests {
             solvent_type: SolventType::Basic,
             temperature: 350.0,
             ph: Some(12.0),
+            ..Default::default()
         };
 
         let tertiary = test_site(SubstitutionDegree::Tertiary, true);
@@ -291,6 +293,7 @@ mod tests {
             solvent_type: SolventType::Basic,
             temperature: 350.0,
             ph: Some(12.0),
+            ..Default::default()
         };
 
         let secondary = test_site(SubstitutionDegree::Secondary, true);

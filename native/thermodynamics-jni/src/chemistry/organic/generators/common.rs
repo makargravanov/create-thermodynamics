@@ -267,17 +267,11 @@ pub(crate) fn site_kind_suffix(kind: &ReactiveSiteKind) -> &'static str {
         ReactiveSiteKind::Sulfide => "sulfide",
         ReactiveSiteKind::SulfonylChloride => "sulfonyl_chloride",
         ReactiveSiteKind::Thiol => "thiol",
-        // Protecting groups
         ReactiveSiteKind::SilylEther => "silyl_ether",
         ReactiveSiteKind::Acetal => "acetal",
         ReactiveSiteKind::Ketal => "ketal",
         ReactiveSiteKind::BocCarbamate => "boc_carbamate",
         ReactiveSiteKind::CbzCarbamate => "cbz_carbamate",
-        ReactiveSiteKind::FmocCarbamate => "fmoc_carbamate",
-        ReactiveSiteKind::AcylProtectedAmine => "acyl_protected_amine",
-        ReactiveSiteKind::EsterProtectedAcid => "ester_protected_acid",
-        ReactiveSiteKind::ProtectedThiol => "protected_thiol",
-        ReactiveSiteKind::Thioacetal => "thioacetal",
     }
 }
 
