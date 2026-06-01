@@ -1688,6 +1688,7 @@ fn next_lowest_valency(element: &str, bonds: f64) -> f64 {
         "Au" => &[0.0, 4.0],
         "Pb" => &[2.0, 4.0],
         "Ar" => &[0.0],
+        "Si" => &[4.0],
         _ => &[0.0],
     };
     valencies
@@ -1793,6 +1794,7 @@ pub fn legacy_element_symbol(name: &str) -> ChemistryResult<&'static str> {
         "MERCURY" => "Hg",
         "LEAD" => "Pb",
         "ARGON" => "Ar",
+        "SILICON" => "Si",
         _ => {
             return Err(ChemistryError::InvalidSubstance {
                 substance_id: "<java-structure>".to_string(),

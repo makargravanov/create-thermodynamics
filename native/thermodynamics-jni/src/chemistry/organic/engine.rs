@@ -100,6 +100,8 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 }
                 let reaction = generate_thionyl_chloride_substitution(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                let reaction = generate_alcohol_silyl_protection(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             ReactiveSiteKind::Alkoxide => {
                 let site = participant.clone().alkoxide_site()?;
@@ -249,6 +251,15 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
             }
+            // Protecting group sites - generate deprotection reactions
+            ReactiveSiteKind::SilylEther => {
+                let site = participant.clone().silyl_ether_center()?;
+                let reaction = generate_silyl_ether_deprotection(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+            }
+            // TODO: Implement deprotection reactions for other protecting groups
+            // (Acetal, BocCarbamate, CbzCarbamate, EsterProtectedAcid)
+            // when the structures can be properly parsed and represented
             _ => {}
         }
 
@@ -327,6 +338,7 @@ fn is_generator_seed_site(kind: &ReactiveSiteKind) -> bool {
             | ReactiveSiteKind::Phosphine
             | ReactiveSiteKind::PhosphoniumSalt
             | ReactiveSiteKind::PhosphorusYlide
+            | ReactiveSiteKind::SilylEther
             | ReactiveSiteKind::PhosphonateCarbanion
             | ReactiveSiteKind::SulfoneCarbanion
             | ReactiveSiteKind::Isocyanate

@@ -208,6 +208,14 @@ pub(crate) struct ArylHalideSite<'a> {
     pub(crate) halogen: usize,
 }
 
+// Protecting group center types
+#[derive(Clone)]
+pub(crate) struct SilylEtherCenter<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) oxygen: usize,
+    pub(crate) silicon: usize,
+}
+
 impl<'a> SiteParticipant<'a> {
     pub(crate) fn require_kind(&self, expected: ReactiveSiteKind) -> ChemistryResult<()> {
         if self.site.kind == expected {
@@ -741,6 +749,29 @@ impl<'a> SiteParticipant<'a> {
             participant: self,
             carbon,
             halogen,
+        })
+    }
+
+    // Protecting group center methods
+    pub(crate) fn silyl_ether_center(self) -> ChemistryResult<SilylEtherCenter<'a>> {
+        self.require_kind(ReactiveSiteKind::SilylEther)?;
+        let oxygen = self.site_atom_by_element("O", "silyl ether oxygen")?;
+        let silicon = self.bonded_site_atom(oxygen, "Si", 1.0, "silyl ether silicon")?;
+        self
+            .structure
+            .neighbors(oxygen)
+            .into_iter()
+            .find_map(|(neighbor, order)| {
+                (neighbor != silicon
+                    && self.structure.atoms[neighbor].element == "C"
+                    && crate::chemistry::molecule::bond_order_matches(order, 1.0))
+                .then_some(neighbor)
+            })
+            .ok_or_else(|| self.site_error("silyl ether oxygen has no carbon neighbor"))?;
+        Ok(SilylEtherCenter {
+            participant: self,
+            oxygen,
+            silicon,
         })
     }
 

@@ -7,7 +7,7 @@ use super::functional_group::{FunctionalGroup, FunctionalGroupType};
 use super::kinetics::EnergyModel;
 use super::molecule::{MolecularEditor, MolecularStructure, Stereochemistry};
 use super::organic::{self, OrganicGenerationSpace};
-use super::reaction::{Reaction, ReactionId};
+use super::reaction::{Reaction, ReactionId, StoichiometricTerm};
 use super::reactive_site::{
     try_find_reactive_sites, ReactiveRole, ReactiveSiteKey, ReactiveSiteKind,
 };
@@ -515,11 +515,13 @@ impl DynamicChemistryRegistry {
             self.apply_generation_mask_updates(&pending_generation_mask_updates);
             let mut changed = false;
 
+            let mut generated_id_remap = BTreeMap::new();
             for substance in generated.substances {
                 if self.substance(&substance.id).is_ok() {
                     skipped_duplicates += 1;
                     continue;
                 }
+                let generated_id = substance.id.clone();
                 let canonical = substance
                     .molecular_structure
                     .as_ref()
@@ -529,7 +531,8 @@ impl DynamicChemistryRegistry {
                         substance_id: substance.id.to_string(),
                         reason: "generated dynamic substance has no structure".to_string(),
                     })?;
-                if self.canonical_to_id.contains_key(&canonical) {
+                if let Some(existing) = self.canonical_to_id.get(&canonical) {
+                    generated_id_remap.insert(generated_id, existing.clone());
                     skipped_duplicates += 1;
                     continue;
                 }
@@ -561,6 +564,7 @@ impl DynamicChemistryRegistry {
             }
 
             for reaction in generated.reactions {
+                let reaction = remap_reaction_substances(reaction, &generated_id_remap);
                 if self.reaction(&reaction.id).is_ok() {
                     skipped_duplicates += 1;
                     continue;
@@ -1258,6 +1262,61 @@ impl DynamicChemistryRegistry {
             marks.resize(slot + 1, false);
         }
         marks[slot] = value;
+    }
+}
+
+fn remap_reaction_substances(
+    mut reaction: Reaction,
+    remap: &BTreeMap<SubstanceId, SubstanceId>,
+) -> Reaction {
+    if remap.is_empty() {
+        return reaction;
+    }
+    for term in &mut reaction.reactants {
+        remap_term(term, remap);
+    }
+    for term in &mut reaction.products {
+        remap_term(term, remap);
+    }
+    for substance_id in reaction.orders.keys().cloned().collect::<Vec<_>>() {
+        if let Some(replacement) = remap.get(&substance_id) {
+            if let Some(order) = reaction.orders.remove(&substance_id) {
+                reaction.orders.insert(replacement.clone(), order);
+            }
+        }
+    }
+    if let Some(distribution) = &mut reaction.product_distribution {
+        for variant in &mut distribution.variants {
+            for term in &mut variant.products {
+                remap_term(term, remap);
+            }
+        }
+    }
+    for channel in &mut reaction.channels {
+        for term in &mut channel.products {
+            remap_term(term, remap);
+        }
+    }
+    let phase_entries = reaction.phase_access.clone();
+    for (substance_id, access) in phase_entries {
+        if let Some(replacement) = remap.get(&substance_id) {
+            reaction.phase_access.remove(&substance_id);
+            reaction.phase_access.insert(replacement.clone(), access);
+        }
+    }
+    let product_phase_entries = reaction.product_phases.clone();
+    for (substance_id, phase) in product_phase_entries {
+        if let Some(replacement) = remap.get(&substance_id) {
+            reaction.product_phases.remove(&substance_id);
+            reaction.product_phases.insert(replacement.clone(), phase);
+        }
+    }
+    reaction
+}
+
+fn remap_term(term: &mut StoichiometricTerm, remap: &BTreeMap<SubstanceId, SubstanceId>) {
+    if let Some(replacement) = remap.get(&term.substance_id) {
+        term.substance_id = replacement.clone();
     }
 }
 

@@ -49,6 +49,17 @@ pub enum ReactiveSiteKind {
     Sulfide,
     SulfonylChloride,
     Thiol,
+    // Protecting groups
+    SilylEther,
+    Acetal,
+    Ketal,
+    BocCarbamate,
+    CbzCarbamate,
+    FmocCarbamate,
+    AcylProtectedAmine,
+    EsterProtectedAcid,
+    ProtectedThiol,
+    Thioacetal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -305,9 +316,34 @@ pub fn try_find_reactive_sites(
             FunctionalGroupType::UnsubstitutedAmide => {
                 (ReactiveSiteKind::Amide, vec![ReactiveRole::Electrophile])
             }
+            // Protecting groups
+            FunctionalGroupType::SilylEther => (ReactiveSiteKind::SilylEther, vec![]),
+            FunctionalGroupType::Acetal => (ReactiveSiteKind::Acetal, vec![]),
+            FunctionalGroupType::Ketal => (ReactiveSiteKind::Ketal, vec![]),
+            FunctionalGroupType::BocCarbamate => {
+                (ReactiveSiteKind::BocCarbamate, vec![ReactiveRole::Electrophile])
+            }
+            FunctionalGroupType::CbzCarbamate => {
+                (ReactiveSiteKind::CbzCarbamate, vec![ReactiveRole::Electrophile])
+            }
+            FunctionalGroupType::FmocCarbamate => {
+                (ReactiveSiteKind::FmocCarbamate, vec![ReactiveRole::Electrophile])
+            }
+            FunctionalGroupType::AcylProtectedAmine => {
+                (ReactiveSiteKind::AcylProtectedAmine, vec![ReactiveRole::Electrophile])
+            }
+            FunctionalGroupType::EsterProtectedAcid => {
+                (ReactiveSiteKind::EsterProtectedAcid, vec![ReactiveRole::Electrophile])
+            }
+            FunctionalGroupType::ProtectedThiol => (ReactiveSiteKind::ProtectedThiol, vec![]),
+            FunctionalGroupType::Thioacetal => (ReactiveSiteKind::Thioacetal, vec![]),
         };
         sites.push(ReactiveSite::new(kind, group.atoms, roles));
     }
+
+    // Remove conflicting sites: protected functional groups should not have their
+    // original reactive sites detected
+    remove_conflicting_protected_sites(structure, &mut sites);
 
     add_aromatic_sites(structure, &mut sites);
     add_oxygen_sites(structure, &mut sites);
@@ -585,6 +621,124 @@ fn is_aromatic_carbon(structure: &MolecularStructure, atom: usize) -> bool {
             >= 2
 }
 
+/// Remove conflicting sites when a protected functional group is present.
+/// A protected group should not have its original reactive site detected.
+fn remove_conflicting_protected_sites(structure: &MolecularStructure, sites: &mut Vec<ReactiveSite>) {
+    // Collect atoms that are part of protected groups
+    let mut protected_alcohol_oxygens: Vec<usize> = Vec::new();
+    let mut protected_carbonyl_carbons: Vec<usize> = Vec::new();
+    let mut protected_amine_nitrogens: Vec<usize> = Vec::new();
+    let mut protected_acid_carbons: Vec<usize> = Vec::new();
+    let mut protected_thiol_sulfurs: Vec<usize> = Vec::new();
+
+    for site in sites.iter() {
+        match site.kind {
+            ReactiveSiteKind::SilylEther => {
+                // Silyl ethers protect alcohols - find the oxygen
+                if let Some(&oxygen) = site
+                    .atoms
+                    .iter()
+                    .find(|&&atom| structure.atoms[atom].element == "O")
+                {
+                    protected_alcohol_oxygens.push(oxygen);
+                }
+            }
+            ReactiveSiteKind::Acetal | ReactiveSiteKind::Ketal => {
+                // Acetals/ketals protect carbonyls - find the central carbon
+                if let Some(&carbon) = site
+                    .atoms
+                    .iter()
+                    .find(|&&atom| structure.atoms[atom].element == "C")
+                {
+                    protected_carbonyl_carbons.push(carbon);
+                }
+            }
+            ReactiveSiteKind::BocCarbamate
+            | ReactiveSiteKind::CbzCarbamate
+            | ReactiveSiteKind::FmocCarbamate
+            | ReactiveSiteKind::AcylProtectedAmine => {
+                // Carbamates protect amines - find the nitrogen
+                if let Some(&nitrogen) = site
+                    .atoms
+                    .iter()
+                    .find(|&&atom| structure.atoms[atom].element == "N")
+                {
+                    protected_amine_nitrogens.push(nitrogen);
+                }
+            }
+            ReactiveSiteKind::EsterProtectedAcid => {
+                // Esters protect carboxylic acids - find the carbonyl carbon
+                if let Some(&carbon) = site
+                    .atoms
+                    .iter()
+                    .find(|&&atom| structure.atoms[atom].element == "C")
+                {
+                    protected_acid_carbons.push(carbon);
+                }
+            }
+            ReactiveSiteKind::ProtectedThiol | ReactiveSiteKind::Thioacetal => {
+                // Protected thiols - find the sulfur
+                if let Some(&sulfur) = site
+                    .atoms
+                    .iter()
+                    .find(|&&atom| structure.atoms[atom].element == "S")
+                {
+                    protected_thiol_sulfurs.push(sulfur);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Remove sites that conflict with protected groups
+    sites.retain(|site| {
+        match site.kind {
+            ReactiveSiteKind::Alcohol => {
+                // An alcohol site is an oxygen - check if it's protected as silyl ether
+                let is_protected = site.atoms.iter().any(|&atom| {
+                    structure.atoms[atom].element == "O"
+                        && protected_alcohol_oxygens.contains(&atom)
+                });
+                !is_protected
+            }
+            ReactiveSiteKind::Aldehyde | ReactiveSiteKind::Ketone => {
+                // Carbonyl sites - check if protected as acetal/ketal
+                let is_protected = site.atoms.iter().any(|&atom| {
+                    structure.atoms[atom].element == "C"
+                        && protected_carbonyl_carbons.contains(&atom)
+                });
+                !is_protected
+            }
+            ReactiveSiteKind::PrimaryAmine | ReactiveSiteKind::NonTertiaryAmine => {
+                // Amine sites - check if protected as carbamate
+                let is_protected = site.atoms.iter().any(|&atom| {
+                    structure.atoms[atom].element == "N"
+                        && protected_amine_nitrogens.contains(&atom)
+                });
+                !is_protected
+            }
+            ReactiveSiteKind::CarboxylicAcid => {
+                // Carboxylic acid sites - check if protected as ester
+                // Carboxylic acid is defined by carbon with =O and -OH
+                let is_protected = site.atoms.iter().any(|&atom| {
+                    structure.atoms[atom].element == "C"
+                        && protected_acid_carbons.contains(&atom)
+                });
+                !is_protected
+            }
+            ReactiveSiteKind::Thiol => {
+                // Thiol sites - check if protected
+                let is_protected = site.atoms.iter().any(|&atom| {
+                    structure.atoms[atom].element == "S"
+                        && protected_thiol_sulfurs.contains(&atom)
+                });
+                !is_protected
+            }
+            _ => true, // Keep all other sites
+        }
+    });
+}
+
 fn enrich_sites(structure: &MolecularStructure, sites: &mut [ReactiveSite]) {
     for site in sites {
         site.primary_atom = primary_atom_for_site(site);
@@ -621,6 +775,15 @@ fn primary_atom_for_site(site: &ReactiveSite) -> Option<usize> {
         | ReactiveSiteKind::AromaticCarbon
         | ReactiveSiteKind::ArylHalide => site.atoms.first().copied(),
         ReactiveSiteKind::AromaticRing => None,
+        // Protecting groups
+        ReactiveSiteKind::SilylEther => site.atoms.iter().find(|&&atom| atom == *site.atoms.first().unwrap_or(&0)).copied(),
+        ReactiveSiteKind::Acetal | ReactiveSiteKind::Ketal => site.atoms.first().copied(),
+        ReactiveSiteKind::BocCarbamate
+        | ReactiveSiteKind::CbzCarbamate
+        | ReactiveSiteKind::FmocCarbamate
+        | ReactiveSiteKind::AcylProtectedAmine => site.atoms.iter().find(|&&atom| atom == *site.atoms.first().unwrap_or(&0)).copied(),
+        ReactiveSiteKind::EsterProtectedAcid => site.atoms.first().copied(),
+        ReactiveSiteKind::ProtectedThiol | ReactiveSiteKind::Thioacetal => site.atoms.first().copied(),
         _ => site.atoms.first().copied(),
     }
 }

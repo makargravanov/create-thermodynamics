@@ -243,6 +243,22 @@ pub enum ReactionType {
     HornerWadsworthEmmonsOlefination,
     /// Carbonyl olefination through a sulfone carbanion
     JuliaOlefination,
+    /// Protection of an alcohol as a silyl ether
+    SilylEtherFormation,
+    /// Deprotection of a silyl ether
+    SilylEtherCleavage,
+    /// Formation of an acetal (aldehyde protection)
+    AcetalFormation,
+    /// Hydrolysis of an acetal (deprotection)
+    AcetalHydrolysis,
+    /// Formation of a carbamate (amine protection)
+    CarbamateFormation,
+    /// Cleavage of a carbamate (amine deprotection)
+    CarbamateCleavage,
+    /// Formation of an ester (carboxylic acid protection)
+    EsterProtection,
+    /// Hydrolysis of an ester (deprotection)
+    EsterHydrolysis,
 }
 
 /// Nucleophile strength classification for selectivity models.

@@ -71,7 +71,15 @@ impl SelectivityEngine {
             | ReactionType::MichaelAddition
             | ReactionType::ClaisenCondensation
             | ReactionType::PhosphoniumSaltFormation
-            | ReactionType::PhosphoniumYlideFormation => {
+            | ReactionType::PhosphoniumYlideFormation
+            | ReactionType::SilylEtherFormation
+            | ReactionType::SilylEtherCleavage
+            | ReactionType::AcetalFormation
+            | ReactionType::AcetalHydrolysis
+            | ReactionType::CarbamateFormation
+            | ReactionType::CarbamateCleavage
+            | ReactionType::EsterProtection
+            | ReactionType::EsterHydrolysis => {
                 evaluate_alpha_carbon_profile(profile, context)
             }
         };
@@ -606,6 +614,82 @@ fn evaluate_alpha_carbon_profile(
             if context.is_basic() {
                 value *= 0.4;
                 activation_delta += 8.0;
+            }
+        }
+        // Protecting group reactions
+        ReactionType::SilylEtherFormation => {
+            // Silyl protection is fast under dry basic conditions
+            if context.is_basic() {
+                value *= 1.5;
+                activation_delta -= 3.0;
+            }
+            if context.is_acidic() {
+                value *= 0.2; // Acid is not good for silylation
+                activation_delta += 10.0;
+            }
+        }
+        ReactionType::SilylEtherCleavage => {
+            // Fluoride-mediated cleavage - needs fluoride, not pH dependent
+            // In our simplified model, this happens with basic or acidic conditions
+            // but is faster with fluoride (not explicitly modeled)
+            if context.is_basic() {
+                value *= 0.5; // Base alone is slow
+                activation_delta += 5.0;
+            }
+        }
+        ReactionType::AcetalFormation => {
+            // Acetal formation requires acidic, anhydrous conditions
+            if context.is_acidic() && !context.is_basic() {
+                value *= 2.0;
+                activation_delta -= 4.0;
+            } else {
+                value *= 0.1; // Very slow without acid
+                activation_delta += 15.0;
+            }
+        }
+        ReactionType::AcetalHydrolysis => {
+            // Acetal hydrolysis requires acidic aqueous conditions
+            if context.is_acidic() {
+                value *= 1.8;
+                activation_delta -= 3.0;
+            } else {
+                value *= 0.05; // Very slow without acid
+                activation_delta += 20.0;
+            }
+        }
+        ReactionType::CarbamateFormation => {
+            // Carbamate (Boc/Cbz) formation is generally fast under basic conditions
+            if context.is_basic() {
+                value *= 1.3;
+                activation_delta -= 2.0;
+            }
+        }
+        ReactionType::CarbamateCleavage => {
+            // Boc cleavage requires acid
+            // Cbz cleavage requires hydrogenolysis (Pd/H2)
+            if context.is_acidic() {
+                value *= 2.5; // Very fast with acid (Boc)
+                activation_delta -= 8.0;
+            } else {
+                value *= 0.1; // Slow without acid
+                activation_delta += 15.0;
+            }
+        }
+        ReactionType::EsterProtection => {
+            // Ester formation from acid + alcohol
+            if context.is_acidic() {
+                value *= 1.4;
+                activation_delta -= 2.0;
+            }
+        }
+        ReactionType::EsterHydrolysis => {
+            // Ester hydrolysis - acid or base catalyzed
+            if context.is_acidic() || context.is_basic() {
+                value *= 1.5;
+                activation_delta -= 3.0;
+            } else {
+                value *= 0.2;
+                activation_delta += 10.0;
             }
         }
         _ => {}
