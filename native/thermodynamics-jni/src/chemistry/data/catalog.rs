@@ -1,5 +1,5 @@
 use super::catalysis::CatalystSurfaceSpec;
-use super::complex::{ComplexLigand, ComplexSpec};
+use super::complex::{ComplexGeometry, ComplexLigand, ComplexSpec, LigandExchangeLability};
 use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::MixturePhase;
 use super::molecule::{
@@ -131,6 +131,9 @@ fn register_phase_tables(builder: ChemistryRegistryBuilder) -> ChemistryRegistry
                 2,
                 1.0e13,
             )
+            .with_coordination_number(4)
+            .with_geometry(ComplexGeometry::SquarePlanar)
+            .with_ligand_exchange_lability(LigandExchangeLability::Labile)
             .with_translation_key("copper_ii_tetraammine")
             .with_color_argb(0x804A90E2),
         )
@@ -142,6 +145,9 @@ fn register_phase_tables(builder: ChemistryRegistryBuilder) -> ChemistryRegistry
                 2,
                 1.0e8,
             )
+            .with_coordination_number(4)
+            .with_geometry(ComplexGeometry::Tetrahedral)
+            .with_ligand_exchange_lability(LigandExchangeLability::Labile)
             .with_translation_key("nickel_tetraammine")
             .with_color_argb(0x8062B25D),
         )
@@ -153,6 +159,9 @@ fn register_phase_tables(builder: ChemistryRegistryBuilder) -> ChemistryRegistry
                 -3,
                 1.0e31,
             )
+            .with_coordination_number(6)
+            .with_geometry(ComplexGeometry::Octahedral)
+            .with_ligand_exchange_lability(LigandExchangeLability::Inert)
             .with_translation_key("ferric_hexacyanide")
             .with_color_argb(0x80364D9B),
         )

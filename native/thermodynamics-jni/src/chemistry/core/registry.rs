@@ -1165,6 +1165,12 @@ fn build_complex_specs(
                 substance_id: spec.central_ion.to_string(),
             }
         })?;
+        if central.charge == 0 {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: format!("{}.formation", spec.id),
+                reason: "complex central substance must be an ion with explicit charge".to_string(),
+            });
+        }
         let mut charge = central.charge;
         let mut mass = central.molar_mass_grams;
         for ligand in &spec.ligands {
@@ -1174,6 +1180,28 @@ fn build_complex_specs(
                     substance_id: ligand.substance_id.to_string(),
                 }
             })?;
+            let ligand_solubility = match spec.phase {
+                MixturePhase::Aqueous => {
+                    ligand_substance
+                        .phase_properties
+                        .aqueous_solubility_mol_per_bucket
+                }
+                MixturePhase::Organic => {
+                    ligand_substance
+                        .phase_properties
+                        .organic_solubility_mol_per_bucket
+                }
+                MixturePhase::Gas | MixturePhase::Solid => None,
+            };
+            if ligand_substance.phase_properties.can_precipitate && ligand_solubility == Some(0.0) {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: format!("{}.formation", spec.id),
+                    reason: format!(
+                        "complex ligand '{}' is not available as a dissolved ligand",
+                        ligand.substance_id
+                    ),
+                });
+            }
             charge += ligand_substance.charge * ligand.count as i32;
             mass += ligand_substance.molar_mass_grams * ligand.count as f64;
         }
@@ -1414,12 +1442,12 @@ fn build_indexed_precipitations(
                 reason: "duplicate precipitation spec".to_string(),
             });
         }
-        let solid = *substance_id_to_index
-            .get(&spec.solid)
-            .ok_or_else(|| ChemistryError::UnknownSubstance {
+        let solid = *substance_id_to_index.get(&spec.solid).ok_or_else(|| {
+            ChemistryError::UnknownSubstance {
                 reaction_id: spec.id.clone(),
                 substance_id: spec.solid.to_string(),
-            })?;
+            }
+        })?;
         if !substances[solid.0].phase_properties.can_precipitate {
             return Err(ChemistryError::InvalidSubstance {
                 substance_id: spec.solid.to_string(),

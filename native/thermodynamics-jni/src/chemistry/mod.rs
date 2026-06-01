@@ -61,7 +61,7 @@ pub fn destroy_registry_with_generated_reactions_builder(
 #[cfg(test)]
 mod tests {
     use super::catalysis::{CatalystSurfaceId, CatalystSurfaceSpec};
-    use super::complex::{ComplexLigand, ComplexSpec};
+    use super::complex::{ComplexGeometry, ComplexLigand, ComplexSpec, LigandExchangeLability};
     use super::destroy_registry_builder;
     use super::error::ChemistryError;
     use super::kinetics::{
@@ -73,7 +73,8 @@ mod tests {
     use super::simulation::{
         react_for_tick, react_for_tick_with_context, react_until_equilibrium, ReactionContext,
     };
-    use super::substance::{Substance, SubstanceId};
+    use super::solution::PrecipitationSpec;
+    use super::substance::{Substance, SubstanceId, SubstancePhaseProperties};
     use super::{DESTROY_EXPLICIT_REACTION_COUNT, DESTROY_REGISTERED_REACTION_COUNT};
 
     fn water_id() -> SubstanceId {
@@ -998,6 +999,155 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, ChemistryError::ChargeNotConserved { .. }));
+    }
+
+    #[test]
+    fn invalid_complex_coordination_fails_registry_build() {
+        let error = ChemistryRegistryBuilder::new()
+            .substance(Substance::new(
+                "metal",
+                2,
+                10.0,
+                1_000.0,
+                f64::MAX,
+                100.0,
+                20_000.0,
+            ))
+            .substance(
+                Substance::new("ligand", 0, 5.0, 1_000.0, 373.0, 100.0, 20_000.0)
+                    .with_phase_properties(SubstancePhaseProperties::aqueous_unlimited()),
+            )
+            .complex_spec(
+                ComplexSpec::new(
+                    "metal_ligand",
+                    "metal",
+                    [ComplexLigand::new("ligand", 2)],
+                    2,
+                    1.0e3,
+                )
+                .with_coordination_number(4)
+                .with_geometry(ComplexGeometry::SquarePlanar),
+            )
+            .build()
+            .unwrap_err();
+
+        assert!(matches!(error, ChemistryError::InvalidReaction { .. }));
+    }
+
+    #[test]
+    fn complexation_competes_with_precipitation() {
+        let registry = ChemistryRegistryBuilder::new()
+            .substance(Substance::new(
+                "destroy:water",
+                0,
+                18.0,
+                1_000.0,
+                373.0,
+                75.0,
+                40_000.0,
+            ))
+            .substance(Substance::new(
+                "destroy:silver_ion",
+                1,
+                107.8682,
+                1_000.0,
+                f64::MAX,
+                100.0,
+                20_000.0,
+            ))
+            .substance(Substance::new(
+                "destroy:chloride",
+                -1,
+                35.45,
+                1_000.0,
+                f64::MAX,
+                100.0,
+                20_000.0,
+            ))
+            .substance(
+                Substance::new("destroy:ammonia", 0, 17.031, 1_000.0, 400.0, 80.0, 23_000.0)
+                    .with_phase_properties(SubstancePhaseProperties::aqueous_unlimited()),
+            )
+            .substance(
+                Substance::new(
+                    "destroy:silver_chloride",
+                    0,
+                    143.3182,
+                    1_000.0,
+                    728.0,
+                    100.0,
+                    20_000.0,
+                )
+                .with_phase_properties(SubstancePhaseProperties {
+                    can_precipitate: true,
+                    can_form_liquid_phase: false,
+                    aqueous_solubility_mol_per_bucket: Some(0.0),
+                    organic_solubility_mol_per_bucket: Some(0.0),
+                    ..SubstancePhaseProperties::aqueous_unlimited()
+                }),
+            )
+            .precipitation(PrecipitationSpec::new(
+                "destroy:silver_chloride",
+                "destroy:silver_chloride",
+                [
+                    (SubstanceId::from("destroy:silver_ion"), 1),
+                    (SubstanceId::from("destroy:chloride"), 1),
+                ],
+                1.0e-4,
+            ))
+            .complex_spec(
+                ComplexSpec::new(
+                    "destroy:silver_diammine",
+                    "destroy:silver_ion",
+                    [ComplexLigand::new("destroy:ammonia", 2)],
+                    1,
+                    1.0e4,
+                )
+                .with_coordination_number(2)
+                .with_geometry(ComplexGeometry::Linear)
+                .with_ligand_exchange_lability(LigandExchangeLability::Labile),
+            )
+            .build()
+            .unwrap();
+
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 55.5)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:silver_ion", 0.02)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:chloride", 0.02)
+            .unwrap();
+        mixture.equilibrate_solution(&registry).unwrap();
+        let precipitated_before =
+            mixture.concentration_in_phase(&"destroy:silver_chloride".into(), MixturePhase::Solid);
+        assert!(
+            precipitated_before > 0.005,
+            "precipitated before ammonia was {precipitated_before}, silver aq {}, chloride aq {}, silver total {}, chloride total {}",
+            mixture.concentration_in_phase(&"destroy:silver_ion".into(), MixturePhase::Aqueous),
+            mixture.concentration_in_phase(&"destroy:chloride".into(), MixturePhase::Aqueous),
+            mixture.concentration_of(&"destroy:silver_ion".into()),
+            mixture.concentration_of(&"destroy:chloride".into())
+        );
+
+        mixture
+            .add_substance(&registry, "destroy:ammonia", 0.20)
+            .unwrap();
+        mixture.equilibrate_solution(&registry).unwrap();
+
+        let complex = mixture.concentration_of(&"destroy:silver_diammine".into());
+        let precipitated_after =
+            mixture.concentration_in_phase(&"destroy:silver_chloride".into(), MixturePhase::Solid);
+        assert!(
+            complex > 0.001,
+            "silver diammine concentration was {complex}"
+        );
+        assert!(
+            precipitated_after < precipitated_before,
+            "precipitate before {precipitated_before}, after {precipitated_after}"
+        );
     }
 
     #[test]

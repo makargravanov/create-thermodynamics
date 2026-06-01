@@ -10,6 +10,7 @@ use super::substance::{
 pub struct ComplexLigand {
     pub substance_id: SubstanceId,
     pub count: u32,
+    pub denticity: u32,
 }
 
 impl ComplexLigand {
@@ -17,8 +18,45 @@ impl ComplexLigand {
         Self {
             substance_id: substance_id.into(),
             count,
+            denticity: 1,
         }
     }
+
+    pub fn with_denticity(mut self, denticity: u32) -> Self {
+        self.denticity = denticity;
+        self
+    }
+
+    pub fn occupied_sites(&self) -> u32 {
+        self.count.saturating_mul(self.denticity)
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum ComplexGeometry {
+    Linear,
+    Tetrahedral,
+    SquarePlanar,
+    Octahedral,
+    Unknown,
+}
+
+impl ComplexGeometry {
+    fn expected_coordination_number(self) -> Option<u32> {
+        match self {
+            ComplexGeometry::Linear => Some(2),
+            ComplexGeometry::Tetrahedral | ComplexGeometry::SquarePlanar => Some(4),
+            ComplexGeometry::Octahedral => Some(6),
+            ComplexGeometry::Unknown => None,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum LigandExchangeLability {
+    Labile,
+    Intermediate,
+    Inert,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -26,6 +64,9 @@ pub struct ComplexSpec {
     pub id: SubstanceId,
     pub central_ion: SubstanceId,
     pub ligands: Vec<ComplexLigand>,
+    pub coordination_number: u32,
+    pub geometry: ComplexGeometry,
+    pub ligand_exchange_lability: LigandExchangeLability,
     pub charge: i32,
     pub formation_constant: f64,
     pub phase: MixturePhase,
@@ -42,10 +83,18 @@ impl ComplexSpec {
         charge: i32,
         formation_constant: f64,
     ) -> Self {
+        let ligands = ligands.into_iter().collect::<Vec<_>>();
+        let coordination_number = ligands
+            .iter()
+            .map(ComplexLigand::occupied_sites)
+            .sum::<u32>();
         Self {
             id: id.into(),
             central_ion: central_ion.into(),
-            ligands: ligands.into_iter().collect(),
+            ligands,
+            coordination_number,
+            geometry: ComplexGeometry::Unknown,
+            ligand_exchange_lability: LigandExchangeLability::Intermediate,
             charge,
             formation_constant,
             phase: MixturePhase::Aqueous,
@@ -53,6 +102,21 @@ impl ComplexSpec {
             color_argb: 0x20FF_FFFF,
             tags: Vec::new(),
         }
+    }
+
+    pub fn with_coordination_number(mut self, coordination_number: u32) -> Self {
+        self.coordination_number = coordination_number;
+        self
+    }
+
+    pub fn with_geometry(mut self, geometry: ComplexGeometry) -> Self {
+        self.geometry = geometry;
+        self
+    }
+
+    pub fn with_ligand_exchange_lability(mut self, lability: LigandExchangeLability) -> Self {
+        self.ligand_exchange_lability = lability;
+        self
     }
 
     pub fn with_phase(mut self, phase: MixturePhase) -> Self {
@@ -94,6 +158,23 @@ impl ComplexSpec {
                 reason: "complex must contain at least one ligand".to_string(),
             });
         }
+        if self.coordination_number == 0 {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: format!("{}.formation", self.id),
+                reason: "complex coordination number must be greater than zero".to_string(),
+            });
+        }
+        if let Some(expected) = self.geometry.expected_coordination_number() {
+            if self.coordination_number != expected {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: format!("{}.formation", self.id),
+                    reason: format!(
+                        "complex geometry {:?} requires coordination number {expected}",
+                        self.geometry
+                    ),
+                });
+            }
+        }
         if !self.formation_constant.is_finite() || self.formation_constant <= 0.0 {
             return Err(ChemistryError::InvalidReaction {
                 reaction_id: format!("{}.formation", self.id),
@@ -113,12 +194,32 @@ impl ComplexSpec {
                     reason: "complex ligand count must be greater than zero".to_string(),
                 });
             }
+            if ligand.denticity == 0 {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: format!("{}.formation", self.id),
+                    reason: "complex ligand denticity must be greater than zero".to_string(),
+                });
+            }
             if ligand.substance_id.as_str().trim().is_empty() {
                 return Err(ChemistryError::InvalidSubstance {
                     substance_id: self.id.to_string(),
                     reason: "complex ligand id must not be empty".to_string(),
                 });
             }
+        }
+        let occupied_sites = self
+            .ligands
+            .iter()
+            .map(ComplexLigand::occupied_sites)
+            .sum::<u32>();
+        if occupied_sites != self.coordination_number {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: format!("{}.formation", self.id),
+                reason: format!(
+                    "complex ligands occupy {occupied_sites} sites, but coordination number is {}",
+                    self.coordination_number
+                ),
+            });
         }
         Ok(())
     }
@@ -149,6 +250,23 @@ impl ComplexSpec {
                 products: self.charge,
             });
         }
+        let preferred_liquid_phase = match self.phase {
+            MixturePhase::Aqueous => LiquidPhasePreference::Aqueous,
+            MixturePhase::Organic => LiquidPhasePreference::Organic,
+            MixturePhase::Gas | MixturePhase::Solid => {
+                return Err(ChemistryError::InvalidReaction {
+                    reaction_id: format!("{}.formation", self.id),
+                    reason: "complex substance must be formed in a liquid phase".to_string(),
+                });
+            }
+        };
+        let (aqueous_solubility_mol_per_bucket, organic_solubility_mol_per_bucket) =
+            match self.phase {
+                MixturePhase::Aqueous => (Some(10.0), Some(0.0)),
+                MixturePhase::Organic => (Some(0.0), Some(10.0)),
+                MixturePhase::Gas | MixturePhase::Solid => unreachable!(),
+            };
+
         Ok(Substance::new(
             self.id.clone(),
             self.charge,
@@ -165,9 +283,9 @@ impl ComplexSpec {
             self.tags.clone(),
         )
         .with_phase_properties(SubstancePhaseProperties {
-            preferred_liquid_phase: LiquidPhasePreference::Aqueous,
-            aqueous_solubility_mol_per_bucket: Some(10.0),
-            organic_solubility_mol_per_bucket: Some(0.0),
+            preferred_liquid_phase,
+            aqueous_solubility_mol_per_bucket,
+            organic_solubility_mol_per_bucket,
             can_precipitate: true,
             can_form_liquid_phase: false,
             solvent_role: SolventRole::NotSolvent,
