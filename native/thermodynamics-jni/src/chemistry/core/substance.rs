@@ -335,6 +335,13 @@ impl Substance {
 
     pub fn validate(&self) -> ChemistryResult<()> {
         let id = self.id.to_string();
+        if self.id.as_str().trim().is_empty() {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: id,
+                reason: "id must not be empty".to_string(),
+            });
+        }
+        let id = self.id.to_string();
         if !self.molar_mass_grams.is_finite() || self.molar_mass_grams <= 0.0 {
             return Err(ChemistryError::InvalidSubstance {
                 substance_id: id,

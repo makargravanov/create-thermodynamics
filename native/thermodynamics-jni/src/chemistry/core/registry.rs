@@ -692,9 +692,9 @@ impl ChemistryRegistry {
                 .filter_map(|requirement| {
                     requirement
                         .charge
-                        .map(|charge| charge * requirement.moles_per_reaction.round() as i32)
+                        .map(|charge| charge as f64 * requirement.moles_per_reaction)
                 })
-                .sum::<i32>();
+                .sum::<f64>();
 
             let reactant_charge = reaction
                 .reactants
@@ -702,31 +702,23 @@ impl ChemistryRegistry {
                 .map(|term| {
                     self.substance_index(&term.substance_id)
                         .map(|index| {
-                            self.substance_properties.charge[index.0] * term.coefficient as i32
+                            self.substance_properties.charge[index.0] as f64
+                                * term.coefficient as f64
                         })
                         .ok_or_else(|| ChemistryError::UnknownSubstance {
                             reaction_id: reaction.id.to_string(),
                             substance_id: term.substance_id.to_string(),
                         })
                 })
-                .sum::<ChemistryResult<i32>>()?
+                .sum::<ChemistryResult<f64>>()?
                 + external_reactant_charge;
-            let external_product_charge = reaction
-                .external_products
-                .iter()
-                .filter_map(|requirement| {
-                    requirement
-                        .charge
-                        .map(|charge| charge * requirement.moles_per_reaction.round() as i32)
-                })
-                .sum::<i32>();
-            let product_charge = product_charge(reaction, self)? + external_product_charge as f64;
-            if (reactant_charge as f64 - product_charge).abs() > 1.0e-9
+            let product_charge = product_charge(reaction, self)?;
+            if (reactant_charge - product_charge).abs() > 1.0e-9
                 && !reaction.allow_charge_imbalance
             {
                 return Err(ChemistryError::ChargeNotConserved {
                     reaction_id: reaction.id.to_string(),
-                    reactants: reactant_charge,
+                    reactants: reactant_charge.round() as i32,
                     products: product_charge.round() as i32,
                 });
             }
@@ -749,16 +741,7 @@ impl ChemistryRegistry {
                 })
                 .sum::<ChemistryResult<f64>>()?
                 + external_reactant_mass;
-            let external_product_mass = reaction
-                .external_products
-                .iter()
-                .filter_map(|requirement| {
-                    requirement
-                        .molar_mass_grams
-                        .map(|mass| mass * requirement.moles_per_reaction)
-                })
-                .sum::<f64>();
-            let product_mass = product_mass(reaction, self)? + external_product_mass;
+            let product_mass = product_mass(reaction, self)?;
             if (reactant_mass - product_mass).abs() > MASS_TOLERANCE_GRAMS_PER_MOL
                 && !reaction.allow_mass_imbalance
             {
@@ -913,7 +896,7 @@ fn product_charge(reaction: &Reaction, registry: &ChemistryRegistry) -> Chemistr
                 .sum::<ChemistryResult<f64>>()?
                 + external_product_charge;
             if first_channel_charge.is_none() {
-                first_channel_charge = Some(channel_charge - external_product_charge);
+                first_channel_charge = Some(channel_charge);
             }
             if (reactant_charge - channel_charge).abs() > 1.0e-9 && !reaction.allow_charge_imbalance
             {
@@ -1030,7 +1013,7 @@ fn product_mass(reaction: &Reaction, registry: &ChemistryRegistry) -> ChemistryR
                 .sum::<ChemistryResult<f64>>()?
                 + external_product_mass;
             if first_channel_mass.is_none() {
-                first_channel_mass = Some(channel_mass - external_product_mass);
+                first_channel_mass = Some(channel_mass);
             }
             if (reactant_mass - channel_mass).abs() > MASS_TOLERANCE_GRAMS_PER_MOL
                 && !reaction.allow_mass_imbalance

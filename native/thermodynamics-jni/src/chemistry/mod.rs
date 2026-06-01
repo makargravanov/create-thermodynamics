@@ -233,6 +233,10 @@ mod tests {
         Substance::new(id, 0, 10.0, 1_000.0, 373.0, 100.0, 20_000.0)
     }
 
+    fn neutral_substance(id: &'static str, molar_mass: f64) -> Substance {
+        Substance::new(id, 0, molar_mass, 1_000.0, 373.0, 100.0, 20_000.0)
+    }
+
     fn surface_test_registry(reaction: Reaction) -> super::ChemistryRegistry {
         ChemistryRegistryBuilder::new()
             .substance(test_substance("a"))
@@ -259,6 +263,84 @@ mod tests {
             )
             .build()
             .unwrap()
+    }
+
+    #[test]
+    fn external_products_are_counted_once_in_registry_validation() {
+        ChemistryRegistryBuilder::new()
+            .substance(neutral_substance("a", 10.0))
+            .substance(neutral_substance("b", 5.0))
+            .reaction(
+                Reaction::builder("external_product_balance")
+                    .reactant("a", 1, 1)
+                    .product("b", 1)
+                    .chemical_external_product("external:fragment", 1.0, 5.0, 0)
+                    .build(),
+            )
+            .build()
+            .expect("external product must be counted exactly once");
+    }
+
+    #[test]
+    fn empty_reaction_and_substance_ids_are_rejected() {
+        let reaction_error = ChemistryRegistryBuilder::new()
+            .substance(test_substance("a"))
+            .substance(test_substance("b"))
+            .reaction(Reaction::builder("").reactant("a", 1, 1).product("b", 1).build())
+            .build()
+            .unwrap_err();
+        assert!(matches!(reaction_error, ChemistryError::InvalidReaction { .. }));
+
+        let substance_error = ChemistryRegistryBuilder::new()
+            .substance(test_substance(""))
+            .build()
+            .unwrap_err();
+        assert!(matches!(
+            substance_error,
+            ChemistryError::InvalidSubstance { .. }
+        ));
+    }
+
+    #[test]
+    fn external_catalyst_adds_surface_sites_without_overwriting() {
+        let mut context = ReactionContext::default();
+        context.add_external_catalyst("surface:nickel", 1.0).unwrap();
+        context.add_external_catalyst("surface:nickel", 1.0).unwrap();
+
+        assert_eq!(context.external_catalysts["surface:nickel"], 2.0);
+        assert_eq!(
+            context
+                .surfaces
+                .get(&CatalystSurfaceId::from("surface:nickel"))
+                .unwrap()
+                .total_sites_mol_per_bucket,
+            2.0
+        );
+    }
+
+    #[test]
+    fn external_products_are_recorded_outside_mixture() {
+        let registry = ChemistryRegistryBuilder::new()
+            .substance(test_substance("a"))
+            .substance(test_substance("b"))
+            .reaction(
+                Reaction::builder("vented_external_product")
+                    .reactant("a", 1, 1)
+                    .product("b", 1)
+                    .chemical_external_product("external:vented", 1.0, 0.0, 0)
+                    .pre_exponential_factor(1.0e12)
+                    .activation_energy_kj_per_mol(0.0)
+                    .build(),
+            )
+            .build()
+            .unwrap();
+        let mut mixture = Mixture::new(298.0).unwrap();
+        mixture.add_substance(&registry, "a", 1.0).unwrap();
+        let mut context = ReactionContext::default();
+
+        assert!(react_for_tick_with_context(&registry, &mut mixture, &mut context, 1).unwrap());
+        assert!(context.external_products["external:vented"] > 0.0);
+        assert!(mixture.concentration_of(&"external:vented".into()) == 0.0);
     }
 
     fn channel_product_registry(

@@ -526,12 +526,14 @@ impl DynamicChemistryRegistry {
 
             let generated =
                 self.generate_organic_for_known_substances(&unprocessed_seeds, &scope)?;
-            self.apply_generation_mask_updates(&pending_generation_mask_updates);
             let mut changed = false;
 
+            let mut staged = self.clone();
+            staged.apply_generation_mask_updates(&pending_generation_mask_updates);
             let mut generated_id_remap = BTreeMap::new();
+            let mut new_substance_ids = Vec::new();
             for substance in generated.substances {
-                if self.substance(&substance.id).is_ok() {
+                if staged.substance(&substance.id).is_ok() {
                     skipped_duplicates += 1;
                     continue;
                 }
@@ -545,26 +547,51 @@ impl DynamicChemistryRegistry {
                         substance_id: substance.id.to_string(),
                         reason: "generated dynamic substance has no structure".to_string(),
                     })?;
-                if let Some(existing) = self.canonical_to_id.get(&canonical) {
+                if let Some(existing) = staged.canonical_to_id.get(&canonical) {
                     generated_id_remap.insert(generated_id, existing.clone());
                     skipped_duplicates += 1;
                     continue;
                 }
                 let substance_id = substance.id.clone();
-                self.add_dynamic_substance_with_canonical(substance, Some(canonical))?;
-                let new_index = self.known_substance_index(&substance_id).ok_or_else(|| {
+                staged.add_dynamic_substance_with_canonical(substance, Some(canonical))?;
+                staged.known_substance_index(&substance_id).ok_or_else(|| {
                     ChemistryError::InvalidMixtureState(format!(
                         "generated substance '{substance_id}' was not indexed",
                     ))
                 })?;
-                self.mark_known_substance(&mut scope, new_index, true);
+                new_substance_ids.push(substance_id);
+                added_substances += 1;
+                changed = true;
+            }
+
+            for reaction in generated.reactions {
+                let reaction = remap_reaction_substances(reaction, &generated_id_remap);
+                if staged.reaction(&reaction.id).is_ok() {
+                    skipped_duplicates += 1;
+                    continue;
+                }
+                staged.add_dynamic_reaction(reaction)?;
+                added_reactions += 1;
+                changed = true;
+            }
+
+            let mut staged_scope = scope.clone();
+            let mut staged_queue = queue.clone();
+            let mut staged_queued = queued.clone();
+            for substance_id in &new_substance_ids {
+                let new_index = staged.known_substance_index(substance_id).ok_or_else(|| {
+                    ChemistryError::InvalidMixtureState(format!(
+                        "generated substance '{substance_id}' was not indexed",
+                    ))
+                })?;
+                staged.mark_known_substance(&mut staged_scope, new_index, true);
                 enqueue_known_substance(
-                    self.static_registry.substance_count(),
-                    &mut queue,
-                    &mut queued,
+                    staged.static_registry.substance_count(),
+                    &mut staged_queue,
+                    &mut staged_queued,
                     new_index,
                 );
-                if queue.len() > MAX_DYNAMIC_QUEUE_ITEMS {
+                if staged_queue.len() > MAX_DYNAMIC_QUEUE_ITEMS {
                     return Err(ChemistryError::GenerationInvariantViolation {
                         generator: "<dynamic-generation>".to_string(),
                         substance_id: substance_id.to_string(),
@@ -573,20 +600,12 @@ impl DynamicChemistryRegistry {
                         ),
                     });
                 }
-                added_substances += 1;
-                changed = true;
             }
 
-            for reaction in generated.reactions {
-                let reaction = remap_reaction_substances(reaction, &generated_id_remap);
-                if self.reaction(&reaction.id).is_ok() {
-                    skipped_duplicates += 1;
-                    continue;
-                }
-                self.add_dynamic_reaction(reaction)?;
-                added_reactions += 1;
-                changed = true;
-            }
+            *self = staged;
+            scope = staged_scope;
+            queue = staged_queue;
+            queued = staged_queued;
 
             if !changed {
                 return Ok(DynamicGenerationReport {
@@ -852,25 +871,25 @@ impl DynamicChemistryRegistry {
             .filter_map(|requirement| {
                 requirement
                     .charge
-                    .map(|charge| charge * requirement.moles_per_reaction.round() as i32)
+                    .map(|charge| charge as f64 * requirement.moles_per_reaction)
             })
-            .sum::<i32>();
+            .sum::<f64>();
         let reactant_charge = reaction
             .reactants
             .iter()
             .map(|term| {
                 self.substance(&term.substance_id)
-                    .map(|substance| substance.charge * term.coefficient as i32)
+                    .map(|substance| substance.charge as f64 * term.coefficient as f64)
             })
-            .sum::<ChemistryResult<i32>>()?
+            .sum::<ChemistryResult<f64>>()?
             + external_reactant_charge;
         let product_charge = self.dynamic_product_charge(reaction)?;
-        if (reactant_charge as f64 - product_charge).abs() > 1.0e-9
+        if (reactant_charge - product_charge).abs() > 1.0e-9
             && !reaction.allow_charge_imbalance
         {
             return Err(ChemistryError::ChargeNotConserved {
                 reaction_id: reaction.id.to_string(),
-                reactants: reactant_charge,
+                reactants: reactant_charge.round() as i32,
                 products: product_charge.round() as i32,
             });
         }
@@ -947,7 +966,7 @@ impl DynamicChemistryRegistry {
                     .sum::<ChemistryResult<f64>>()?
                     + external_product_charge;
                 if first_channel_charge.is_none() {
-                    first_channel_charge = Some(channel_charge - external_product_charge);
+                    first_channel_charge = Some(channel_charge);
                 }
                 if (reactant_charge - channel_charge).abs() > 1.0e-9
                     && !reaction.allow_charge_imbalance
@@ -1048,7 +1067,7 @@ impl DynamicChemistryRegistry {
                     .sum::<ChemistryResult<f64>>()?
                     + external_product_mass;
                 if first_channel_mass.is_none() {
-                    first_channel_mass = Some(channel_mass - external_product_mass);
+                    first_channel_mass = Some(channel_mass);
                 }
                 if (reactant_mass - channel_mass).abs() > MASS_TOLERANCE_GRAMS_PER_MOL
                     && !reaction.allow_mass_imbalance

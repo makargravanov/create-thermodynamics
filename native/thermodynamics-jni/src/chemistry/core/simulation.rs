@@ -21,6 +21,7 @@ pub struct SimulationReport {
     pub ticks: u32,
     pub reached_equilibrium: bool,
     pub reaction_results: BTreeMap<String, f64>,
+    pub external_products: BTreeMap<String, f64>,
     pub surfaces: BTreeMap<CatalystSurfaceId, CatalystSurfaceState>,
     pub surface_steps: BTreeMap<String, f64>,
 }
@@ -31,6 +32,7 @@ pub struct ReactionContext {
     pub light_power_by_band: BTreeMap<LightBand, f64>,
     pub external_reactants: BTreeMap<String, f64>,
     pub external_catalysts: BTreeMap<String, f64>,
+    pub external_products: BTreeMap<String, f64>,
     pub surfaces: BTreeMap<CatalystSurfaceId, CatalystSurfaceState>,
     pub reaction_results: BTreeMap<String, f64>,
     pub surface_steps: BTreeMap<String, f64>,
@@ -51,6 +53,7 @@ impl ReactionApplication {
 #[derive(Debug, Clone)]
 struct ContextCheckpoint {
     external_reactants: Vec<(String, Option<f64>)>,
+    external_products: Vec<(String, Option<f64>)>,
     surfaces: Vec<(CatalystSurfaceId, Option<CatalystSurfaceState>)>,
     reaction_results: Vec<(String, Option<f64>)>,
     surface_steps: Vec<(String, Option<f64>)>,
@@ -63,6 +66,7 @@ impl Default for ReactionContext {
             light_power_by_band: BTreeMap::new(),
             external_reactants: BTreeMap::new(),
             external_catalysts: BTreeMap::new(),
+            external_products: BTreeMap::new(),
             surfaces: BTreeMap::new(),
             reaction_results: BTreeMap::new(),
             surface_steps: BTreeMap::new(),
@@ -139,7 +143,7 @@ impl ReactionContext {
             description.clone(),
             moles_per_bucket,
         )?;
-        self.add_surface(description, moles_per_bucket)
+        self.add_surface_sites(description, moles_per_bucket)
     }
 
     pub fn add_surface(
@@ -150,6 +154,31 @@ impl ReactionContext {
         let surface_id = surface_id.into();
         let state = CatalystSurfaceState::new(sites_mol_per_bucket)?;
         self.surfaces.insert(surface_id, state);
+        Ok(())
+    }
+
+    pub fn add_surface_sites(
+        &mut self,
+        surface_id: impl Into<CatalystSurfaceId>,
+        sites_mol_per_bucket: f64,
+    ) -> ChemistryResult<()> {
+        if !sites_mol_per_bucket.is_finite() || sites_mol_per_bucket < 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "surface site amount must be non-negative and finite".to_string(),
+            ));
+        }
+        let surface_id = surface_id.into();
+        if let Some(state) = self.surfaces.get_mut(&surface_id) {
+            state.total_sites_mol_per_bucket += sites_mol_per_bucket;
+            if !state.total_sites_mol_per_bucket.is_finite() {
+                return Err(ChemistryError::InvalidMixtureState(
+                    "surface site amount must remain finite".to_string(),
+                ));
+            }
+        } else {
+            let state = CatalystSurfaceState::new(sites_mol_per_bucket)?;
+            self.surfaces.insert(surface_id, state);
+        }
         Ok(())
     }
 
@@ -299,6 +328,7 @@ pub fn react_until_equilibrium_with_context(
                 ticks: tick + 1,
                 reached_equilibrium: true,
                 reaction_results: context.reaction_results.clone(),
+                external_products: context.external_products.clone(),
                 surfaces: context.surfaces.clone(),
                 surface_steps: context.surface_steps.clone(),
             });
@@ -308,6 +338,7 @@ pub fn react_until_equilibrium_with_context(
         ticks: max_ticks,
         reached_equilibrium: false,
         reaction_results: context.reaction_results.clone(),
+        external_products: context.external_products.clone(),
         surfaces: context.surfaces.clone(),
         surface_steps: context.surface_steps.clone(),
     })
@@ -698,6 +729,7 @@ fn apply_reaction_inner(
         moles_per_bucket,
     )?;
     apply_external_reactants(context, reaction, moles_per_bucket)?;
+    apply_external_products(context, reaction, moles_per_bucket);
     apply_surface_steps(context, reaction, moles_per_bucket)?;
     apply_reaction_results(context, reaction, moles_per_bucket);
     mixture.heat(
@@ -947,6 +979,19 @@ fn apply_reaction_results(
     }
 }
 
+fn apply_external_products(
+    context: &mut ReactionContext,
+    reaction: &Reaction,
+    moles_per_bucket: f64,
+) {
+    for product in &reaction.external_products {
+        *context
+            .external_products
+            .entry(product.description.clone())
+            .or_insert(0.0) += product.moles_per_reaction * moles_per_bucket;
+    }
+}
+
 fn add_delta(deltas: &mut Vec<(SubstanceIndex, f64)>, substance: SubstanceIndex, delta: f64) {
     if let Some((_, existing)) = deltas
         .iter_mut()
@@ -1030,6 +1075,19 @@ fn checkpoint_context(context: &ReactionContext, reaction: &Reaction) -> Context
                 )
             })
             .collect(),
+        external_products: reaction
+            .external_products
+            .iter()
+            .map(|external| {
+                (
+                    external.description.clone(),
+                    context
+                        .external_products
+                        .get(&external.description)
+                        .copied(),
+                )
+            })
+            .collect(),
         surfaces: reaction
             .surface_requirements
             .iter()
@@ -1075,6 +1133,16 @@ fn restore_context(context: &mut ReactionContext, checkpoint: ContextCheckpoint)
             }
             None => {
                 context.external_reactants.remove(&description);
+            }
+        }
+    }
+    for (description, previous) in checkpoint.external_products {
+        match previous {
+            Some(value) => {
+                context.external_products.insert(description, value);
+            }
+            None => {
+                context.external_products.remove(&description);
             }
         }
     }

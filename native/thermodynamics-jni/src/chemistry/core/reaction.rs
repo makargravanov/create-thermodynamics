@@ -224,6 +224,13 @@ impl Reaction {
 
     pub fn validate_shape(&self) -> ChemistryResult<()> {
         let reaction_id = self.id.to_string();
+        if self.id.as_str().trim().is_empty() {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id,
+                reason: "reaction id must not be empty".to_string(),
+            });
+        }
+        let reaction_id = self.id.to_string();
         if !self.has_external_context() {
             if self.reactants.is_empty() {
                 return Err(ChemistryError::InvalidReaction {
