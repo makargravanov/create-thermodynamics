@@ -3,14 +3,15 @@ use super::complex::{ComplexGeometry, ComplexLigand, ComplexSpec, LigandExchange
 use super::error::{ChemistryError, ChemistryResult};
 use super::mixture::MixturePhase;
 use super::molecule::{
-    parse_java_structure, parse_legacy_structure, MolecularStructure, MolecularSummary,
+    element_mass, parse_java_structure, parse_legacy_structure, MolecularStructure,
+    MolecularSummary,
 };
 use super::redox::{RedoxEnvironment, RedoxHalfReaction};
 use super::registry::{ChemistryRegistryBuilder, GasSolubilityModel, SolventMiscibility};
 use super::solution::{AcidBaseSpec, EquilibriumSpec};
 use super::substance::{
-    LiquidPhasePreference, SolventRole, Substance, SubstanceId, SubstancePhaseProperties,
-    SubstanceTagId,
+    LiquidPhasePreference, MaterialFormulaUnit, SolventRole, Substance, SubstanceId,
+    SubstancePhaseProperties, SubstanceRepresentation, SubstanceTagId,
 };
 
 const DEFAULT_DENSITY_GRAMS_PER_BUCKET: f64 = 1000.0;
@@ -35,6 +36,46 @@ struct RawSubstance {
     tags: &'static [&'static str],
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RawMetallurgyIon {
+    id: &'static str,
+    element: Option<&'static str>,
+    charge: i32,
+    color_argb: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RawMetallurgyMetal {
+    id: &'static str,
+    element: &'static str,
+    solid_density: f64,
+    melting_point_kelvin: f64,
+    boiling_point_kelvin: f64,
+    heat_capacity: f64,
+    fusion_heat: f64,
+    vaporization_heat: f64,
+    color_argb: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RawMetallurgyMaterial {
+    id: &'static str,
+    representation: RawMetallurgyMaterialRepresentation,
+    formula_units: &'static [(&'static str, u32)],
+    solid_density: f64,
+    melting_point_kelvin: f64,
+    boiling_point_kelvin: f64,
+    heat_capacity: f64,
+    fusion_heat: f64,
+    color_argb: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RawMetallurgyMaterialRepresentation {
+    IonicSolid,
+    Oxide,
+}
+
 pub fn destroy_substances_registry_builder() -> ChemistryResult<ChemistryRegistryBuilder> {
     let mut builder = ChemistryRegistryBuilder::new();
     for tag in DESTROY_TAGS {
@@ -43,7 +84,173 @@ pub fn destroy_substances_registry_builder() -> ChemistryResult<ChemistryRegistr
     for raw in DESTROY_SUBSTANCES {
         builder = builder.substance(raw.to_substance()?);
     }
+    builder = register_metallurgy_substances(builder)?;
     builder = register_phase_tables(builder);
+    Ok(builder)
+}
+
+impl RawMetallurgyIon {
+    fn to_substance(self) -> ChemistryResult<Substance> {
+        let molar_mass = match self.element {
+            Some(element) => element_mass(element)?,
+            None => material_formula_mass(self.id, self.formula_units())?,
+        };
+        let mut substance = Substance::new(
+            SubstanceId::new(format!("destroy:{}", self.id))?,
+            self.charge,
+            molar_mass,
+            DEFAULT_DENSITY_GRAMS_PER_BUCKET,
+            f64::MAX,
+            DEFAULT_MOLAR_HEAT_CAPACITY,
+            DEFAULT_LATENT_HEAT,
+        )
+        .with_phase_properties(SubstancePhaseProperties {
+            preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+            aqueous_solubility_mol_per_bucket: Some(10.0),
+            organic_solubility_mol_per_bucket: Some(0.0),
+            can_precipitate: false,
+            can_form_liquid_phase: false,
+            solvent_role: SolventRole::NotSolvent,
+        })
+        .with_catalog_metadata(None, None, self.color_argb, Vec::new());
+        if let Some(element) = self.element {
+            substance = substance.with_representation(SubstanceRepresentation::Ion {
+                parent_element: Some(element.to_string()),
+            });
+        }
+        Ok(substance)
+    }
+
+    fn formula_units(self) -> &'static [(&'static str, u32)] {
+        match self.id {
+            "carbonate" => &[("carbon", 1), ("oxide_atom", 3)],
+            "silicate" => &[("silicon_atom", 1), ("oxide_atom", 4)],
+            _ => &[],
+        }
+    }
+}
+
+impl RawMetallurgyMetal {
+    fn to_substance(self) -> ChemistryResult<Substance> {
+        Ok(Substance::new(
+            SubstanceId::new(format!("destroy:{}", self.id))?,
+            0,
+            element_mass(self.element)?,
+            self.solid_density,
+            self.boiling_point_kelvin,
+            self.heat_capacity,
+            self.vaporization_heat,
+        )
+        .with_solid_density_grams_per_bucket(self.solid_density)
+        .with_melting_point_kelvin(self.melting_point_kelvin)
+        .with_fusion_heat_j_per_mol(self.fusion_heat)
+        .with_phase_properties(solid_material_phase_properties())
+        .with_representation(SubstanceRepresentation::Metal {
+            element_symbol: self.element.to_string(),
+        })
+        .with_catalog_metadata(None, None, self.color_argb, Vec::new()))
+    }
+}
+
+impl RawMetallurgyMaterial {
+    fn to_substance(self) -> ChemistryResult<Substance> {
+        let formula_units = self
+            .formula_units
+            .iter()
+            .map(|(id, coefficient)| MaterialFormulaUnit::new(SubstanceId::from(*id), *coefficient))
+            .collect::<Vec<_>>();
+        let representation = match self.representation {
+            RawMetallurgyMaterialRepresentation::IonicSolid => {
+                SubstanceRepresentation::IonicSolid {
+                    formula_units: formula_units.clone(),
+                }
+            }
+            RawMetallurgyMaterialRepresentation::Oxide => SubstanceRepresentation::Oxide {
+                formula_units: formula_units.clone(),
+            },
+        };
+        Ok(Substance::new(
+            SubstanceId::new(format!("destroy:{}", self.id))?,
+            0,
+            material_formula_mass(self.id, self.formula_units)?,
+            self.solid_density,
+            self.boiling_point_kelvin,
+            self.heat_capacity,
+            DEFAULT_LATENT_HEAT,
+        )
+        .with_solid_density_grams_per_bucket(self.solid_density)
+        .with_melting_point_kelvin(self.melting_point_kelvin)
+        .with_fusion_heat_j_per_mol(self.fusion_heat)
+        .with_phase_properties(solid_material_phase_properties())
+        .with_representation(representation)
+        .with_catalog_metadata(None, None, self.color_argb, Vec::new()))
+    }
+}
+
+fn material_formula_mass(
+    material_id: &str,
+    formula_units: &[(&'static str, u32)],
+) -> ChemistryResult<f64> {
+    let mut mass = 0.0;
+    for (id, coefficient) in formula_units {
+        let component_mass = match *id {
+            "destroy:aluminum_iii" => element_mass("Al")?,
+            "destroy:magnesium_ion" => element_mass("Mg")?,
+            "destroy:silicon_iv" => element_mass("Si")?,
+            "destroy:carbonate" => element_mass("C")? + element_mass("O")? * 3.0,
+            "destroy:silicate" => element_mass("Si")? + element_mass("O")? * 4.0,
+            "destroy:calcium_ion" => element_mass("Ca")?,
+            "destroy:copper_i" | "destroy:copper_ii" => element_mass("Cu")?,
+            "destroy:iron_ii" | "destroy:iron_iii" => element_mass("Fe")?,
+            "destroy:lead_ii" => element_mass("Pb")?,
+            "destroy:nickel_ion" => element_mass("Ni")?,
+            "destroy:oxide" => element_mass("O")?,
+            "destroy:sulfide" => element_mass("S")?,
+            "destroy:zinc_ion" => element_mass("Zn")?,
+            "carbon" => element_mass("C")?,
+            "oxide_atom" => element_mass("O")?,
+            "silicon_atom" => element_mass("Si")?,
+            _ => {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: format!("destroy:{material_id}"),
+                    reason: format!("unknown metallurgy formula component '{id}'"),
+                });
+            }
+        };
+        mass += component_mass * *coefficient as f64;
+    }
+    if !mass.is_finite() || mass <= 0.0 {
+        return Err(ChemistryError::InvalidSubstance {
+            substance_id: format!("destroy:{material_id}"),
+            reason: "metallurgy formula produced invalid mass".to_string(),
+        });
+    }
+    Ok(mass)
+}
+
+fn solid_material_phase_properties() -> SubstancePhaseProperties {
+    SubstancePhaseProperties {
+        preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+        aqueous_solubility_mol_per_bucket: Some(0.0),
+        organic_solubility_mol_per_bucket: Some(0.0),
+        can_precipitate: true,
+        can_form_liquid_phase: false,
+        solvent_role: SolventRole::NotSolvent,
+    }
+}
+
+fn register_metallurgy_substances(
+    mut builder: ChemistryRegistryBuilder,
+) -> ChemistryResult<ChemistryRegistryBuilder> {
+    for ion in METALLURGY_IONS {
+        builder = builder.substance(ion.to_substance()?);
+    }
+    for metal in METALLURGY_METALS {
+        builder = builder.substance(metal.to_substance()?);
+    }
+    for material in METALLURGY_MATERIALS {
+        builder = builder.substance(material.to_substance()?);
+    }
     Ok(builder)
 }
 
@@ -745,6 +952,434 @@ pub const DESTROY_TAGS: &[&str] = &[
     "destroy:smelly",
     "destroy:smog",
     "destroy:solvent",
+];
+
+const METALLURGY_IONS: &[RawMetallurgyIon] = &[
+    RawMetallurgyIon {
+        id: "aluminum_iii",
+        element: Some("Al"),
+        charge: 3,
+        color_argb: 0x80C7D0D8,
+    },
+    RawMetallurgyIon {
+        id: "magnesium_ion",
+        element: Some("Mg"),
+        charge: 2,
+        color_argb: 0x80D6D6D6,
+    },
+    RawMetallurgyIon {
+        id: "silicon_iv",
+        element: Some("Si"),
+        charge: 4,
+        color_argb: 0x809098A0,
+    },
+    RawMetallurgyIon {
+        id: "carbonate",
+        element: None,
+        charge: -2,
+        color_argb: 0x80D8D0B8,
+    },
+    RawMetallurgyIon {
+        id: "silicate",
+        element: None,
+        charge: -4,
+        color_argb: 0x80B8B8A8,
+    },
+];
+
+const METALLURGY_METALS: &[RawMetallurgyMetal] = &[
+    RawMetallurgyMetal {
+        id: "iron_metal",
+        element: "Fe",
+        solid_density: 7_874.0,
+        melting_point_kelvin: 1811.0,
+        boiling_point_kelvin: 3134.0,
+        heat_capacity: 25.10,
+        fusion_heat: 13_800.0,
+        vaporization_heat: 340_000.0,
+        color_argb: 0xFFB0A8A0,
+    },
+    RawMetallurgyMetal {
+        id: "copper_metal",
+        element: "Cu",
+        solid_density: 8_960.0,
+        melting_point_kelvin: 1357.77,
+        boiling_point_kelvin: 2835.0,
+        heat_capacity: 24.44,
+        fusion_heat: 13_100.0,
+        vaporization_heat: 300_000.0,
+        color_argb: 0xFFC87533,
+    },
+    RawMetallurgyMetal {
+        id: "zinc_metal",
+        element: "Zn",
+        solid_density: 7_140.0,
+        melting_point_kelvin: 692.68,
+        boiling_point_kelvin: 1180.0,
+        heat_capacity: 25.47,
+        fusion_heat: 7_320.0,
+        vaporization_heat: 115_000.0,
+        color_argb: 0xFFBFC4C7,
+    },
+    RawMetallurgyMetal {
+        id: "nickel_metal",
+        element: "Ni",
+        solid_density: 8_908.0,
+        melting_point_kelvin: 1728.0,
+        boiling_point_kelvin: 3186.0,
+        heat_capacity: 26.07,
+        fusion_heat: 17_500.0,
+        vaporization_heat: 378_000.0,
+        color_argb: 0xFFC4BFA8,
+    },
+    RawMetallurgyMetal {
+        id: "lead_metal",
+        element: "Pb",
+        solid_density: 11_340.0,
+        melting_point_kelvin: 600.61,
+        boiling_point_kelvin: 2022.0,
+        heat_capacity: 26.65,
+        fusion_heat: 4_770.0,
+        vaporization_heat: 179_500.0,
+        color_argb: 0xFF77777F,
+    },
+    RawMetallurgyMetal {
+        id: "aluminum_metal",
+        element: "Al",
+        solid_density: 2_700.0,
+        melting_point_kelvin: 933.47,
+        boiling_point_kelvin: 2792.0,
+        heat_capacity: 24.20,
+        fusion_heat: 10_700.0,
+        vaporization_heat: 294_000.0,
+        color_argb: 0xFFD0D4D8,
+    },
+    RawMetallurgyMetal {
+        id: "calcium_metal",
+        element: "Ca",
+        solid_density: 1_550.0,
+        melting_point_kelvin: 1115.0,
+        boiling_point_kelvin: 1757.0,
+        heat_capacity: 25.93,
+        fusion_heat: 8_540.0,
+        vaporization_heat: 155_000.0,
+        color_argb: 0xFFD8D8C8,
+    },
+    RawMetallurgyMetal {
+        id: "magnesium_metal",
+        element: "Mg",
+        solid_density: 1_738.0,
+        melting_point_kelvin: 923.0,
+        boiling_point_kelvin: 1363.0,
+        heat_capacity: 24.87,
+        fusion_heat: 8_480.0,
+        vaporization_heat: 128_000.0,
+        color_argb: 0xFFD6D6D0,
+    },
+];
+
+const METALLURGY_MATERIALS: &[RawMetallurgyMaterial] = &[
+    RawMetallurgyMaterial {
+        id: "iron_ii_oxide",
+        representation: RawMetallurgyMaterialRepresentation::Oxide,
+        formula_units: &[("destroy:iron_ii", 1), ("destroy:oxide", 1)],
+        solid_density: 5_745.0,
+        melting_point_kelvin: 1650.0,
+        boiling_point_kelvin: 3_000.0,
+        heat_capacity: 49.5,
+        fusion_heat: 30_000.0,
+        color_argb: 0xFF2E2E28,
+    },
+    RawMetallurgyMaterial {
+        id: "iron_iii_oxide",
+        representation: RawMetallurgyMaterialRepresentation::Oxide,
+        formula_units: &[("destroy:iron_iii", 2), ("destroy:oxide", 3)],
+        solid_density: 5_260.0,
+        melting_point_kelvin: 1838.0,
+        boiling_point_kelvin: 3_000.0,
+        heat_capacity: 103.9,
+        fusion_heat: 70_000.0,
+        color_argb: 0xFF8E3329,
+    },
+    RawMetallurgyMaterial {
+        id: "magnetite",
+        representation: RawMetallurgyMaterialRepresentation::Oxide,
+        formula_units: &[
+            ("destroy:iron_ii", 1),
+            ("destroy:iron_iii", 2),
+            ("destroy:oxide", 4),
+        ],
+        solid_density: 5_180.0,
+        melting_point_kelvin: 1870.0,
+        boiling_point_kelvin: 3_000.0,
+        heat_capacity: 150.0,
+        fusion_heat: 95_000.0,
+        color_argb: 0xFF1C1C1F,
+    },
+    RawMetallurgyMaterial {
+        id: "copper_i_oxide",
+        representation: RawMetallurgyMaterialRepresentation::Oxide,
+        formula_units: &[("destroy:copper_i", 2), ("destroy:oxide", 1)],
+        solid_density: 6_000.0,
+        melting_point_kelvin: 1508.0,
+        boiling_point_kelvin: 2_070.0,
+        heat_capacity: 64.0,
+        fusion_heat: 32_000.0,
+        color_argb: 0xFFB23B23,
+    },
+    RawMetallurgyMaterial {
+        id: "copper_ii_oxide",
+        representation: RawMetallurgyMaterialRepresentation::Oxide,
+        formula_units: &[("destroy:copper_ii", 1), ("destroy:oxide", 1)],
+        solid_density: 6_315.0,
+        melting_point_kelvin: 1599.0,
+        boiling_point_kelvin: 2_000.0,
+        heat_capacity: 42.3,
+        fusion_heat: 22_000.0,
+        color_argb: 0xFF171717,
+    },
+    RawMetallurgyMaterial {
+        id: "zinc_oxide",
+        representation: RawMetallurgyMaterialRepresentation::Oxide,
+        formula_units: &[("destroy:zinc_ion", 1), ("destroy:oxide", 1)],
+        solid_density: 5_606.0,
+        melting_point_kelvin: 2248.0,
+        boiling_point_kelvin: 2_500.0,
+        heat_capacity: 40.3,
+        fusion_heat: 45_000.0,
+        color_argb: 0xFFF0E8D8,
+    },
+    RawMetallurgyMaterial {
+        id: "nickel_ii_oxide",
+        representation: RawMetallurgyMaterialRepresentation::Oxide,
+        formula_units: &[("destroy:nickel_ion", 1), ("destroy:oxide", 1)],
+        solid_density: 6_670.0,
+        melting_point_kelvin: 2220.0,
+        boiling_point_kelvin: 3_000.0,
+        heat_capacity: 44.0,
+        fusion_heat: 44_000.0,
+        color_argb: 0xFF48543A,
+    },
+    RawMetallurgyMaterial {
+        id: "lead_ii_oxide",
+        representation: RawMetallurgyMaterialRepresentation::Oxide,
+        formula_units: &[("destroy:lead_ii", 1), ("destroy:oxide", 1)],
+        solid_density: 9_530.0,
+        melting_point_kelvin: 1_161.0,
+        boiling_point_kelvin: 1_750.0,
+        heat_capacity: 45.8,
+        fusion_heat: 19_000.0,
+        color_argb: 0xFFC28A2C,
+    },
+    RawMetallurgyMaterial {
+        id: "aluminum_oxide",
+        representation: RawMetallurgyMaterialRepresentation::Oxide,
+        formula_units: &[("destroy:aluminum_iii", 2), ("destroy:oxide", 3)],
+        solid_density: 3_950.0,
+        melting_point_kelvin: 2_345.0,
+        boiling_point_kelvin: 3_250.0,
+        heat_capacity: 79.0,
+        fusion_heat: 109_000.0,
+        color_argb: 0xFFE6E3DC,
+    },
+    RawMetallurgyMaterial {
+        id: "calcium_oxide",
+        representation: RawMetallurgyMaterialRepresentation::Oxide,
+        formula_units: &[("destroy:calcium_ion", 1), ("destroy:oxide", 1)],
+        solid_density: 3_340.0,
+        melting_point_kelvin: 2_886.0,
+        boiling_point_kelvin: 3_120.0,
+        heat_capacity: 42.0,
+        fusion_heat: 63_000.0,
+        color_argb: 0xFFE8E3D5,
+    },
+    RawMetallurgyMaterial {
+        id: "magnesium_oxide",
+        representation: RawMetallurgyMaterialRepresentation::Oxide,
+        formula_units: &[("destroy:magnesium_ion", 1), ("destroy:oxide", 1)],
+        solid_density: 3_580.0,
+        melting_point_kelvin: 3_125.0,
+        boiling_point_kelvin: 3_873.0,
+        heat_capacity: 37.0,
+        fusion_heat: 77_000.0,
+        color_argb: 0xFFECEAE0,
+    },
+    RawMetallurgyMaterial {
+        id: "silica",
+        representation: RawMetallurgyMaterialRepresentation::Oxide,
+        formula_units: &[("destroy:silicon_iv", 1), ("destroy:oxide", 2)],
+        solid_density: 2_650.0,
+        melting_point_kelvin: 1_986.0,
+        boiling_point_kelvin: 3_223.0,
+        heat_capacity: 44.0,
+        fusion_heat: 9_000.0,
+        color_argb: 0xFFE5E1D2,
+    },
+    RawMetallurgyMaterial {
+        id: "iron_ii_sulfide",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:iron_ii", 1), ("destroy:sulfide", 1)],
+        solid_density: 4_840.0,
+        melting_point_kelvin: 1_461.0,
+        boiling_point_kelvin: 2_500.0,
+        heat_capacity: 50.0,
+        fusion_heat: 30_000.0,
+        color_argb: 0xFF222220,
+    },
+    RawMetallurgyMaterial {
+        id: "copper_i_sulfide",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:copper_i", 2), ("destroy:sulfide", 1)],
+        solid_density: 5_600.0,
+        melting_point_kelvin: 1_403.0,
+        boiling_point_kelvin: 2_200.0,
+        heat_capacity: 76.0,
+        fusion_heat: 35_000.0,
+        color_argb: 0xFF2B2A24,
+    },
+    RawMetallurgyMaterial {
+        id: "copper_ii_sulfide",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:copper_ii", 1), ("destroy:sulfide", 1)],
+        solid_density: 4_760.0,
+        melting_point_kelvin: 1_473.0,
+        boiling_point_kelvin: 2_200.0,
+        heat_capacity: 49.0,
+        fusion_heat: 27_000.0,
+        color_argb: 0xFF151512,
+    },
+    RawMetallurgyMaterial {
+        id: "zinc_sulfide",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:zinc_ion", 1), ("destroy:sulfide", 1)],
+        solid_density: 4_090.0,
+        melting_point_kelvin: 2_123.0,
+        boiling_point_kelvin: 2_800.0,
+        heat_capacity: 48.0,
+        fusion_heat: 42_000.0,
+        color_argb: 0xFFE5DDB8,
+    },
+    RawMetallurgyMaterial {
+        id: "lead_ii_sulfide",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:lead_ii", 1), ("destroy:sulfide", 1)],
+        solid_density: 7_600.0,
+        melting_point_kelvin: 1_387.0,
+        boiling_point_kelvin: 2_500.0,
+        heat_capacity: 49.5,
+        fusion_heat: 23_000.0,
+        color_argb: 0xFF202020,
+    },
+    RawMetallurgyMaterial {
+        id: "nickel_ii_sulfide",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:nickel_ion", 1), ("destroy:sulfide", 1)],
+        solid_density: 5_300.0,
+        melting_point_kelvin: 1_573.0,
+        boiling_point_kelvin: 2_500.0,
+        heat_capacity: 50.0,
+        fusion_heat: 33_000.0,
+        color_argb: 0xFF2F3023,
+    },
+    RawMetallurgyMaterial {
+        id: "calcium_carbonate",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:calcium_ion", 1), ("destroy:carbonate", 1)],
+        solid_density: 2_710.0,
+        melting_point_kelvin: 1_612.0,
+        boiling_point_kelvin: 2_200.0,
+        heat_capacity: 81.9,
+        fusion_heat: 37_000.0,
+        color_argb: 0xFFE5E1D2,
+    },
+    RawMetallurgyMaterial {
+        id: "magnesium_carbonate",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:magnesium_ion", 1), ("destroy:carbonate", 1)],
+        solid_density: 2_960.0,
+        melting_point_kelvin: 813.0,
+        boiling_point_kelvin: 1_600.0,
+        heat_capacity: 75.0,
+        fusion_heat: 30_000.0,
+        color_argb: 0xFFE4E0D8,
+    },
+    RawMetallurgyMaterial {
+        id: "zinc_carbonate",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:zinc_ion", 1), ("destroy:carbonate", 1)],
+        solid_density: 4_440.0,
+        melting_point_kelvin: 573.0,
+        boiling_point_kelvin: 1_600.0,
+        heat_capacity: 82.0,
+        fusion_heat: 28_000.0,
+        color_argb: 0xFFE5E0C8,
+    },
+    RawMetallurgyMaterial {
+        id: "iron_ii_carbonate",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:iron_ii", 1), ("destroy:carbonate", 1)],
+        solid_density: 3_960.0,
+        melting_point_kelvin: 763.0,
+        boiling_point_kelvin: 1_600.0,
+        heat_capacity: 82.0,
+        fusion_heat: 28_000.0,
+        color_argb: 0xFFB8B08A,
+    },
+    RawMetallurgyMaterial {
+        id: "copper_ii_carbonate",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:copper_ii", 1), ("destroy:carbonate", 1)],
+        solid_density: 4_000.0,
+        melting_point_kelvin: 473.0,
+        boiling_point_kelvin: 1_600.0,
+        heat_capacity: 85.0,
+        fusion_heat: 27_000.0,
+        color_argb: 0xFF4F9C78,
+    },
+    RawMetallurgyMaterial {
+        id: "lead_ii_carbonate",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:lead_ii", 1), ("destroy:carbonate", 1)],
+        solid_density: 6_600.0,
+        melting_point_kelvin: 673.0,
+        boiling_point_kelvin: 1_600.0,
+        heat_capacity: 81.0,
+        fusion_heat: 26_000.0,
+        color_argb: 0xFFE6E0C4,
+    },
+    RawMetallurgyMaterial {
+        id: "calcium_silicate",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:calcium_ion", 2), ("destroy:silicate", 1)],
+        solid_density: 2_900.0,
+        melting_point_kelvin: 1_817.0,
+        boiling_point_kelvin: 2_800.0,
+        heat_capacity: 120.0,
+        fusion_heat: 70_000.0,
+        color_argb: 0xFFD8D5C0,
+    },
+    RawMetallurgyMaterial {
+        id: "magnesium_silicate",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:magnesium_ion", 2), ("destroy:silicate", 1)],
+        solid_density: 3_200.0,
+        melting_point_kelvin: 1_850.0,
+        boiling_point_kelvin: 2_800.0,
+        heat_capacity: 120.0,
+        fusion_heat: 75_000.0,
+        color_argb: 0xFFD8D8C8,
+    },
+    RawMetallurgyMaterial {
+        id: "iron_ii_silicate",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:iron_ii", 2), ("destroy:silicate", 1)],
+        solid_density: 4_300.0,
+        melting_point_kelvin: 1_478.0,
+        boiling_point_kelvin: 2_800.0,
+        heat_capacity: 130.0,
+        fusion_heat: 70_000.0,
+        color_argb: 0xFF5D5844,
+    },
 ];
 
 const DESTROY_SUBSTANCES: &[RawSubstance] = &[
@@ -2940,7 +3575,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(DESTROY_SUBSTANCE_COUNT, 165);
-        assert_eq!(registry.substance_count(), 171);
+        assert_eq!(registry.substance_count(), 211);
     }
 
     #[test]
@@ -2982,6 +3617,55 @@ mod tests {
         assert_eq!(argon.charge, 0);
         assert!((argon.molar_mass_grams - 39.95).abs() < 0.001);
         assert!((argon.boiling_point_kelvin - 87.302).abs() < 0.001);
+    }
+
+    #[test]
+    fn metallurgy_substances_have_material_representations() {
+        let registry = destroy_substances_registry_builder()
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let iron = registry.substance(&"destroy:iron_metal".into()).unwrap();
+        assert!(matches!(
+            &iron.representation,
+            SubstanceRepresentation::Metal { element_symbol } if element_symbol == "Fe"
+        ));
+        assert_eq!(iron.charge, 0);
+        assert!(iron.phase_properties.can_precipitate);
+
+        let hematite = registry
+            .substance(&"destroy:iron_iii_oxide".into())
+            .unwrap();
+        assert!(matches!(
+            &hematite.representation,
+            SubstanceRepresentation::Oxide { formula_units }
+                if formula_units
+                    == &vec![
+                        MaterialFormulaUnit::new("destroy:iron_iii", 2),
+                        MaterialFormulaUnit::new("destroy:oxide", 3),
+                    ]
+        ));
+        assert!(
+            (hematite.molar_mass_grams
+                - (element_mass("Fe").unwrap() * 2.0 + element_mass("O").unwrap() * 3.0))
+                .abs()
+                < 1.0e-9
+        );
+
+        let calcium_silicate = registry
+            .substance(&"destroy:calcium_silicate".into())
+            .unwrap();
+        assert!(matches!(
+            &calcium_silicate.representation,
+            SubstanceRepresentation::IonicSolid { formula_units }
+                if formula_units
+                    == &vec![
+                        MaterialFormulaUnit::new("destroy:calcium_ion", 2),
+                        MaterialFormulaUnit::new("destroy:silicate", 1),
+                    ]
+        ));
+        assert_eq!(calcium_silicate.charge, 0);
     }
 
     #[test]
