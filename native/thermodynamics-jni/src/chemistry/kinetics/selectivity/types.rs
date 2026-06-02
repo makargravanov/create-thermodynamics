@@ -704,6 +704,7 @@ fn dominant_solvent_type(registry: &ChemistryRegistry, mixture: &Mixture) -> Opt
                     nonpolar_score += amount;
                 }
             }
+            LiquidPhasePreference::MoltenMetal | LiquidPhasePreference::MoltenSlag => {}
         }
     }
     if polar_score > nonpolar_score {

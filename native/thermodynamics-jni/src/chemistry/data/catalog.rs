@@ -144,7 +144,9 @@ impl RawMetallurgyMetal {
         .with_solid_density_grams_per_bucket(self.solid_density)
         .with_melting_point_kelvin(self.melting_point_kelvin)
         .with_fusion_heat_j_per_mol(self.fusion_heat)
-        .with_phase_properties(solid_material_phase_properties())
+        .with_phase_properties(molten_material_phase_properties(
+            LiquidPhasePreference::MoltenMetal,
+        ))
         .with_representation(SubstanceRepresentation::Metal {
             element_symbol: self.element.to_string(),
         })
@@ -181,7 +183,9 @@ impl RawMetallurgyMaterial {
         .with_solid_density_grams_per_bucket(self.solid_density)
         .with_melting_point_kelvin(self.melting_point_kelvin)
         .with_fusion_heat_j_per_mol(self.fusion_heat)
-        .with_phase_properties(solid_material_phase_properties())
+        .with_phase_properties(molten_material_phase_properties(
+            LiquidPhasePreference::MoltenSlag,
+        ))
         .with_representation(representation)
         .with_catalog_metadata(None, None, self.color_argb, Vec::new()))
     }
@@ -228,13 +232,15 @@ fn material_formula_mass(
     Ok(mass)
 }
 
-fn solid_material_phase_properties() -> SubstancePhaseProperties {
+fn molten_material_phase_properties(
+    preferred_liquid_phase: LiquidPhasePreference,
+) -> SubstancePhaseProperties {
     SubstancePhaseProperties {
-        preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+        preferred_liquid_phase,
         aqueous_solubility_mol_per_bucket: Some(0.0),
         organic_solubility_mol_per_bucket: Some(0.0),
         can_precipitate: true,
-        can_form_liquid_phase: false,
+        can_form_liquid_phase: true,
         solvent_role: SolventRole::NotSolvent,
     }
 }
@@ -3633,6 +3639,11 @@ mod tests {
         ));
         assert_eq!(iron.charge, 0);
         assert!(iron.phase_properties.can_precipitate);
+        assert_eq!(
+            iron.phase_properties.preferred_liquid_phase,
+            LiquidPhasePreference::MoltenMetal
+        );
+        assert!(iron.phase_properties.can_form_liquid_phase);
 
         let hematite = registry
             .substance(&"destroy:iron_iii_oxide".into())
@@ -3652,6 +3663,11 @@ mod tests {
                 .abs()
                 < 1.0e-9
         );
+        assert_eq!(
+            hematite.phase_properties.preferred_liquid_phase,
+            LiquidPhasePreference::MoltenSlag
+        );
+        assert!(hematite.phase_properties.can_form_liquid_phase);
 
         let calcium_silicate = registry
             .substance(&"destroy:calcium_silicate".into())

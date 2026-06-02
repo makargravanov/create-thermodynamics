@@ -253,10 +253,15 @@ impl ComplexSpec {
         let preferred_liquid_phase = match self.phase {
             MixturePhase::Aqueous => LiquidPhasePreference::Aqueous,
             MixturePhase::Organic => LiquidPhasePreference::Organic,
-            MixturePhase::Gas | MixturePhase::Solid => {
+            MixturePhase::MoltenMetal
+            | MixturePhase::MoltenSlag
+            | MixturePhase::Gas
+            | MixturePhase::Solid => {
                 return Err(ChemistryError::InvalidReaction {
                     reaction_id: format!("{}.formation", self.id),
-                    reason: "complex substance must be formed in a liquid phase".to_string(),
+                    reason:
+                        "complex substance must be formed in an aqueous or organic liquid phase"
+                            .to_string(),
                 });
             }
         };
@@ -264,7 +269,10 @@ impl ComplexSpec {
             match self.phase {
                 MixturePhase::Aqueous => (Some(10.0), Some(0.0)),
                 MixturePhase::Organic => (Some(0.0), Some(10.0)),
-                MixturePhase::Gas | MixturePhase::Solid => unreachable!(),
+                MixturePhase::MoltenMetal
+                | MixturePhase::MoltenSlag
+                | MixturePhase::Gas
+                | MixturePhase::Solid => unreachable!(),
             };
 
         Ok(Substance::new(

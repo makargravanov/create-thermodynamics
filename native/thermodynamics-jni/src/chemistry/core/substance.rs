@@ -414,6 +414,8 @@ pub enum SubstanceAggregateState {
 pub enum LiquidPhasePreference {
     Aqueous,
     Organic,
+    MoltenMetal,
+    MoltenSlag,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -503,6 +505,16 @@ impl SubstancePhaseBehavior {
             return Err(ChemistryError::InvalidSubstance {
                 substance_id: substance_id.to_string(),
                 reason: "solvents must be able to form a liquid phase".to_string(),
+            });
+        }
+        if matches!(
+            self.preferred_liquid_phase,
+            LiquidPhasePreference::MoltenMetal | LiquidPhasePreference::MoltenSlag
+        ) && self.solvent_role != SolventRole::NotSolvent
+        {
+            return Err(ChemistryError::InvalidSubstance {
+                substance_id: substance_id.to_string(),
+                reason: "material melts must not be ordinary solvents".to_string(),
             });
         }
         Ok(())

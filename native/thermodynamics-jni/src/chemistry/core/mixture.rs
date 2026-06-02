@@ -18,14 +18,18 @@ pub const DEFAULT_GAS_VOLUME_CUBIC_METERS: f64 = 0.001;
 pub enum MixturePhase {
     Aqueous,
     Organic,
+    MoltenMetal,
+    MoltenSlag,
     Gas,
     Solid,
 }
 
 impl MixturePhase {
-    pub const ALL: [MixturePhase; 4] = [
+    pub const ALL: [MixturePhase; 6] = [
         MixturePhase::Aqueous,
         MixturePhase::Organic,
+        MixturePhase::MoltenMetal,
+        MixturePhase::MoltenSlag,
         MixturePhase::Gas,
         MixturePhase::Solid,
     ];
@@ -107,6 +111,8 @@ struct MixtureComponent {
     substance_id: SubstanceId,
     aqueous_mol_per_bucket: f64,
     organic_mol_per_bucket_by_solvent: BTreeMap<SubstanceIndex, f64>,
+    molten_metal_mol_per_bucket_by_solvent: BTreeMap<SubstanceIndex, f64>,
+    molten_slag_mol_per_bucket_by_solvent: BTreeMap<SubstanceIndex, f64>,
     gas_mol_per_bucket: f64,
     solid_mol_per_bucket: f64,
 }
@@ -115,6 +121,8 @@ struct MixtureComponent {
 struct ComponentPhaseAmounts {
     aqueous_mol_per_bucket: f64,
     organic_mol_per_bucket_by_solvent: BTreeMap<SubstanceIndex, f64>,
+    molten_metal_mol_per_bucket_by_solvent: BTreeMap<SubstanceIndex, f64>,
+    molten_slag_mol_per_bucket_by_solvent: BTreeMap<SubstanceIndex, f64>,
     gas_mol_per_bucket: f64,
     solid_mol_per_bucket: f64,
 }
@@ -1112,8 +1120,7 @@ impl Mixture {
         let properties = registry.substance_properties();
         for component in &self.components {
             let index = component.substance.as_usize();
-            liquid_buckets += component
-                .amount_in_phases(&[MixturePhase::Aqueous, MixturePhase::Organic])
+            liquid_buckets += component.amount_in_phases(&liquid_phases())
                 * properties.molar_mass_grams[index]
                 / properties.liquid_density_grams_per_bucket[index];
             liquid_buckets += component.amount_in_phase(MixturePhase::Solid)
@@ -1167,6 +1174,18 @@ impl Mixture {
                 for (solvent, concentration) in &component.organic_mol_per_bucket_by_solvent {
                     *entry
                         .organic_mol_per_bucket_by_solvent
+                        .entry(*solvent)
+                        .or_insert(0.0) += concentration * amount;
+                }
+                for (solvent, concentration) in &component.molten_metal_mol_per_bucket_by_solvent {
+                    *entry
+                        .molten_metal_mol_per_bucket_by_solvent
+                        .entry(*solvent)
+                        .or_insert(0.0) += concentration * amount;
+                }
+                for (solvent, concentration) in &component.molten_slag_mol_per_bucket_by_solvent {
+                    *entry
+                        .molten_slag_mol_per_bucket_by_solvent
                         .entry(*solvent)
                         .or_insert(0.0) += concentration * amount;
                 }
@@ -1525,6 +1544,8 @@ impl Mixture {
             substance_id,
             aqueous_mol_per_bucket: 0.0,
             organic_mol_per_bucket_by_solvent: BTreeMap::new(),
+            molten_metal_mol_per_bucket_by_solvent: BTreeMap::new(),
+            molten_slag_mol_per_bucket_by_solvent: BTreeMap::new(),
             gas_mol_per_bucket: 0.0,
             solid_mol_per_bucket: 0.0,
         };
@@ -1549,6 +1570,10 @@ impl Mixture {
             substance_id,
             aqueous_mol_per_bucket: phase_amounts.aqueous_mol_per_bucket,
             organic_mol_per_bucket_by_solvent: phase_amounts.organic_mol_per_bucket_by_solvent,
+            molten_metal_mol_per_bucket_by_solvent: phase_amounts
+                .molten_metal_mol_per_bucket_by_solvent,
+            molten_slag_mol_per_bucket_by_solvent: phase_amounts
+                .molten_slag_mol_per_bucket_by_solvent,
             gas_mol_per_bucket: phase_amounts.gas_mol_per_bucket,
             solid_mol_per_bucket: phase_amounts.solid_mol_per_bucket,
         });
@@ -1596,10 +1621,7 @@ impl Mixture {
     }
 
     fn liquid_concentration_of_index(&self, substance: SubstanceIndex) -> f64 {
-        self.concentration_of_index_in_phases(
-            substance,
-            &[MixturePhase::Aqueous, MixturePhase::Organic],
-        )
+        self.concentration_of_index_in_phases(substance, &liquid_phases())
     }
 
     fn move_liquid_to_gas(
@@ -1608,8 +1630,7 @@ impl Mixture {
         amount: f64,
     ) -> ChemistryResult<()> {
         if let Some(position) = self.position_of_substance(substance) {
-            self.components[position]
-                .remove_from_phases(&[MixturePhase::Aqueous, MixturePhase::Organic], amount)?;
+            self.components[position].remove_from_phases(&liquid_phases(), amount)?;
             self.components[position].add_to_phase(MixturePhase::Gas, amount);
         }
         Ok(())
@@ -1622,6 +1643,12 @@ impl Mixture {
             self.components[position].aqueous_mol_per_bucket = 0.0;
             self.components[position]
                 .organic_mol_per_bucket_by_solvent
+                .clear();
+            self.components[position]
+                .molten_metal_mol_per_bucket_by_solvent
+                .clear();
+            self.components[position]
+                .molten_slag_mol_per_bucket_by_solvent
                 .clear();
             self.components[position].add_to_phase(MixturePhase::Gas, amount);
         }
@@ -1680,8 +1707,7 @@ impl Mixture {
         amount: f64,
     ) -> ChemistryResult<()> {
         if let Some(position) = self.position_of_substance(substance) {
-            self.components[position]
-                .remove_from_phases(&[MixturePhase::Aqueous, MixturePhase::Organic], amount)?;
+            self.components[position].remove_from_phases(&liquid_phases(), amount)?;
             self.components[position].add_to_phase(MixturePhase::Solid, amount);
         }
         Ok(())
@@ -1694,6 +1720,12 @@ impl Mixture {
             self.components[position].aqueous_mol_per_bucket = 0.0;
             self.components[position]
                 .organic_mol_per_bucket_by_solvent
+                .clear();
+            self.components[position]
+                .molten_metal_mol_per_bucket_by_solvent
+                .clear();
+            self.components[position]
+                .molten_slag_mol_per_bucket_by_solvent
                 .clear();
             self.components[position].add_to_phase(MixturePhase::Solid, amount);
         }
@@ -1742,6 +1774,24 @@ impl Mixture {
                     )));
                 }
             }
+            for solvent in component.molten_metal_mol_per_bucket_by_solvent.keys() {
+                if solvent.as_usize() >= registry.substance_count() {
+                    return Err(ChemistryError::InvalidMixtureState(format!(
+                        "mixture component '{}' uses molten metal phase index {} outside registry",
+                        component.substance_id,
+                        solvent.as_usize()
+                    )));
+                }
+            }
+            for solvent in component.molten_slag_mol_per_bucket_by_solvent.keys() {
+                if solvent.as_usize() >= registry.substance_count() {
+                    return Err(ChemistryError::InvalidMixtureState(format!(
+                        "mixture component '{}' uses molten slag phase index {} outside registry",
+                        component.substance_id,
+                        solvent.as_usize()
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -1759,12 +1809,14 @@ impl Mixture {
         let Some(position) = self.position_of_substance(substance) else {
             return Ok(());
         };
-        if phase == MixturePhase::Organic {
+        if phase_uses_concrete_liquid_anchor(phase) {
             let substance_id = registry.substance_by_index(substance)?.id.clone();
-            let solvent = self.organic_solvent_for_substance(registry, substance)?.ok_or_else(|| {
+            let solvent = self
+                .liquid_anchor_for_substance(registry, substance, phase)?
+                .ok_or_else(|| {
                 ChemistryError::InvalidMixtureState(format!(
-                    "substance '{}' cannot enter an organic phase because no concrete organic solvent is available",
-                    substance_id
+                    "substance '{}' cannot enter phase {:?} because no concrete liquid phase is available",
+                    substance_id, phase
                 ))
             })?;
             self.components[position].add_to_phase_for_solvent(phase, solvent, amount);
@@ -1774,39 +1826,40 @@ impl Mixture {
         Ok(())
     }
 
-    fn organic_solvent_for_substance(
+    fn liquid_anchor_for_substance(
         &self,
         registry: &ChemistryRegistry,
         substance: SubstanceIndex,
+        phase: MixturePhase,
     ) -> ChemistryResult<Option<SubstanceIndex>> {
-        if registry
-            .substance_by_index(substance)?
-            .phase_properties
-            .solvent_role
-            != SolventRole::NotSolvent
+        let substance_data = registry.substance_by_index(substance)?;
+        if substance_can_anchor_liquid_phase(substance_data)
+            && preferred_phase(substance_data.phase_properties.preferred_liquid_phase) == phase
         {
             Ok(Some(substance))
         } else {
-            self.first_available_organic_solvent(registry, &self.solvent_clusters(registry)?)
+            self.first_available_liquid_anchor(registry, phase, &self.solvent_clusters(registry)?)
         }
     }
 
-    fn first_available_organic_solvent(
+    fn first_available_liquid_anchor(
         &self,
         registry: &ChemistryRegistry,
+        phase: MixturePhase,
         solvent_clusters: &[BTreeSet<SubstanceIndex>],
     ) -> ChemistryResult<Option<SubstanceIndex>> {
         for cluster in solvent_clusters {
-            if let Some(solvent) = cluster.iter().next().copied() {
-                return Ok(Some(solvent));
+            for solvent in cluster {
+                let substance = registry.substance_by_index(*solvent)?;
+                if preferred_phase(substance.phase_properties.preferred_liquid_phase) == phase {
+                    return Ok(Some(*solvent));
+                }
             }
         }
         for component in &self.components {
-            if registry
-                .substance_by_index(component.substance)?
-                .phase_properties
-                .solvent_role
-                != SolventRole::NotSolvent
+            let substance = registry.substance_by_index(component.substance)?;
+            if substance_can_anchor_liquid_phase(substance)
+                && preferred_phase(substance.phase_properties.preferred_liquid_phase) == phase
                 && component.total_concentration() > TRACE_CONCENTRATION_MOL_PER_BUCKET
             {
                 return Ok(Some(component.substance));
@@ -1857,7 +1910,7 @@ impl Mixture {
             .iter()
             .filter_map(|component| {
                 let substance = registry.substance_by_index(component.substance).ok()?;
-                (substance_is_solvent(substance)
+                (substance_can_anchor_liquid_phase(substance)
                     && component.total_concentration() > TRACE_CONCENTRATION_MOL_PER_BUCKET
                     && (component.condensed_concentration() > TRACE_CONCENTRATION_MOL_PER_BUCKET
                         || substance
@@ -1921,14 +1974,20 @@ impl MixtureComponent {
     fn total_concentration(&self) -> f64 {
         self.aqueous_mol_per_bucket
             + self.organic_mol_per_bucket_by_solvent.values().sum::<f64>()
+            + self
+                .molten_metal_mol_per_bucket_by_solvent
+                .values()
+                .sum::<f64>()
+            + self
+                .molten_slag_mol_per_bucket_by_solvent
+                .values()
+                .sum::<f64>()
             + self.gas_mol_per_bucket
             + self.solid_mol_per_bucket
     }
 
     fn condensed_concentration(&self) -> f64 {
-        self.amount_in_phase(MixturePhase::Aqueous)
-            + self.amount_in_phase(MixturePhase::Organic)
-            + self.amount_in_phase(MixturePhase::Solid)
+        self.amount_in_phases(&liquid_phases()) + self.amount_in_phase(MixturePhase::Solid)
     }
 
     fn gaseous_fraction(&self) -> f64 {
@@ -1944,6 +2003,8 @@ impl MixtureComponent {
         match phase {
             MixturePhase::Aqueous => self.aqueous_mol_per_bucket,
             MixturePhase::Organic => self.organic_mol_per_bucket_by_solvent.values().sum(),
+            MixturePhase::MoltenMetal => self.molten_metal_mol_per_bucket_by_solvent.values().sum(),
+            MixturePhase::MoltenSlag => self.molten_slag_mol_per_bucket_by_solvent.values().sum(),
             MixturePhase::Gas => self.gas_mol_per_bucket,
             MixturePhase::Solid => self.solid_mol_per_bucket,
         }
@@ -1960,6 +2021,16 @@ impl MixtureComponent {
         match phase.coarse_phase {
             MixturePhase::Aqueous => self.aqueous_mol_per_bucket,
             MixturePhase::Organic => self.amount_in_organic_solvent(phase.representative_solvent),
+            MixturePhase::MoltenMetal => self
+                .molten_metal_mol_per_bucket_by_solvent
+                .get(&phase.representative_solvent)
+                .copied()
+                .unwrap_or(0.0),
+            MixturePhase::MoltenSlag => self
+                .molten_slag_mol_per_bucket_by_solvent
+                .get(&phase.representative_solvent)
+                .copied()
+                .unwrap_or(0.0),
             MixturePhase::Gas | MixturePhase::Solid => 0.0,
         }
     }
@@ -1971,6 +2042,12 @@ impl MixtureComponent {
             self.solid_mol_per_bucket,
         ];
         amounts.extend(self.organic_mol_per_bucket_by_solvent.values().copied());
+        amounts.extend(
+            self.molten_metal_mol_per_bucket_by_solvent
+                .values()
+                .copied(),
+        );
+        amounts.extend(self.molten_slag_mol_per_bucket_by_solvent.values().copied());
         amounts
     }
 
@@ -1985,6 +2062,12 @@ impl MixtureComponent {
         match phase {
             MixturePhase::Aqueous => self.aqueous_mol_per_bucket += amount,
             MixturePhase::Organic => self.add_to_phase_for_solvent(phase, self.substance, amount),
+            MixturePhase::MoltenMetal => {
+                self.add_to_phase_for_solvent(phase, self.substance, amount)
+            }
+            MixturePhase::MoltenSlag => {
+                self.add_to_phase_for_solvent(phase, self.substance, amount)
+            }
             MixturePhase::Gas => self.gas_mol_per_bucket += amount,
             MixturePhase::Solid => self.solid_mol_per_bucket += amount,
         }
@@ -1996,19 +2079,34 @@ impl MixtureComponent {
         solvent: SubstanceIndex,
         amount: f64,
     ) {
-        if phase == MixturePhase::Organic {
-            *self
-                .organic_mol_per_bucket_by_solvent
-                .entry(solvent)
-                .or_insert(0.0) += amount;
-        } else {
-            self.add_to_phase(phase, amount);
+        match phase {
+            MixturePhase::Organic => {
+                *self
+                    .organic_mol_per_bucket_by_solvent
+                    .entry(solvent)
+                    .or_insert(0.0) += amount;
+            }
+            MixturePhase::MoltenMetal => {
+                *self
+                    .molten_metal_mol_per_bucket_by_solvent
+                    .entry(solvent)
+                    .or_insert(0.0) += amount;
+            }
+            MixturePhase::MoltenSlag => {
+                *self
+                    .molten_slag_mol_per_bucket_by_solvent
+                    .entry(solvent)
+                    .or_insert(0.0) += amount;
+            }
+            _ => self.add_to_phase(phase, amount),
         }
     }
 
     fn clear_phase_amounts(&mut self) {
         self.aqueous_mol_per_bucket = 0.0;
         self.organic_mol_per_bucket_by_solvent.clear();
+        self.molten_metal_mol_per_bucket_by_solvent.clear();
+        self.molten_slag_mol_per_bucket_by_solvent.clear();
         self.gas_mol_per_bucket = 0.0;
         self.solid_mol_per_bucket = 0.0;
     }
@@ -2016,6 +2114,10 @@ impl MixtureComponent {
     fn set_phase_amounts(&mut self, phase_amounts: ComponentPhaseAmounts) {
         self.aqueous_mol_per_bucket = phase_amounts.aqueous_mol_per_bucket;
         self.organic_mol_per_bucket_by_solvent = phase_amounts.organic_mol_per_bucket_by_solvent;
+        self.molten_metal_mol_per_bucket_by_solvent =
+            phase_amounts.molten_metal_mol_per_bucket_by_solvent;
+        self.molten_slag_mol_per_bucket_by_solvent =
+            phase_amounts.molten_slag_mol_per_bucket_by_solvent;
         self.gas_mol_per_bucket = phase_amounts.gas_mol_per_bucket;
         self.solid_mol_per_bucket = phase_amounts.solid_mol_per_bucket;
     }
@@ -2074,6 +2176,14 @@ impl MixtureComponent {
                 self.organic_mol_per_bucket_by_solvent
                     .retain(|_, value| *value > TRACE_CONCENTRATION_MOL_PER_BUCKET);
             }
+            MixturePhase::MoltenMetal => remove_from_concrete_liquid_map(
+                &mut self.molten_metal_mol_per_bucket_by_solvent,
+                amount,
+            ),
+            MixturePhase::MoltenSlag => remove_from_concrete_liquid_map(
+                &mut self.molten_slag_mol_per_bucket_by_solvent,
+                amount,
+            ),
             MixturePhase::Gas => self.gas_mol_per_bucket -= amount,
             MixturePhase::Solid => self.solid_mol_per_bucket -= amount,
         }
@@ -2084,7 +2194,25 @@ fn preferred_phase(preference: LiquidPhasePreference) -> MixturePhase {
     match preference {
         LiquidPhasePreference::Aqueous => MixturePhase::Aqueous,
         LiquidPhasePreference::Organic => MixturePhase::Organic,
+        LiquidPhasePreference::MoltenMetal => MixturePhase::MoltenMetal,
+        LiquidPhasePreference::MoltenSlag => MixturePhase::MoltenSlag,
     }
+}
+
+fn liquid_phases() -> [MixturePhase; 4] {
+    [
+        MixturePhase::Aqueous,
+        MixturePhase::Organic,
+        MixturePhase::MoltenMetal,
+        MixturePhase::MoltenSlag,
+    ]
+}
+
+fn phase_uses_concrete_liquid_anchor(phase: MixturePhase) -> bool {
+    matches!(
+        phase,
+        MixturePhase::Organic | MixturePhase::MoltenMetal | MixturePhase::MoltenSlag
+    )
 }
 
 fn initial_phase_for_substance(
@@ -2105,6 +2233,18 @@ fn substance_is_solvent(substance: &Substance) -> bool {
         && substance.phase_properties.can_form_liquid_phase
 }
 
+fn substance_can_anchor_liquid_phase(substance: &Substance) -> bool {
+    match substance.phase_properties.preferred_liquid_phase {
+        LiquidPhasePreference::Aqueous | LiquidPhasePreference::Organic => {
+            substance_is_solvent(substance)
+        }
+        LiquidPhasePreference::MoltenMetal | LiquidPhasePreference::MoltenSlag => {
+            substance.phase_properties.can_form_liquid_phase
+                && substance.phase_properties.solvent_role == SolventRole::NotSolvent
+        }
+    }
+}
+
 fn classify_liquid_phase(
     registry: &ChemistryRegistry,
     solvent_amounts: &BTreeMap<SubstanceIndex, f64>,
@@ -2116,6 +2256,30 @@ fn classify_liquid_phase(
         return Ok(preferred_phase(
             representative.phase_properties.preferred_liquid_phase,
         ));
+    }
+    let mut has_molten_metal = false;
+    let mut has_molten_slag = false;
+    for solvent in solvent_amounts.keys() {
+        match registry
+            .substance_by_index(*solvent)?
+            .phase_properties
+            .preferred_liquid_phase
+        {
+            LiquidPhasePreference::MoltenMetal => has_molten_metal = true,
+            LiquidPhasePreference::MoltenSlag => has_molten_slag = true,
+            LiquidPhasePreference::Aqueous | LiquidPhasePreference::Organic => {}
+        }
+    }
+    if has_molten_metal && has_molten_slag {
+        return Err(ChemistryError::InvalidMixtureState(
+            "one liquid phase cannot be both molten metal and molten slag".to_string(),
+        ));
+    }
+    if has_molten_metal {
+        return Ok(MixturePhase::MoltenMetal);
+    }
+    if has_molten_slag {
+        return Ok(MixturePhase::MoltenSlag);
     }
     let water: SubstanceId = "destroy:water".into();
     let water_fraction = registry
@@ -2175,7 +2339,7 @@ fn mixed_phase_solubility_limit(
     if phase
         .solvents
         .contains(&registry.substance_index(&substance.id)?)
-        && substance_is_solvent(substance)
+        && substance_can_anchor_liquid_phase(substance)
     {
         return None;
     }
@@ -2236,7 +2400,7 @@ fn solubility_limit_in_solvent(
         return Some(0.0);
     }
     let solvent_id = &registry.substance_by_index(solvent).ok()?.id;
-    if solvent_id == &substance.id && substance_is_solvent(substance) {
+    if solvent_id == &substance.id && substance_can_anchor_liquid_phase(substance) {
         return None;
     }
     if solvent_id.as_str() == "destroy:water" {
@@ -2415,6 +2579,16 @@ fn fill_liquid_phase(
                     .copied()
             })
             .unwrap_or(0.0),
+        MixturePhase::MoltenMetal => target
+            .molten_metal_mol_per_bucket_by_solvent
+            .get(&phase.representative_solvent)
+            .copied()
+            .unwrap_or(0.0),
+        MixturePhase::MoltenSlag => target
+            .molten_slag_mol_per_bucket_by_solvent
+            .get(&phase.representative_solvent)
+            .copied()
+            .unwrap_or(0.0),
         MixturePhase::Gas | MixturePhase::Solid => 0.0,
     };
     let capacity = limit
@@ -2426,6 +2600,18 @@ fn fill_liquid_phase(
         MixturePhase::Organic => {
             *target
                 .organic_mol_per_bucket_by_solvent
+                .entry(phase.representative_solvent)
+                .or_insert(0.0) += moved;
+        }
+        MixturePhase::MoltenMetal => {
+            *target
+                .molten_metal_mol_per_bucket_by_solvent
+                .entry(phase.representative_solvent)
+                .or_insert(0.0) += moved;
+        }
+        MixturePhase::MoltenSlag => {
+            *target
+                .molten_slag_mol_per_bucket_by_solvent
                 .entry(phase.representative_solvent)
                 .or_insert(0.0) += moved;
         }
@@ -2444,7 +2630,38 @@ fn normalize_phase_amounts(
     for concentration in phase_amounts.organic_mol_per_bucket_by_solvent.values_mut() {
         *concentration /= total_amount;
     }
+    for concentration in phase_amounts
+        .molten_metal_mol_per_bucket_by_solvent
+        .values_mut()
+    {
+        *concentration /= total_amount;
+    }
+    for concentration in phase_amounts
+        .molten_slag_mol_per_bucket_by_solvent
+        .values_mut()
+    {
+        *concentration /= total_amount;
+    }
     phase_amounts
+}
+
+fn remove_from_concrete_liquid_map(
+    amounts_by_anchor: &mut BTreeMap<SubstanceIndex, f64>,
+    mut amount: f64,
+) {
+    let anchors = amounts_by_anchor.keys().copied().collect::<Vec<_>>();
+    for anchor in anchors {
+        if amount <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            break;
+        }
+        let Some(current) = amounts_by_anchor.get_mut(&anchor) else {
+            continue;
+        };
+        let removed = (*current).min(amount);
+        *current -= removed;
+        amount -= removed;
+    }
+    amounts_by_anchor.retain(|_, value| *value > TRACE_CONCENTRATION_MOL_PER_BUCKET);
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -2678,6 +2895,8 @@ mod tests {
             substance_id: water,
             aqueous_mol_per_bucket: 1.0,
             organic_mol_per_bucket_by_solvent: BTreeMap::new(),
+            molten_metal_mol_per_bucket_by_solvent: BTreeMap::new(),
+            molten_slag_mol_per_bucket_by_solvent: BTreeMap::new(),
             gas_mol_per_bucket: f64::INFINITY,
             solid_mol_per_bucket: 0.0,
         });
@@ -2873,6 +3092,83 @@ mod tests {
         assert_eq!(mixture.temperature_kelvin(), 300.0);
         assert!((mixture.concentration_in_phase(&wax, MixturePhase::Solid) - 0.5).abs() < 1.0e-9);
         assert!((mixture.concentration_in_phase(&wax, MixturePhase::Organic) - 0.5).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn melted_materials_enter_explicit_metallurgical_phases() {
+        let registry = ChemistryRegistryBuilder::new()
+            .substance(
+                Substance::new(
+                    "destroy:test_iron",
+                    0,
+                    55.845,
+                    787_400.0,
+                    3200.0,
+                    25.0,
+                    350_000.0,
+                )
+                .with_solid_density_grams_per_bucket(787_400.0)
+                .with_melting_point_kelvin(1000.0)
+                .with_fusion_heat_j_per_mol(10.0)
+                .with_phase_properties(SubstancePhaseProperties {
+                    preferred_liquid_phase: LiquidPhasePreference::MoltenMetal,
+                    aqueous_solubility_mol_per_bucket: Some(0.0),
+                    organic_solubility_mol_per_bucket: Some(0.0),
+                    can_precipitate: true,
+                    can_form_liquid_phase: true,
+                    solvent_role: SolventRole::NotSolvent,
+                }),
+            )
+            .substance(
+                Substance::new(
+                    "destroy:test_silica",
+                    0,
+                    60.084,
+                    220_000.0,
+                    3200.0,
+                    45.0,
+                    400_000.0,
+                )
+                .with_solid_density_grams_per_bucket(265_000.0)
+                .with_melting_point_kelvin(1200.0)
+                .with_fusion_heat_j_per_mol(10.0)
+                .with_phase_properties(SubstancePhaseProperties {
+                    preferred_liquid_phase: LiquidPhasePreference::MoltenSlag,
+                    aqueous_solubility_mol_per_bucket: Some(0.0),
+                    organic_solubility_mol_per_bucket: Some(0.0),
+                    can_precipitate: true,
+                    can_form_liquid_phase: true,
+                    solvent_role: SolventRole::NotSolvent,
+                }),
+            )
+            .build()
+            .unwrap();
+
+        let iron: SubstanceId = "destroy:test_iron".into();
+        let silica: SubstanceId = "destroy:test_silica".into();
+        let mut mixture = Mixture::new(1300.0).unwrap();
+        mixture.add_substance(&registry, iron.clone(), 1.0).unwrap();
+        mixture
+            .add_substance(&registry, silica.clone(), 1.0)
+            .unwrap();
+
+        assert_eq!(
+            mixture.concentration_in_phase(&iron, MixturePhase::MoltenMetal),
+            1.0
+        );
+        assert_eq!(
+            mixture.concentration_in_phase(&iron, MixturePhase::Organic),
+            0.0
+        );
+        assert_eq!(
+            mixture.concentration_in_phase(&silica, MixturePhase::MoltenSlag),
+            1.0
+        );
+        assert_eq!(
+            mixture.concentration_in_phase(&silica, MixturePhase::Organic),
+            0.0
+        );
+        assert_eq!(mixture.liquid_phase_count(&registry).unwrap(), 2);
     }
 
     #[test]

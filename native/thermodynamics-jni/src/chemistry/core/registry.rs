@@ -1310,7 +1310,10 @@ fn build_complex_specs(
                         .phase_properties
                         .organic_solubility_mol_per_bucket
                 }
-                MixturePhase::Gas | MixturePhase::Solid => None,
+                MixturePhase::MoltenMetal
+                | MixturePhase::MoltenSlag
+                | MixturePhase::Gas
+                | MixturePhase::Solid => None,
             };
             if ligand_substance.phase_properties.can_precipitate && ligand_solubility == Some(0.0) {
                 return Err(ChemistryError::InvalidReaction {
