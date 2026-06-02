@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::collections::VecDeque;
 
 use super::complex::{ComplexGeometry, ComplexLigand, ComplexSpec, LigandExchangeLability};
@@ -101,6 +101,7 @@ enum OrganicGeneratorKind {
     BocDeprotection,
     AmineCbzProtection,
     CbzDeprotection,
+    OrganicCombustion,
 }
 
 impl OrganicGeneratorKind {
@@ -172,6 +173,7 @@ impl OrganicGeneratorKind {
             OrganicGeneratorKind::BocDeprotection => 59,
             OrganicGeneratorKind::AmineCbzProtection => 60,
             OrganicGeneratorKind::CbzDeprotection => 61,
+            OrganicGeneratorKind::OrganicCombustion => 62,
         }
     }
 }
@@ -202,6 +204,7 @@ pub struct DynamicChemistryRegistry {
     site_index: Vec<SiteBucket>,
     site_handles_by_substance: Vec<Vec<SiteHandle>>,
     processed_generation_masks: BTreeMap<(usize, ReactiveSiteKey), u64>,
+    processed_combustion_slots: BTreeSet<usize>,
     dynamic_acid_base_specs: Vec<AcidBaseSpec>,
     dynamic_precipitation_specs: Vec<PrecipitationSpec>,
     dynamic_complex_specs: Vec<ComplexSpec>,
@@ -240,6 +243,7 @@ impl DynamicChemistryRegistry {
             site_index: Vec::new(),
             site_handles_by_substance: vec![Vec::new(); static_substance_count],
             processed_generation_masks: BTreeMap::new(),
+            processed_combustion_slots: BTreeSet::new(),
             dynamic_acid_base_specs: Vec::new(),
             dynamic_precipitation_specs: Vec::new(),
             dynamic_complex_specs: Vec::new(),
@@ -501,6 +505,7 @@ impl DynamicChemistryRegistry {
             let mut inorganic_seeds = Vec::new();
             let mut unprocessed_seeds = Vec::new();
             let mut pending_generation_mask_updates = Vec::new();
+            let mut pending_combustion_slots = Vec::new();
             for _ in 0..batch_len {
                 let seed = queue.pop_front().expect("batch length was measured");
                 self.mark_known_substance(&mut queued, seed, false);
@@ -509,11 +514,15 @@ impl DynamicChemistryRegistry {
                     processed_work_items += 1;
                 }
                 let mask_updates = self.generation_mask_updates_for_substance(seed)?;
-                if mask_updates.is_empty() {
+                let combustion_slot = self.combustion_generation_update_for_substance(seed)?;
+                if mask_updates.is_empty() && combustion_slot.is_none() {
                     skipped_duplicates += 1;
                     continue;
                 }
                 pending_generation_mask_updates.extend(mask_updates);
+                if let Some(slot) = combustion_slot {
+                    pending_combustion_slots.push(slot);
+                }
                 unprocessed_seeds.push(seed);
                 processed_work_items += 1;
                 if processed_work_items > MAX_DYNAMIC_WORK_ITEMS {
@@ -553,6 +562,7 @@ impl DynamicChemistryRegistry {
 
             let mut staged = self.clone();
             staged.apply_generation_mask_updates(&pending_generation_mask_updates);
+            staged.apply_combustion_generation_updates(&pending_combustion_slots);
             let mut generated_id_remap = BTreeMap::new();
             let mut new_substance_ids = Vec::new();
             for substance in generated.substances {
@@ -1495,6 +1505,24 @@ impl DynamicChemistryRegistry {
             self.processed_generation_masks
                 .insert((*slot, site_key.clone()), *mask);
         }
+    }
+
+    fn combustion_generation_update_for_substance(
+        &self,
+        substance_index: KnownSubstanceIndex,
+    ) -> ChemistryResult<Option<usize>> {
+        let _generator = OrganicGeneratorKind::OrganicCombustion;
+        let substance = self.substance_by_known_index(substance_index)?;
+        if substance.molecular_structure.is_none() {
+            return Ok(None);
+        }
+        let slot = known_substance_slot(self.static_registry.substance_count(), substance_index);
+        Ok((!self.processed_combustion_slots.contains(&slot)).then_some(slot))
+    }
+
+    fn apply_combustion_generation_updates(&mut self, slots: &[usize]) {
+        self.processed_combustion_slots
+            .extend(slots.iter().copied());
     }
 
     fn generation_site_keys_for_substance(
@@ -2955,6 +2983,10 @@ mod tests {
         assert!(first.reached_fixed_point);
         assert_eq!(first.remaining_queue, 0);
         assert!(first.generator_errors.is_empty());
+        assert!(first.added_reactions > 0);
+        assert!(registry
+            .reactions()
+            .any(|reaction| reaction.id.as_str().starts_with("combustion/")));
         assert!(second.reached_fixed_point);
         assert_eq!(second.added_substances, 0);
         assert_eq!(second.added_reactions, 0);

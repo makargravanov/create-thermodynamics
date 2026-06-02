@@ -335,6 +335,13 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
         .iter()
         .map(|reaction| reaction.id.to_string())
         .collect::<BTreeSet<_>>();
+    for substance in &space.all_substances {
+        if seeds.contains(&substance.id) {
+            if let Some(reaction) = generate_complete_combustion(substance)? {
+                push_unique_reaction(&mut generated.reactions, &mut reaction_ids, reaction)?;
+            }
+        }
+    }
     generate_site_reactions_for_seed_participants(
         space,
         space
