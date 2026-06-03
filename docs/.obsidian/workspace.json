@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "chemistry/04-dynamic-substances-and-generation.md",
+                "file": "chemistry/files/organic-aromatic-catalog.md",
                 "mode": "preview",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "04-dynamic-substances-and-generation"
+              "title": "organic-aromatic-catalog"
             }
           }
         ]
@@ -185,10 +185,21 @@
   },
   "active": "f3ef191ded25ae4b",
   "lastOpenFiles": [
+    "chemistry/files/core-error.md",
+    "chemistry/files/core-error.md.tmp.11948.34fcfcc140e0",
+    "chemistry/files/molecule-frowns.md",
+    "chemistry/files/jni-bindings.md",
+    "chemistry/07-code-map.md",
+    "chemistry/04-dynamic-substances-and-generation.md",
+    "chemistry/files/core-catalysis.md",
+    "chemistry/files/synthesis.md",
+    "chemistry/07-code-map.md.tmp.11948.ba57b748cd40",
+    "chemistry/files/organic-generators.md",
+    "chemistry/files/molecule-graph.md",
+    "chemistry/files/core-redox.md",
     "chemistry/03-mixture-tick-flow.md",
     "chemistry/02-static-catalog-and-registry.md",
     "chemistry/01-entities.md",
-    "chemistry/07-code-map.md",
     "chemistry/05-molecular-graph-and-frowns.md",
     "chemistry/00-index.md",
     "README.md",
