@@ -1498,6 +1498,25 @@ mod tests {
         let metal = SubstanceId::from("destroy:copper_metal");
         let carbon_monoxide = SubstanceId::from("destroy:carbon_monoxide");
         let carbon_dioxide = SubstanceId::from("destroy:carbon_dioxide");
+        let reaction = registry
+            .reaction(&"destroy:copper_ii_oxide.carbon_monoxide_reduction".into())
+            .unwrap();
+        let redox = reaction
+            .redox
+            .as_ref()
+            .expect("metallurgical oxide reduction must be redox-annotated");
+        assert_eq!(redox.transferred_electrons, 2);
+        assert_eq!(
+            redox.oxidation_half_id.as_deref(),
+            Some("destroy:carbon_monoxide_to_carbon_dioxide_in_molten_oxide")
+        );
+        assert_eq!(
+            redox.reduction_half_id.as_deref(),
+            Some("destroy:copper_ii_oxide.molten_oxide_reduction_half")
+        );
+        assert!(registry
+            .redox_half_reaction("destroy:copper_ii_oxide.molten_oxide_reduction_half")
+            .is_some());
 
         let mut mixture = Mixture::new(1_450.0).unwrap();
         mixture

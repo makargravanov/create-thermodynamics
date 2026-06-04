@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use super::condition::{AtmosphereCondition, ReactionCondition};
 use super::mixture::MixturePhase;
+use super::redox::RedoxHalfReaction;
 use super::registry::ChemistryRegistry;
 use super::substance::{MaterialFormulaUnit, Substance, SubstanceId, SubstanceRepresentation};
 
@@ -66,6 +67,11 @@ pub fn destroy_metallurgy_reactions_registry_builder(
 ) -> ChemistryResult<ChemistryRegistryBuilder> {
     let registry = builder.build()?;
     let mut builder = ChemistryRegistryBuilder::from_registry(&registry);
+    for half_reaction in generated_metallurgy_redox_half_reactions(&registry)? {
+        if registry.redox_half_reaction(&half_reaction.id).is_none() {
+            builder = builder.redox_half_reaction(half_reaction);
+        }
+    }
     for reaction in generated_metallurgy_reactions(&registry)? {
         if registry.reaction(&reaction.id).is_err() {
             builder = builder.reaction(reaction);
@@ -140,6 +146,45 @@ fn generated_metallurgy_reactions(registry: &ChemistryRegistry) -> ChemistryResu
         }
     }
     Ok(reactions)
+}
+
+fn generated_metallurgy_redox_half_reactions(
+    registry: &ChemistryRegistry,
+) -> ChemistryResult<Vec<RedoxHalfReaction>> {
+    let oxides = indexed_formulas(registry, FormulaKind::Oxide)?;
+    let metals = metal_ids_by_element(registry);
+    let mut halves = vec![
+        RedoxHalfReaction::oxidation(
+            "destroy:carbon_monoxide_to_carbon_dioxide_in_molten_oxide",
+            [
+                (SubstanceId::from("destroy:carbon_monoxide"), 1),
+                (SubstanceId::from("destroy:oxide"), 1),
+            ],
+            [(SubstanceId::from("destroy:carbon_dioxide"), 1)],
+            2,
+            RedoxEnvironment::Any,
+        ),
+        RedoxHalfReaction::oxidation(
+            "destroy:hydrogen_to_water_in_molten_oxide",
+            [
+                (SubstanceId::from("destroy:hydrogen"), 1),
+                (SubstanceId::from("destroy:oxide"), 1),
+            ],
+            [(SubstanceId::from("destroy:water"), 1)],
+            2,
+            RedoxEnvironment::Any,
+        ),
+    ];
+    for (oxide, formula) in &oxides {
+        if let Some(metal_products) = metal_products_for_formula(formula, &metals) {
+            halves.push(metal_oxide_reduction_half_reaction(
+                oxide,
+                formula.oxide,
+                &metal_products,
+            ));
+        }
+    }
+    Ok(halves)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -359,6 +404,12 @@ fn carbon_monoxide_reduction_reaction(
         .condition(reducing_atmosphere(
             "carbon monoxide reduction is blocked by an oxidizing gas phase",
         ))
+        .redox_annotation(RedoxAnnotation::from_halves(
+            2 * oxygen_count,
+            RedoxEnvironment::Any,
+            "destroy:carbon_monoxide_to_carbon_dioxide_in_molten_oxide",
+            metal_oxide_reduction_half_id(oxide),
+        ))
         .pre_exponential_factor(1.0e8)
         .activation_energy_kj_per_mol(85.0)
         .enthalpy_change_kj_per_mol(-25.0 * oxygen_count as f64);
@@ -391,6 +442,12 @@ fn hydrogen_reduction_reaction(
         ))
         .condition(reducing_atmosphere(
             "hydrogen reduction is blocked by an oxidizing gas phase",
+        ))
+        .redox_annotation(RedoxAnnotation::from_halves(
+            2 * oxygen_count,
+            RedoxEnvironment::Any,
+            "destroy:hydrogen_to_water_in_molten_oxide",
+            metal_oxide_reduction_half_id(oxide),
         ))
         .pre_exponential_factor(8.0e7)
         .activation_energy_kj_per_mol(90.0)
@@ -469,4 +526,24 @@ fn slag_temperature_kelvin(base_oxide: &Substance, silicate: &Substance) -> f64 
             .min(1_450.0)
             .max(1_200.0),
     }
+}
+
+fn metal_oxide_reduction_half_id(oxide: &Substance) -> String {
+    format!("{}.molten_oxide_reduction_half", oxide.id)
+}
+
+fn metal_oxide_reduction_half_reaction(
+    oxide: &Substance,
+    oxygen_count: u32,
+    metal_products: &[(SubstanceId, u32)],
+) -> RedoxHalfReaction {
+    let mut products = metal_products.to_vec();
+    products.push((SubstanceId::from("destroy:oxide"), oxygen_count));
+    RedoxHalfReaction::reduction(
+        metal_oxide_reduction_half_id(oxide),
+        [(oxide.id.clone(), 1)],
+        products,
+        2 * oxygen_count,
+        RedoxEnvironment::Any,
+    )
 }
