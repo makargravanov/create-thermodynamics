@@ -19,6 +19,10 @@ pub mod frowns;
 pub mod functional_group;
 #[path = "core/kinetics.rs"]
 pub mod kinetics;
+#[path = "core/metallurgy/mod.rs"]
+pub mod metallurgy;
+#[path = "data/metallurgy.rs"]
+pub mod metallurgy_data;
 #[path = "core/mixture.rs"]
 pub mod mixture;
 #[path = "molecule/mod.rs"]

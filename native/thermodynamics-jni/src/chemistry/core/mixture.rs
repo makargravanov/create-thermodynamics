@@ -2498,6 +2498,23 @@ fn solubility_limit_in_solvent(
     solvent: SubstanceIndex,
 ) -> Option<f64> {
     let substance_index = registry.substance_index(&substance.id)?;
+    let solvent_substance = registry.substance_by_index(solvent).ok()?;
+    if matches!(
+        (
+            substance.phase_properties.preferred_liquid_phase,
+            solvent_substance.phase_properties.preferred_liquid_phase,
+        ),
+        (
+            LiquidPhasePreference::MoltenMetal,
+            LiquidPhasePreference::MoltenMetal
+        ) | (
+            LiquidPhasePreference::MoltenSlag,
+            LiquidPhasePreference::MoltenSlag
+        )
+    ) && substance.phase_properties.can_form_liquid_phase
+    {
+        return None;
+    }
     if substance_is_solvent(substance) && substance_index != solvent {
         match registry.solvent_miscibility(substance_index, solvent) {
             SolventMiscibility::FullyMiscible => return None,
@@ -2506,16 +2523,12 @@ fn solubility_limit_in_solvent(
             } => return Some(limit_mol_per_bucket),
             SolventMiscibility::Immiscible => {}
         }
-        if registry
-            .substance_by_index(solvent)
-            .ok()
-            .is_some_and(|solvent| solvent.id.as_str() == "destroy:water")
-        {
+        if solvent_substance.id.as_str() == "destroy:water" {
             return substance.phase_properties.aqueous_solubility_mol_per_bucket;
         }
         return Some(0.0);
     }
-    let solvent_id = &registry.substance_by_index(solvent).ok()?.id;
+    let solvent_id = &solvent_substance.id;
     if solvent_id == &substance.id && substance_can_anchor_liquid_phase(substance) {
         return None;
     }

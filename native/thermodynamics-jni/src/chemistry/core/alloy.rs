@@ -12,6 +12,7 @@ pub enum AlloyConstituentRole {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AlloyConstituent {
     pub substance_id: SubstanceId,
+    pub metallurgical_component_id: String,
     pub role: AlloyConstituentRole,
     pub concentration_mol_per_bucket: f64,
     pub mole_fraction: f64,
@@ -122,6 +123,7 @@ fn build_alloy_snapshot(
             let mass = amount * substance.molar_mass_grams;
             AlloyConstituent {
                 substance_id: substance.id.clone(),
+                metallurgical_component_id: alloy_component_id(substance),
                 role: alloy_constituent_role(substance),
                 concentration_mol_per_bucket: amount,
                 mole_fraction: amount / total_mol_per_bucket,
@@ -145,8 +147,15 @@ fn build_alloy_snapshot(
     })
 }
 
+fn alloy_component_id(substance: &Substance) -> String {
+    match &substance.representation {
+        SubstanceRepresentation::Metal { element_symbol } => element_symbol.clone(),
+        _ => substance.id.to_string(),
+    }
+}
+
 fn alloy_constituent_role(substance: &Substance) -> AlloyConstituentRole {
-    match substance.representation {
+    match &substance.representation {
         SubstanceRepresentation::Metal { .. } => AlloyConstituentRole::Metal,
         _ => AlloyConstituentRole::DissolvedMaterial,
     }
