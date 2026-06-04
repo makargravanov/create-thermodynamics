@@ -2,6 +2,7 @@ use super::error::{ChemistryError, ChemistryResult};
 use super::molecule::{
     aromatize, parse_legacy_structure, DoubleBondStereo, MolecularAtom, MolecularBond,
     MolecularStructure, StereoDescriptor, StereoMixtureKind, Stereochemistry, TetrahedralStereo,
+    ValenceSaturation,
 };
 
 const DESTROY_NAMESPACE: &str = "destroy";
@@ -124,6 +125,17 @@ fn parse_graph_atom(token: &str) -> ChemistryResult<MolecularAtom> {
     if element_part.is_empty() {
         return Err(invalid_frowns(token, "atom token must not be empty"));
     }
+    let (element_part, valence_saturation) = if let Some(element) = element_part.strip_suffix('!') {
+        if element.is_empty() {
+            return Err(invalid_frowns(
+                token,
+                "valence-unsaturated atom token must contain an element",
+            ));
+        }
+        (element, ValenceSaturation::UnsaturatedAllowed)
+    } else {
+        (element_part, ValenceSaturation::Saturate)
+    };
     let (element, r_group_number) = if let Some(rest) = element_part.strip_prefix('R') {
         let number = if rest.is_empty() {
             0
@@ -139,6 +151,7 @@ fn parse_graph_atom(token: &str) -> ChemistryResult<MolecularAtom> {
         element,
         charge,
         r_group_number,
+        valence_saturation,
     })
 }
 

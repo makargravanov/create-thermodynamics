@@ -42,22 +42,24 @@ pub(crate) fn generate_complete_combustion(fuel: &Substance) -> ChemistryResult<
     };
     let fuel_coefficient = equation.multiplier;
     let enthalpy = estimate_combustion_enthalpy_kj_per_reaction(&equation);
-    Ok(Some(
+    let mut builder =
         Reaction::builder(format!("combustion/{}/complete", stable_id_part(&fuel.id)))
             .reactant(fuel.id.clone(), fuel_coefficient, 1)
             .reactant(OXYGEN_ID, equation.oxygen, 1)
             .product(CARBON_DIOXIDE_ID, equation.carbon_dioxide)
-            .product(WATER_ID, equation.water)
             .reactant_phase_access(fuel.id.clone(), [MixturePhase::Gas])
             .reactant_phase_access(OXYGEN_ID, [MixturePhase::Gas])
             .product_phase(CARBON_DIOXIDE_ID, MixturePhase::Gas)
-            .product_phase(WATER_ID, MixturePhase::Gas)
             .pre_exponential_factor(COMBUSTION_PRE_EXPONENTIAL)
             .activation_energy_kj_per_mol(COMBUSTION_ACTIVATION_ENERGY_KJ_PER_MOL)
             .enthalpy_change_kj_per_mol(enthalpy)
-            .reaction_result("estimated complete combustion enthalpy", 1.0)
-            .build(),
-    ))
+            .reaction_result("estimated complete combustion enthalpy", 1.0);
+    if equation.water > 0 {
+        builder = builder
+            .product(WATER_ID, equation.water)
+            .product_phase(WATER_ID, MixturePhase::Gas);
+    }
+    Ok(Some(builder.build()))
 }
 
 fn combustion_formula(
@@ -87,7 +89,10 @@ fn combustion_formula(
             return Err(ChemistryError::GenerationInvariantViolation {
                 generator: "combustion".to_string(),
                 substance_id: substance_id.to_string(),
-                reason: format!("charged atom '{}' cannot be used as neutral fuel", atom.element),
+                reason: format!(
+                    "charged atom '{}' cannot be used as neutral fuel",
+                    atom.element
+                ),
             });
         }
         match atom.element.as_str() {
@@ -160,8 +165,16 @@ mod tests {
     fn fuel(id: &str, code: &str) -> Substance {
         let structure = parse_frowns(code).unwrap();
         let summary = structure.summary().unwrap();
-        Substance::new(id, summary.charge, summary.molar_mass_grams, 700.0, 250.0, 80.0, 20_000.0)
-            .with_molecular_structure(structure)
+        Substance::new(
+            id,
+            summary.charge,
+            summary.molar_mass_grams,
+            700.0,
+            250.0,
+            80.0,
+            20_000.0,
+        )
+        .with_molecular_structure(structure)
     }
 
     #[test]

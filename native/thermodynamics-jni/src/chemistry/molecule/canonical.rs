@@ -5,7 +5,7 @@ use std::thread::{self, JoinHandle};
 use super::error::{ChemistryError, ChemistryResult};
 use super::molecule::{
     bond_order_matches, DoubleBondStereo, MolecularAtom, MolecularStructure, StereoDescriptor,
-    StereoMixtureKind, Stereochemistry, TetrahedralStereo,
+    StereoMixtureKind, Stereochemistry, TetrahedralStereo, ValenceSaturation,
 };
 
 const DESTROY_NAMESPACE: &str = "destroy";
@@ -812,6 +812,9 @@ fn atom_token(atom: &MolecularAtom) -> String {
     if atom.element == "R" && atom.r_group_number != 0 {
         token.push_str(&atom.r_group_number.to_string());
     }
+    if atom.valence_saturation == ValenceSaturation::UnsaturatedAllowed {
+        token.push('!');
+    }
     if atom.charge != 0.0 {
         token.push('^');
         if (atom.charge - atom.charge.round()).abs() <= 1.0e-9 {
@@ -883,6 +886,7 @@ mod tests {
                 element: "C".to_string(),
                 charge: 0.0,
                 r_group_number: 0,
+                valence_saturation: ValenceSaturation::Saturate,
             })
             .collect::<Vec<_>>();
         let bonds = (0..atom_count)
@@ -912,11 +916,13 @@ mod tests {
                     element: "C".to_string(),
                     charge: 0.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
                 MolecularAtom {
                     element: "H".to_string(),
                     charge: 1.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
             ],
             bonds: vec![MolecularBond {
@@ -933,11 +939,13 @@ mod tests {
                     element: "C".to_string(),
                     charge: 0.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
                 MolecularAtom {
                     element: "R".to_string(),
                     charge: 0.0,
                     r_group_number: 1,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
             ],
             bonds: vec![MolecularBond {

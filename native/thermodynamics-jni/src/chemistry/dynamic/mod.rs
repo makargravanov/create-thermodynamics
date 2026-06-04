@@ -1,5 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet};
 use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::complex::{ComplexGeometry, ComplexLigand, ComplexSpec, LigandExchangeLability};
 use super::error::{ChemistryError, ChemistryResult};

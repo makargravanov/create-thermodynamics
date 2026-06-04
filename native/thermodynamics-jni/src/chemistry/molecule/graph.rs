@@ -13,6 +13,13 @@ pub struct MolecularAtom {
     pub element: String,
     pub charge: f64,
     pub r_group_number: u8,
+    pub valence_saturation: ValenceSaturation,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ValenceSaturation {
+    Saturate,
+    UnsaturatedAllowed,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -159,6 +166,14 @@ impl MolecularStructure {
         for (index, atom) in self.atoms.iter().enumerate() {
             if atom.element == "R" {
                 continue;
+            }
+            if atom.valence_saturation == ValenceSaturation::UnsaturatedAllowed
+                && atom.element == "H"
+            {
+                return Err(invalid_structure(
+                    &self.source_code,
+                    &format!("atom {index} cannot mark hydrogen as valence-unsaturated"),
+                ));
             }
             let max_valency = max_valency(&atom.element);
             if valency_orders[index] - atom.charge.abs() > max_valency + 1.0e-6 {
@@ -467,6 +482,7 @@ impl MolecularEditor {
             element: element.to_string(),
             charge,
             r_group_number: 0,
+            valence_saturation: ValenceSaturation::Saturate,
         });
         self.bonds.push(MolecularBond {
             from: parent,
@@ -653,6 +669,7 @@ impl MolecularEditor {
             element: element.to_string(),
             charge,
             r_group_number: 0,
+            valence_saturation: ValenceSaturation::Saturate,
         };
         self.clear_stereo_at_atom(atom_index);
         self.modified = true;
@@ -713,6 +730,7 @@ impl MolecularEditor {
             element: element.to_string(),
             charge,
             r_group_number: 0,
+            valence_saturation: ValenceSaturation::Saturate,
         });
         self.bonds.push(MolecularBond {
             from: first,
@@ -1184,6 +1202,7 @@ impl StructureBuilder {
             element: element.to_string(),
             charge,
             r_group_number,
+            valence_saturation: ValenceSaturation::Saturate,
         });
         Ok(index)
     }
@@ -1235,6 +1254,9 @@ impl StructureBuilder {
             if atom.element == "H" || atom.element == "R" {
                 continue;
             }
+            if atom.valence_saturation == ValenceSaturation::UnsaturatedAllowed {
+                continue;
+            }
             let hydrogens = hydrogens_to_add(&atom.element, bond_orders[index], atom.charge);
             for _ in 0..hydrogens as usize {
                 additions.push(index);
@@ -1246,6 +1268,7 @@ impl StructureBuilder {
                 element: "H".to_string(),
                 charge: 0.0,
                 r_group_number: 0,
+                valence_saturation: ValenceSaturation::Saturate,
             });
             self.bonds.push(MolecularBond {
                 from: parent,
@@ -1998,21 +2021,25 @@ mod tests {
                     element: "C".to_string(),
                     charge: 0.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
                 MolecularAtom {
                     element: "C".to_string(),
                     charge: 0.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
                 MolecularAtom {
                     element: "H".to_string(),
                     charge: 0.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
                 MolecularAtom {
                     element: "H".to_string(),
                     charge: 0.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
             ],
             bonds: vec![

@@ -47,12 +47,16 @@ pub mod thermodynamics;
 pub mod selectivity;
 
 pub use error::{ChemistryError, ChemistryResult};
-pub use reactions::{DESTROY_EXPLICIT_REACTION_COUNT, DESTROY_REGISTERED_REACTION_COUNT};
+pub use reactions::{
+    DESTROY_EXPLICIT_REACTION_COUNT, DESTROY_METALLURGY_REACTION_COUNT,
+    DESTROY_REGISTERED_REACTION_COUNT,
+};
 pub use registry::{ChemistryRegistry, ChemistryRegistryBuilder};
 
 pub fn destroy_registry_builder() -> ChemistryResult<ChemistryRegistryBuilder> {
     let builder = catalog::destroy_substances_registry_builder()?;
-    reactions::destroy_reactions_registry_builder(builder)
+    let builder = reactions::destroy_reactions_registry_builder(builder)?;
+    reactions::destroy_metallurgy_reactions_registry_builder(builder)
 }
 
 pub fn destroy_registry_with_generated_reactions_builder(
@@ -83,7 +87,10 @@ mod tests {
     };
     use super::solution::PrecipitationSpec;
     use super::substance::{Substance, SubstanceId, SubstancePhaseProperties};
-    use super::{DESTROY_EXPLICIT_REACTION_COUNT, DESTROY_REGISTERED_REACTION_COUNT};
+    use super::{
+        DESTROY_EXPLICIT_REACTION_COUNT, DESTROY_METALLURGY_REACTION_COUNT,
+        DESTROY_REGISTERED_REACTION_COUNT,
+    };
 
     fn water_id() -> SubstanceId {
         "destroy:water".into()
@@ -1458,10 +1465,53 @@ mod tests {
 
         assert_eq!(DESTROY_EXPLICIT_REACTION_COUNT, 118);
         assert_eq!(
-            DESTROY_REGISTERED_REACTION_COUNT,
+            DESTROY_REGISTERED_REACTION_COUNT + DESTROY_METALLURGY_REACTION_COUNT,
             registry.reactions().count()
         );
         assert_eq!(DESTROY_REGISTERED_REACTION_COUNT, 155);
+        assert_eq!(DESTROY_METALLURGY_REACTION_COUNT, 28);
+    }
+
+    #[test]
+    fn carbonate_calcination_requires_high_temperature() {
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let carbonate = SubstanceId::from("destroy:calcium_carbonate");
+        let oxide = SubstanceId::from("destroy:calcium_oxide");
+
+        let mut cold = Mixture::new(900.0).unwrap();
+        cold.add_substance(&registry, carbonate.clone(), 0.1)
+            .unwrap();
+        assert!(!react_for_tick(&registry, &mut cold, 1).unwrap());
+        assert_eq!(cold.concentration_of(&oxide), 0.0);
+
+        let mut hot = Mixture::new(1_250.0).unwrap();
+        hot.add_substance(&registry, carbonate, 0.1).unwrap();
+        assert!(react_for_tick(&registry, &mut hot, 1).unwrap());
+        assert!(hot.concentration_of(&oxide) > 0.0);
+        assert!(hot.concentration_of(&SubstanceId::from("destroy:carbon_dioxide")) > 0.0);
+    }
+
+    #[test]
+    fn carbon_monoxide_reduction_produces_metal_and_gas() {
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let oxide = SubstanceId::from("destroy:copper_ii_oxide");
+        let metal = SubstanceId::from("destroy:copper_metal");
+        let carbon_monoxide = SubstanceId::from("destroy:carbon_monoxide");
+        let carbon_dioxide = SubstanceId::from("destroy:carbon_dioxide");
+
+        let mut mixture = Mixture::new(1_450.0).unwrap();
+        mixture
+            .add_substance(&registry, oxide.clone(), 0.1)
+            .unwrap();
+        mixture
+            .add_substance(&registry, carbon_monoxide.clone(), 0.1)
+            .unwrap();
+
+        assert!(react_for_tick(&registry, &mut mixture, 1).unwrap());
+        assert!(mixture.concentration_of(&oxide) < 0.1);
+        assert!(mixture.concentration_of(&carbon_monoxide) < 0.1);
+        assert!(mixture.concentration_in_phase(&metal, MixturePhase::MoltenMetal) > 0.0);
+        assert!(mixture.concentration_in_phase(&carbon_dioxide, MixturePhase::Gas) > 0.0);
     }
 
     #[test]

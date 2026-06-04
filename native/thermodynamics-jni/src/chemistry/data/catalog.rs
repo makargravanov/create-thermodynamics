@@ -1,6 +1,7 @@
 use super::catalysis::CatalystSurfaceSpec;
 use super::complex::{ComplexGeometry, ComplexLigand, ComplexSpec, LigandExchangeLability};
 use super::error::{ChemistryError, ChemistryResult};
+use super::frowns::parse_frowns;
 use super::mixture::MixturePhase;
 use super::molecule::{
     element_mass, parse_java_structure, parse_legacy_structure, MolecularStructure,
@@ -833,7 +834,7 @@ impl RawSubstance {
             .iter()
             .map(|tag| SubstanceTagId::new(format!("destroy:{tag}")))
             .collect::<ChemistryResult<Vec<_>>>()?;
-        Ok(Substance::new(
+        let substance = Substance::new(
             SubstanceId::new(format!("destroy:{}", self.id))?,
             summary.charge,
             summary.molar_mass_grams,
@@ -850,8 +851,8 @@ impl RawSubstance {
             self.translation_key.map(str::to_string),
             color,
             tags,
-        )
-        .with_molecular_structure(structure))
+        );
+        Ok(substance.with_molecular_structure(structure))
     }
 }
 
@@ -916,6 +917,7 @@ fn parse_raw_structure(
     java_structure_code: Option<&str>,
 ) -> ChemistryResult<MolecularStructure> {
     match (structure_code, java_structure_code) {
+        (Some(code), _) if code.split(':').nth(1) == Some("graph") => parse_frowns(code),
         (Some(code), _) => parse_legacy_structure(code),
         (None, Some(code)) => parse_java_structure(code),
         (None, None) => Err(ChemistryError::InvalidSubstance {
@@ -1679,10 +1681,8 @@ const DESTROY_SUBSTANCES: &[RawSubstance] = &[
     },
     RawSubstance {
         id: "carbon_monoxide",
-        structure_code: None,
-        java_structure_code: Some(
-            r#"LegacyMolecularStructure.atom(LegacyElement.CARBON) .addAtom(LegacyElement.OXYGEN, BondType.TRIPLE)"#,
-        ),
+        structure_code: Some(r#"destroy:graph:atoms=C!.O!;bonds=0-3-1"#),
+        java_structure_code: None,
         translation_key: None,
         boiling_point_celsius: Some(-191.5),
         boiling_point_kelvin: None,
@@ -3572,6 +3572,7 @@ const DESTROY_SUBSTANCES: &[RawSubstance] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chemistry::molecule::ValenceSaturation;
 
     #[test]
     fn destroy_catalog_builds_all_explicit_substances() {
@@ -3623,6 +3624,25 @@ mod tests {
         assert_eq!(argon.charge, 0);
         assert!((argon.molar_mass_grams - 39.95).abs() < 0.001);
         assert!((argon.boiling_point_kelvin - 87.302).abs() < 0.001);
+
+        let carbon_monoxide = registry
+            .substance(&"destroy:carbon_monoxide".into())
+            .unwrap();
+        assert_eq!(carbon_monoxide.charge, 0);
+        assert!((carbon_monoxide.molar_mass_grams - 28.01).abs() < 0.001);
+        let structure = carbon_monoxide
+            .molecular_structure
+            .as_ref()
+            .expect("carbon monoxide must keep a molecular graph");
+        assert_eq!(structure.hydrogen_count(0), 0);
+        assert!(structure
+            .atoms
+            .iter()
+            .any(|atom| atom.valence_saturation == ValenceSaturation::UnsaturatedAllowed));
+        assert_eq!(
+            structure.canonical_code().unwrap(),
+            "destroy:linear:C!(#O!)"
+        );
     }
 
     #[test]

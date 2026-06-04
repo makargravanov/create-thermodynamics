@@ -1321,7 +1321,9 @@ mod tests {
     use super::*;
     use crate::chemistry::frowns::parse_frowns;
     use crate::chemistry::mixture::Mixture;
-    use crate::chemistry::molecule::{MolecularAtom, MolecularBond, MolecularStructure};
+    use crate::chemistry::molecule::{
+        MolecularAtom, MolecularBond, MolecularStructure, ValenceSaturation,
+    };
     use crate::chemistry::reaction::Reaction;
     use crate::chemistry::registry::ChemistryRegistryBuilder;
     use crate::chemistry::simulation::{
@@ -1390,16 +1392,19 @@ mod tests {
                     element: "O".to_string(),
                     charge: 0.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
                 MolecularAtom {
                     element: "H".to_string(),
                     charge: 0.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
                 MolecularAtom {
                     element: "H".to_string(),
                     charge: 0.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
             ],
             bonds: vec![
@@ -1426,21 +1431,25 @@ mod tests {
                     element: "O".to_string(),
                     charge: 0.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
                 MolecularAtom {
                     element: "O".to_string(),
                     charge: 0.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
                 MolecularAtom {
                     element: "H".to_string(),
                     charge: 0.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
                 MolecularAtom {
                     element: "H".to_string(),
                     charge: 0.0,
                     r_group_number: 0,
+                    valence_saturation: ValenceSaturation::Saturate,
                 },
             ],
             bonds: vec![
