@@ -949,6 +949,56 @@ impl Mixture {
         Ok(max_delta)
     }
 
+    pub(crate) fn apply_phase_amount_deltas_by_index(
+        &mut self,
+        registry: &ChemistryRegistry,
+        deltas: &[(SubstanceIndex, MixturePhase, f64)],
+    ) -> ChemistryResult<f64> {
+        self.ensure_position_capacity(registry);
+        let mut merged = BTreeMap::<(SubstanceIndex, MixturePhase), f64>::new();
+        for (substance, phase, delta) in deltas {
+            registry.substance_by_index(*substance)?;
+            if !delta.is_finite() {
+                return Err(ChemistryError::InvalidMixtureState(
+                    "phase amount delta must be finite".to_string(),
+                ));
+            }
+            *merged.entry((*substance, *phase)).or_insert(0.0) += *delta;
+        }
+        let mut max_delta = 0.0_f64;
+        for ((substance, phase), delta) in &merged {
+            max_delta = max_delta.max(delta.abs());
+            if *delta < 0.0 {
+                let available = self.concentration_of_index_in_phases(*substance, &[*phase]);
+                if available + *delta < -TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                    let substance_id = &registry.substance_by_index(*substance)?.id;
+                    return Err(ChemistryError::InvalidMixtureState(format!(
+                        "substance '{substance_id}' would become negative in phase {phase:?}: {}",
+                        available + *delta
+                    )));
+                }
+            }
+        }
+        for ((substance, phase), delta) in merged {
+            if delta > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                let substance_data = registry.substance_by_index(substance)?;
+                if let Some(position) = self.position_of_substance(substance) {
+                    self.components[position].add_to_phase(phase, delta);
+                } else {
+                    self.insert_component(substance, substance_data.id.clone(), delta, phase);
+                }
+            } else if delta < -TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                if let Some(position) = self.position_of_substance(substance) {
+                    self.components[position].remove_from_phase(phase, -delta)?;
+                    self.remove_trace_component(registry, substance)?;
+                }
+            }
+        }
+        self.equilibrate_phases(registry)?;
+        self.validate(registry)?;
+        Ok(max_delta)
+    }
+
     pub fn heat(
         &mut self,
         registry: &ChemistryRegistry,

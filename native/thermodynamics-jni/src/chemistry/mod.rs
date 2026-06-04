@@ -76,7 +76,7 @@ mod tests {
     };
     use super::mixture::{Mixture, MixturePhase};
     use super::reaction::{Reaction, StoichiometricTerm};
-    use super::redox::RedoxRole;
+    use super::redox::{apply_electrolysis_cell, ElectrodeProcess, ElectrolysisCell, RedoxRole};
     use super::registry::{ChemistryRegistryBuilder, ReactionCandidateScratch};
     use super::selectivity::{
         NucleophileStrength, ReactionType, SelectivityContext, SelectivityEngine,
@@ -1531,6 +1531,46 @@ mod tests {
         assert!(mixture.concentration_of(&carbon_monoxide) < 0.1);
         assert!(mixture.concentration_in_phase(&metal, MixturePhase::MoltenMetal) > 0.0);
         assert!(mixture.concentration_in_phase(&carbon_dioxide, MixturePhase::Gas) > 0.0);
+    }
+
+    #[test]
+    fn molten_oxide_electrolysis_produces_metal_and_oxygen_without_free_oxide_seed() {
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let oxide = SubstanceId::from("destroy:copper_ii_oxide");
+        let metal = SubstanceId::from("destroy:copper_metal");
+        let oxygen = SubstanceId::from("destroy:oxygen");
+        let oxide_ion = SubstanceId::from("destroy:oxide");
+        let mut mixture = Mixture::new(1_800.0).unwrap();
+        mixture
+            .add_substance(&registry, oxide.clone(), 0.01)
+            .unwrap();
+
+        let cell = ElectrolysisCell::new(
+            ElectrodeProcess::anode("destroy:oxide_to_oxygen_in_molten_slag")
+                .in_phase(MixturePhase::MoltenSlag),
+            ElectrodeProcess::cathode(
+                "destroy:copper_ii_oxide.molten_oxide_electrolysis_reduction_half",
+            )
+            .in_phase(MixturePhase::MoltenSlag),
+            10.0,
+        );
+        let report = apply_electrolysis_cell(
+            &registry,
+            &mut mixture,
+            &cell,
+            super::redox::FARADAY_CONSTANT_COULOMBS_PER_MOL * 0.002,
+            1.0,
+        )
+        .unwrap();
+
+        assert!((report.transferred_electrons_mol_per_bucket - 0.002).abs() < 1.0e-12);
+        assert!(mixture.concentration_in_phase(&metal, MixturePhase::MoltenMetal) > 0.0);
+        assert!(mixture.concentration_in_phase(&oxygen, MixturePhase::Gas) > 0.0);
+        assert!(mixture.concentration_of(&oxide) < 0.01);
+        assert!(
+            mixture.concentration_of(&oxide_ion)
+                <= super::mixture::TRACE_CONCENTRATION_MOL_PER_BUCKET
+        );
     }
 
     #[test]

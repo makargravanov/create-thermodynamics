@@ -7,7 +7,7 @@ use super::reaction::{
     Reaction, ReactionBuilder, ReactionId, StoichiometricTerm, GAS_CONSTANT_J_PER_MOL_KELVIN,
 };
 use super::registry::ChemistryRegistry;
-use super::substance::SubstanceId;
+use super::substance::{LiquidPhasePreference, SubstanceAggregateState, SubstanceId};
 
 pub const ELECTRON_EXTERNAL_ID: &str = "redox:electron";
 pub const FARADAY_CONSTANT_COULOMBS_PER_MOL: f64 = 96_485.332_123_310_02;
@@ -697,17 +697,19 @@ pub fn apply_electrolysis_cell(
         });
     }
 
-    let anode_potential_volts = half_potential_volts(
+    let anode_potential_volts = half_potential_volts_in_phase(
         registry,
         mixture,
         anode_half,
         required_standard_potential(anode_half)?,
+        cell.anode.phase,
     )?;
-    let cathode_potential_volts = half_potential_volts(
+    let cathode_potential_volts = half_potential_volts_in_phase(
         registry,
         mixture,
         cathode_half,
         required_standard_potential(cathode_half)?,
+        cell.cathode.phase,
     )?;
     let cell_potential_volts = anode_potential_volts + cathode_potential_volts;
     let reversible_voltage_volts = (-cell_potential_volts).max(0.0);
@@ -729,9 +731,15 @@ pub fn apply_electrolysis_cell(
         electron_moles * cell.cathode.current_efficiency / cathode_half.electron_count as f64;
 
     let anode_reactants = electrode_reactants(registry, anode_half, cell.anode.phase)?;
-    let anode_products = electrode_products(registry, anode_half, cell.anode.phase)?;
+    let anode_products = electrode_products(registry, mixture, anode_half, cell.anode.phase)?;
     let cathode_reactants = electrode_reactants(registry, cathode_half, cell.cathode.phase)?;
-    let cathode_products = electrode_products(registry, cathode_half, cell.cathode.phase)?;
+    let cathode_products = electrode_products(registry, mixture, cathode_half, cell.cathode.phase)?;
+    let produced_credits = electrode_product_credits(
+        &anode_products,
+        anode_extent_mol_per_bucket,
+        &cathode_products,
+        cathode_extent_mol_per_bucket,
+    );
 
     ensure_electrode_reactants_available(
         registry,
@@ -739,6 +747,7 @@ pub fn apply_electrolysis_cell(
         anode_half,
         &anode_reactants,
         anode_extent_mol_per_bucket,
+        &produced_credits,
     )?;
     ensure_electrode_reactants_available(
         registry,
@@ -746,21 +755,19 @@ pub fn apply_electrolysis_cell(
         cathode_half,
         &cathode_reactants,
         cathode_extent_mol_per_bucket,
+        &produced_credits,
     )?;
 
     let mut staged = mixture.clone();
-    staged.apply_reaction_phase_deltas_by_index(
-        registry,
+    let deltas = electrode_phase_amount_deltas(
         &anode_reactants,
         &anode_products,
         anode_extent_mol_per_bucket,
-    )?;
-    staged.apply_reaction_phase_deltas_by_index(
-        registry,
         &cathode_reactants,
         &cathode_products,
         cathode_extent_mol_per_bucket,
     )?;
+    staged.apply_phase_amount_deltas_by_index(registry, &deltas)?;
     *mixture = staged;
 
     Ok(ElectrolysisReport {
@@ -781,7 +788,23 @@ fn half_potential_volts(
     half: &RedoxHalfReaction,
     standard_potential_volts: f64,
 ) -> ChemistryResult<f64> {
-    let quotient = half_reaction_quotient(registry, mixture, half)?;
+    half_potential_volts_in_phase(
+        registry,
+        mixture,
+        half,
+        standard_potential_volts,
+        MixturePhase::Aqueous,
+    )
+}
+
+fn half_potential_volts_in_phase(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    half: &RedoxHalfReaction,
+    standard_potential_volts: f64,
+    phase: MixturePhase,
+) -> ChemistryResult<f64> {
+    let quotient = half_reaction_quotient_in_phase(registry, mixture, half, phase)?;
     if quotient <= 0.0 || !quotient.is_finite() {
         return Err(ChemistryError::InvalidReaction {
             reaction_id: half.id.clone(),
@@ -924,6 +947,7 @@ fn electrode_reactants(
 
 fn electrode_products(
     registry: &ChemistryRegistry,
+    mixture: &Mixture,
     half: &RedoxHalfReaction,
     phase: MixturePhase,
 ) -> ChemistryResult<Vec<(super::registry::SubstanceIndex, f64, MixturePhase)>> {
@@ -938,7 +962,8 @@ fn electrode_products(
                         term.substance_id
                     ))
                 })?;
-            Ok((substance, term.coefficient as f64, phase))
+            let product_phase = electrode_term_phase(registry, mixture, &term.substance_id, phase)?;
+            Ok((substance, term.coefficient as f64, product_phase))
         })
         .collect()
 }
@@ -949,28 +974,111 @@ fn ensure_electrode_reactants_available(
     half: &RedoxHalfReaction,
     reactants: &[(super::registry::SubstanceIndex, u32, Vec<MixturePhase>)],
     extent_mol_per_bucket: f64,
+    produced_credits: &BTreeMap<(super::registry::SubstanceIndex, MixturePhase), f64>,
 ) -> ChemistryResult<()> {
     for (substance, coefficient, phases) in reactants {
         let required = *coefficient as f64 * extent_mol_per_bucket;
         let available = mixture.concentration_of_index_in_phases(*substance, phases);
-        if available + TRACE_CONCENTRATION_MOL_PER_BUCKET < required {
+        let internally_produced = phases
+            .iter()
+            .map(|phase| {
+                produced_credits
+                    .get(&(*substance, *phase))
+                    .copied()
+                    .unwrap_or(0.0)
+            })
+            .sum::<f64>();
+        if available + internally_produced + TRACE_CONCENTRATION_MOL_PER_BUCKET < required {
             let substance_id = &registry.substance_by_index(*substance)?.id;
             return Err(ChemistryError::InvalidMixtureState(format!(
                 "electrode half '{}' needs {} mol/bucket of '{}' but only {} is available",
-                half.id, required, substance_id, available
+                half.id,
+                required,
+                substance_id,
+                available + internally_produced
             )));
         }
     }
     Ok(())
 }
 
-fn half_reaction_quotient(
+fn electrode_product_credits(
+    anode_products: &[(super::registry::SubstanceIndex, f64, MixturePhase)],
+    anode_extent_mol_per_bucket: f64,
+    cathode_products: &[(super::registry::SubstanceIndex, f64, MixturePhase)],
+    cathode_extent_mol_per_bucket: f64,
+) -> BTreeMap<(super::registry::SubstanceIndex, MixturePhase), f64> {
+    let mut credits = BTreeMap::new();
+    for (substance, coefficient, phase) in anode_products {
+        *credits.entry((*substance, *phase)).or_insert(0.0) +=
+            *coefficient * anode_extent_mol_per_bucket;
+    }
+    for (substance, coefficient, phase) in cathode_products {
+        *credits.entry((*substance, *phase)).or_insert(0.0) +=
+            *coefficient * cathode_extent_mol_per_bucket;
+    }
+    credits
+}
+
+fn electrode_phase_amount_deltas(
+    anode_reactants: &[(super::registry::SubstanceIndex, u32, Vec<MixturePhase>)],
+    anode_products: &[(super::registry::SubstanceIndex, f64, MixturePhase)],
+    anode_extent_mol_per_bucket: f64,
+    cathode_reactants: &[(super::registry::SubstanceIndex, u32, Vec<MixturePhase>)],
+    cathode_products: &[(super::registry::SubstanceIndex, f64, MixturePhase)],
+    cathode_extent_mol_per_bucket: f64,
+) -> ChemistryResult<Vec<(super::registry::SubstanceIndex, MixturePhase, f64)>> {
+    let mut deltas = Vec::new();
+    push_electrode_reactant_deltas(&mut deltas, anode_reactants, anode_extent_mol_per_bucket)?;
+    push_electrode_product_deltas(&mut deltas, anode_products, anode_extent_mol_per_bucket);
+    push_electrode_reactant_deltas(
+        &mut deltas,
+        cathode_reactants,
+        cathode_extent_mol_per_bucket,
+    )?;
+    push_electrode_product_deltas(&mut deltas, cathode_products, cathode_extent_mol_per_bucket);
+    Ok(deltas)
+}
+
+fn push_electrode_reactant_deltas(
+    deltas: &mut Vec<(super::registry::SubstanceIndex, MixturePhase, f64)>,
+    reactants: &[(super::registry::SubstanceIndex, u32, Vec<MixturePhase>)],
+    extent_mol_per_bucket: f64,
+) -> ChemistryResult<()> {
+    for (substance, coefficient, phases) in reactants {
+        let [phase] = phases.as_slice() else {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: "<electrolysis-cell>".to_string(),
+                reason: "electrode reactant must have exactly one concrete phase".to_string(),
+            });
+        };
+        deltas.push((
+            *substance,
+            *phase,
+            -(*coefficient as f64) * extent_mol_per_bucket,
+        ));
+    }
+    Ok(())
+}
+
+fn push_electrode_product_deltas(
+    deltas: &mut Vec<(super::registry::SubstanceIndex, MixturePhase, f64)>,
+    products: &[(super::registry::SubstanceIndex, f64, MixturePhase)],
+    extent_mol_per_bucket: f64,
+) {
+    for (substance, coefficient, phase) in products {
+        deltas.push((*substance, *phase, *coefficient * extent_mol_per_bucket));
+    }
+}
+
+fn half_reaction_quotient_in_phase(
     registry: &ChemistryRegistry,
     mixture: &Mixture,
     half: &RedoxHalfReaction,
+    phase: MixturePhase,
 ) -> ChemistryResult<f64> {
-    let products = terms_activity_product(registry, mixture, &half.products)?;
-    let reactants = terms_activity_product(registry, mixture, &half.reactants)?;
+    let products = terms_activity_product_in_phase(registry, mixture, &half.products, phase)?;
+    let reactants = terms_activity_product_in_phase(registry, mixture, &half.reactants, phase)?;
     let quotient = products / reactants;
     if !quotient.is_finite() || quotient <= 0.0 {
         return Err(ChemistryError::InvalidReaction {
@@ -981,15 +1089,17 @@ fn half_reaction_quotient(
     Ok(quotient)
 }
 
-fn terms_activity_product(
+fn terms_activity_product_in_phase(
     registry: &ChemistryRegistry,
     mixture: &Mixture,
     terms: &[StoichiometricTerm],
+    phase: MixturePhase,
 ) -> ChemistryResult<f64> {
     let mut product = 1.0;
     for term in terms {
+        let term_phase = electrode_term_phase(registry, mixture, &term.substance_id, phase)?;
         let activity = mixture
-            .activity_of(registry, &term.substance_id, MixturePhase::Aqueous)?
+            .activity_of(registry, &term.substance_id, term_phase)?
             .max(TRACE_CONCENTRATION_MOL_PER_BUCKET);
         product *= activity.powi(term.coefficient as i32);
     }
@@ -999,6 +1109,31 @@ fn terms_activity_product(
         ));
     }
     Ok(product)
+}
+
+fn electrode_term_phase(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    substance_id: &SubstanceId,
+    electrode_phase: MixturePhase,
+) -> ChemistryResult<MixturePhase> {
+    let substance = registry.substance(substance_id)?;
+    if matches!(
+        electrode_phase,
+        MixturePhase::MoltenMetal | MixturePhase::MoltenSlag
+    ) && substance.charge != 0
+    {
+        return Ok(electrode_phase);
+    }
+    if substance.aggregate_state_at(mixture.temperature_kelvin())? == SubstanceAggregateState::Gas {
+        return Ok(MixturePhase::Gas);
+    }
+    Ok(match substance.phase_properties.preferred_liquid_phase {
+        LiquidPhasePreference::MoltenMetal => MixturePhase::MoltenMetal,
+        LiquidPhasePreference::MoltenSlag => MixturePhase::MoltenSlag,
+        LiquidPhasePreference::Aqueous => MixturePhase::Aqueous,
+        LiquidPhasePreference::Organic => MixturePhase::Organic,
+    })
 }
 
 pub(crate) fn validate_half_reaction_conservation<F>(

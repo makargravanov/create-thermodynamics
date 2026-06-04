@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use super::condition::{AtmosphereCondition, ReactionCondition};
 use super::mixture::MixturePhase;
-use super::redox::RedoxHalfReaction;
+use super::redox::{RedoxHalfReaction, FARADAY_CONSTANT_COULOMBS_PER_MOL};
 use super::registry::ChemistryRegistry;
 use super::substance::{MaterialFormulaUnit, Substance, SubstanceId, SubstanceRepresentation};
 
@@ -113,7 +113,7 @@ fn generated_metallurgy_reactions(registry: &ChemistryRegistry) -> ChemistryResu
         }
     }
     for (oxide, oxide_formula) in &oxides {
-        if let Some(metal_products) = metal_products_for_formula(oxide_formula, &metals) {
+        if let Some(metal_products) = metal_products_for_formula(registry, oxide_formula, &metals) {
             if carbon_monoxide_reduction_allowed(oxide) {
                 reactions.push(carbon_monoxide_reduction_reaction(
                     oxide,
@@ -174,13 +174,27 @@ fn generated_metallurgy_redox_half_reactions(
             2,
             RedoxEnvironment::Any,
         ),
+        RedoxHalfReaction::oxidation(
+            "destroy:oxide_to_oxygen_in_molten_slag",
+            [(SubstanceId::from("destroy:oxide"), 2)],
+            [(SubstanceId::from("destroy:oxygen"), 1)],
+            4,
+            RedoxEnvironment::Any,
+        )
+        .with_standard_potential_volts(0.0),
     ];
     for (oxide, formula) in &oxides {
-        if let Some(metal_products) = metal_products_for_formula(formula, &metals) {
+        if let Some(metal_products) = metal_products_for_formula(registry, formula, &metals) {
             halves.push(metal_oxide_reduction_half_reaction(
                 oxide,
                 formula.oxide,
                 &metal_products,
+            ));
+            halves.push(molten_oxide_electrolysis_reduction_half_reaction(
+                oxide,
+                formula.oxide,
+                &metal_products,
+                molten_oxide_decomposition_potential_volts(oxide, formula),
             ));
         }
     }
@@ -246,33 +260,51 @@ fn sulfide_roasting_matches(sulfide: &MineralFormula, oxide: &MineralFormula) ->
 }
 
 fn metal_products_for_formula(
+    registry: &ChemistryRegistry,
     formula: &MineralFormula,
     metals: &BTreeMap<String, SubstanceId>,
 ) -> Option<Vec<(SubstanceId, u32)>> {
     let mut products = Vec::new();
     for (ion, coefficient) in &formula.cations {
-        let metal = metal_id_for_ion(ion, metals)?;
+        let metal = metal_id_for_ion(registry, ion, metals)?;
         products.push((metal, *coefficient));
     }
     Some(products)
 }
 
 fn metal_id_for_ion(
+    registry: &ChemistryRegistry,
     ion: &SubstanceId,
     metals: &BTreeMap<String, SubstanceId>,
 ) -> Option<SubstanceId> {
-    let element = match ion.as_str() {
-        "destroy:iron_ii" | "destroy:iron_iii" => "Fe",
-        "destroy:copper_i" | "destroy:copper_ii" => "Cu",
-        "destroy:zinc_ion" => "Zn",
-        "destroy:nickel_ion" => "Ni",
-        "destroy:lead_ii" => "Pb",
-        "destroy:aluminum_iii" => "Al",
-        "destroy:calcium_ion" => "Ca",
-        "destroy:magnesium_ion" => "Mg",
-        _ => return None,
-    };
-    metals.get(element).cloned()
+    let element = element_symbol_for_metal_cation(registry, ion)?;
+    metals.get(&element).cloned()
+}
+
+fn element_symbol_for_metal_cation(
+    registry: &ChemistryRegistry,
+    ion: &SubstanceId,
+) -> Option<String> {
+    let substance = registry.substance(ion).ok()?;
+    match &substance.representation {
+        SubstanceRepresentation::Ion {
+            parent_element: Some(element),
+        } => Some(element.clone()),
+        _ => substance
+            .molecular_structure
+            .as_ref()
+            .and_then(|structure| {
+                let mut elements = structure
+                    .atoms
+                    .iter()
+                    .filter(|atom| atom.element != "H")
+                    .map(|atom| atom.element.clone())
+                    .collect::<Vec<_>>();
+                elements.sort();
+                elements.dedup();
+                (elements.len() == 1).then(|| elements.remove(0))
+            }),
+    }
 }
 
 fn hydrogen_reduction_allowed(oxide: &Substance) -> bool {
@@ -532,6 +564,10 @@ fn metal_oxide_reduction_half_id(oxide: &Substance) -> String {
     format!("{}.molten_oxide_reduction_half", oxide.id)
 }
 
+fn molten_oxide_electrolysis_reduction_half_id(oxide: &Substance) -> String {
+    format!("{}.molten_oxide_electrolysis_reduction_half", oxide.id)
+}
+
 fn metal_oxide_reduction_half_reaction(
     oxide: &Substance,
     oxygen_count: u32,
@@ -546,4 +582,35 @@ fn metal_oxide_reduction_half_reaction(
         2 * oxygen_count,
         RedoxEnvironment::Any,
     )
+}
+
+fn molten_oxide_electrolysis_reduction_half_reaction(
+    oxide: &Substance,
+    oxygen_count: u32,
+    metal_products: &[(SubstanceId, u32)],
+    decomposition_potential_volts: f64,
+) -> RedoxHalfReaction {
+    let mut products = metal_products.to_vec();
+    products.push((SubstanceId::from("destroy:oxide"), oxygen_count));
+    RedoxHalfReaction::reduction(
+        molten_oxide_electrolysis_reduction_half_id(oxide),
+        [(oxide.id.clone(), 1)],
+        products,
+        2 * oxygen_count,
+        RedoxEnvironment::Any,
+    )
+    .with_standard_potential_volts(-decomposition_potential_volts)
+}
+
+fn molten_oxide_decomposition_potential_volts(oxide: &Substance, formula: &MineralFormula) -> f64 {
+    let electron_count = (2 * formula.oxide).max(1) as f64;
+    let cation_units = formula.cations.values().copied().sum::<u32>().max(1) as f64;
+    let heat_to_melt_j_per_mol = oxide.fusion_heat_j_per_mol
+        + oxide.molar_heat_capacity_j_per_mol_kelvin
+            * (oxide.melting_point_kelvin - 298.15).max(0.0);
+    let thermal_voltage =
+        (heat_to_melt_j_per_mol / (electron_count * FARADAY_CONSTANT_COULOMBS_PER_MOL)).max(0.0);
+    let refractory_voltage = (oxide.melting_point_kelvin / 2400.0).clamp(0.25, 1.35);
+    let oxide_to_cation_ratio = (formula.oxide as f64 / cation_units).clamp(0.25, 1.5);
+    (thermal_voltage + refractory_voltage + oxide_to_cation_ratio * 0.35).max(0.1)
 }
