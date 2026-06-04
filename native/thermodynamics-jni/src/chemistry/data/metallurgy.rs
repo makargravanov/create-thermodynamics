@@ -1,36 +1,70 @@
 use crate::chemistry::metallurgy::{
-    ComponentLimit, MetallurgicalPhaseKind, MetallurgicalPhaseModel,
-    MetallurgicalPhasePropertyModel, MetallurgicalSystem, PhaseWeightRule,
+    ComponentLimit, CompositionEnergyTerm, MetallurgicalPhaseKind, MetallurgicalPhaseModel,
+    MetallurgicalPhasePropertyModel, MetallurgicalSystem, PhaseBoundaryPoint, PhaseFreeEnergyModel,
+    PhaseKineticModel,
 };
 
 pub fn default_metallurgical_systems() -> Vec<MetallurgicalSystem> {
     vec![
         iron_carbon_system(),
+        iron_carbon_chromium_nickel_system(),
+        iron_carbon_manganese_silicon_system(),
         copper_zinc_system(),
         copper_tin_system(),
         aluminum_silicon_system(),
+        aluminum_copper_system(),
+        aluminum_copper_magnesium_system(),
+        aluminum_magnesium_system(),
+        aluminum_zinc_magnesium_system(),
+        nickel_chromium_system(),
+        nickel_chromium_aluminum_system(),
+        copper_nickel_system(),
+        magnesium_aluminum_zinc_system(),
+        titanium_aluminum_vanadium_system(),
     ]
 }
 
 fn iron_carbon_system() -> MetallurgicalSystem {
     MetallurgicalSystem::new("metallurgy:fe_c", ["Fe", "destroy:carbon"])
+        .phase_boundary(binary_boundary("Fe", "destroy:carbon", 0.0, 1811.0, 1811.0))
+        .phase_boundary(binary_boundary(
+            "Fe",
+            "destroy:carbon",
+            0.035,
+            1420.0,
+            1720.0,
+        ))
+        .phase_boundary(binary_boundary(
+            "Fe",
+            "destroy:carbon",
+            0.17,
+            1420.0,
+            1420.0,
+        ))
+        .phase_boundary(binary_boundary(
+            "Fe",
+            "destroy:carbon",
+            0.25,
+            1500.0,
+            1620.0,
+        ))
         .phase_model(
             MetallurgicalPhaseModel::new(
                 "metallurgy:fe_c/liquid",
                 MetallurgicalPhaseKind::Liquid,
                 properties(60.0, 120.0, 0.55, 0.95, 35.0, 0.45),
             )
-            .weight_rule(PhaseWeightRule::constant(6.0).temperature_window(1700.0, 3400.0)),
+            .free_energy_model(phase_energy(6.0).temperature_window(1700.0, 3400.0)),
         )
         .phase_model(
             MetallurgicalPhaseModel::new(
-                "metallurgy:fe_c/ferrite",
+                "metallurgy:fe_c/hypoeutectoid_ferrite",
                 MetallurgicalPhaseKind::Ferrite,
                 properties(95.0, 220.0, 0.35, 0.10, 80.0, 0.45),
             )
-            .limit(ComponentLimit::new("destroy:carbon", 0.0, 0.025))
-            .weight_rule(
-                PhaseWeightRule::composition_centered("destroy:carbon", 0.004, 0.03, 4.0)
+            .limit(ComponentLimit::new("destroy:carbon", 0.0, 0.055))
+            .free_energy_model(
+                composition_phase_energy("destroy:carbon", 0.004, 0.025, 4.2)
                     .temperature_window(0.0, 1185.0),
             ),
         )
@@ -41,8 +75,8 @@ fn iron_carbon_system() -> MetallurgicalSystem {
                 properties(150.0, 310.0, 0.28, 0.12, 18.0, 0.40),
             )
             .limit(ComponentLimit::new("destroy:carbon", 0.0, 0.09))
-            .weight_rule(
-                PhaseWeightRule::composition_centered("destroy:carbon", 0.035, 0.08, 5.0)
+            .free_energy_model(
+                composition_phase_energy("destroy:carbon", 0.035, 0.08, 5.0)
                     .temperature_window(900.0, 1800.0),
             ),
         )
@@ -53,8 +87,8 @@ fn iron_carbon_system() -> MetallurgicalSystem {
                 properties(800.0, 1200.0, 0.02, 0.55, 11.0, 0.20),
             )
             .limit(ComponentLimit::new("destroy:carbon", 0.01, 0.25))
-            .weight_rule(
-                PhaseWeightRule::composition_centered("destroy:carbon", 0.25, 0.25, 2.0)
+            .free_energy_model(
+                composition_phase_energy("destroy:carbon", 0.25, 0.25, 2.0)
                     .temperature_window(0.0, 1500.0),
             ),
         )
@@ -65,9 +99,34 @@ fn iron_carbon_system() -> MetallurgicalSystem {
                 properties(250.0, 520.0, 0.18, 0.18, 45.0, 0.35),
             )
             .limit(ComponentLimit::new("destroy:carbon", 0.02, 0.08))
-            .weight_rule(
-                PhaseWeightRule::composition_centered("destroy:carbon", 0.035, 0.04, 3.5)
+            .free_energy_model(
+                composition_phase_energy("destroy:carbon", 0.035, 0.04, 3.5)
                     .temperature_window(0.0, 1000.0),
+            ),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:fe_c/hypereutectoid_cementite_network",
+                MetallurgicalPhaseKind::Cementite,
+                properties(900.0, 1250.0, 0.01, 0.62, 9.0, 0.18),
+            )
+            .limit(ComponentLimit::new("destroy:carbon", 0.055, 0.25))
+            .free_energy_model(
+                composition_phase_energy("destroy:carbon", 0.12, 0.16, 3.2)
+                    .temperature_window(0.0, 1100.0),
+            ),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:fe_c/bainite",
+                MetallurgicalPhaseKind::Bainite,
+                properties(430.0, 1050.0, 0.11, 0.24, 32.0, 0.32),
+            )
+            .limit(ComponentLimit::new("destroy:carbon", 0.012, 0.10))
+            .free_energy_model(
+                composition_phase_energy("destroy:carbon", 0.035, 0.07, 1.7)
+                    .temperature_window(520.0, 850.0)
+                    .cooling_rate_stabilization(8.0, 9_000.0),
             ),
         )
         .phase_model(
@@ -77,23 +136,275 @@ fn iron_carbon_system() -> MetallurgicalSystem {
                 properties(650.0, 1500.0, 0.04, 0.30, 28.0, 0.25),
             )
             .limit(ComponentLimit::new("destroy:carbon", 0.01, 0.12))
-            .weight_rule(
-                PhaseWeightRule::composition_centered("destroy:carbon", 0.04, 0.08, 0.0)
+            .free_energy_model(
+                composition_phase_energy("destroy:carbon", 0.04, 0.08, 0.0)
                     .temperature_window(0.0, 650.0)
-                    .cooling_rate_bonus(80.0, 8.0),
+                    .cooling_rate_stabilization(80.0, 40_000.0),
+            ),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:fe_c/tempered_martensite",
+                MetallurgicalPhaseKind::TemperedMartensite,
+                properties(430.0, 1150.0, 0.12, 0.26, 31.0, 0.30),
+            )
+            .limit(ComponentLimit::new("destroy:carbon", 0.01, 0.12))
+            .free_energy_model(
+                composition_phase_energy("destroy:carbon", 0.04, 0.08, 4.6)
+                    .temperature_window(650.0, 950.0),
             ),
         )
 }
 
+fn iron_carbon_chromium_nickel_system() -> MetallurgicalSystem {
+    MetallurgicalSystem::new(
+        "metallurgy:fe_c_cr_ni",
+        ["Fe", "destroy:carbon", "Cr", "Ni"],
+    )
+    .phase_boundary(multi_boundary(
+        [
+            ("Fe", 0.70),
+            ("destroy:carbon", 0.01),
+            ("Cr", 0.18),
+            ("Ni", 0.11),
+        ],
+        1670.0,
+        1770.0,
+    ))
+    .phase_boundary(multi_boundary(
+        [
+            ("Fe", 0.58),
+            ("destroy:carbon", 0.02),
+            ("Cr", 0.28),
+            ("Ni", 0.12),
+        ],
+        1620.0,
+        1740.0,
+    ))
+    .phase_boundary(multi_boundary(
+        [
+            ("Fe", 0.73),
+            ("destroy:carbon", 0.01),
+            ("Cr", 0.10),
+            ("Ni", 0.16),
+        ],
+        1660.0,
+        1760.0,
+    ))
+    .phase_model(
+        MetallurgicalPhaseModel::new(
+            "metallurgy:fe_c_cr_ni/liquid",
+            MetallurgicalPhaseKind::Liquid,
+            properties(65.0, 135.0, 0.50, 0.92, 30.0, 0.65),
+        )
+        .free_energy_model(phase_energy(6.0).temperature_window(1650.0, 3400.0)),
+    )
+    .phase_model(
+        MetallurgicalPhaseModel::new(
+            "metallurgy:fe_c_cr_ni/austenitic_matrix",
+            MetallurgicalPhaseKind::Austenite,
+            properties(190.0, 420.0, 0.42, 0.72, 18.0, 0.90),
+        )
+        .limit(ComponentLimit::new("destroy:carbon", 0.0, 0.04))
+        .limit(ComponentLimit::new("Cr", 0.08, 0.30))
+        .limit(ComponentLimit::new("Ni", 0.04, 0.30))
+        .free_energy_model(
+            composition_phase_energy("Ni", 0.12, 0.24, 5.0).temperature_window(300.0, 1750.0),
+        ),
+    )
+    .phase_model(
+        MetallurgicalPhaseModel::new(
+            "metallurgy:fe_c_cr_ni/ferritic_matrix",
+            MetallurgicalPhaseKind::Ferrite,
+            properties(170.0, 360.0, 0.32, 0.66, 22.0, 0.86),
+        )
+        .limit(ComponentLimit::new("destroy:carbon", 0.0, 0.035))
+        .limit(ComponentLimit::new("Cr", 0.10, 0.35))
+        .limit(ComponentLimit::new("Ni", 0.0, 0.08))
+        .free_energy_model(
+            composition_phase_energy("Cr", 0.18, 0.25, 4.0).temperature_window(250.0, 1600.0),
+        ),
+    )
+    .phase_model(
+        MetallurgicalPhaseModel::new(
+            "metallurgy:fe_c_cr_ni/chromium_carbides",
+            MetallurgicalPhaseKind::Intermetallic,
+            properties(950.0, 1300.0, 0.03, 0.80, 12.0, 0.35),
+        )
+        .limit(ComponentLimit::new("destroy:carbon", 0.006, 0.08))
+        .limit(ComponentLimit::new("Cr", 0.08, 0.45))
+        .free_energy_model(
+            composition_phase_energy("destroy:carbon", 0.025, 0.06, 1.8)
+                .temperature_window(300.0, 1250.0),
+        ),
+    )
+    .phase_model(
+        MetallurgicalPhaseModel::new(
+            "metallurgy:fe_c_cr_ni/martensite",
+            MetallurgicalPhaseKind::Martensite,
+            properties(700.0, 1600.0, 0.05, 0.70, 20.0, 0.55),
+        )
+        .limit(ComponentLimit::new("destroy:carbon", 0.01, 0.10))
+        .free_energy_model(
+            composition_phase_energy("destroy:carbon", 0.035, 0.08, 0.0)
+                .temperature_window(0.0, 650.0)
+                .cooling_rate_stabilization(100.0, 25_000.0),
+        ),
+    )
+    .phase_model(
+        MetallurgicalPhaseModel::new(
+            "metallurgy:fe_c_cr_ni/tempered_martensite",
+            MetallurgicalPhaseKind::TemperedMartensite,
+            properties(480.0, 1250.0, 0.16, 0.66, 22.0, 0.66),
+        )
+        .limit(ComponentLimit::new("destroy:carbon", 0.01, 0.10))
+        .limit(ComponentLimit::new("Cr", 0.08, 0.30))
+        .free_energy_model(
+            composition_phase_energy("destroy:carbon", 0.035, 0.08, 4.2)
+                .temperature_window(650.0, 980.0),
+        ),
+    )
+}
+
+fn iron_carbon_manganese_silicon_system() -> MetallurgicalSystem {
+    MetallurgicalSystem::new(
+        "metallurgy:fe_c_mn_si",
+        ["Fe", "destroy:carbon", "Mn", "destroy:silicon"],
+    )
+    .phase_boundary(multi_boundary(
+        [
+            ("Fe", 0.94),
+            ("destroy:carbon", 0.02),
+            ("Mn", 0.03),
+            ("destroy:silicon", 0.01),
+        ],
+        1680.0,
+        1780.0,
+    ))
+    .phase_boundary(multi_boundary(
+        [
+            ("Fe", 0.86),
+            ("destroy:carbon", 0.04),
+            ("Mn", 0.08),
+            ("destroy:silicon", 0.02),
+        ],
+        1600.0,
+        1740.0,
+    ))
+    .phase_boundary(multi_boundary(
+        [
+            ("Fe", 0.80),
+            ("destroy:carbon", 0.08),
+            ("Mn", 0.10),
+            ("destroy:silicon", 0.02),
+        ],
+        1500.0,
+        1680.0,
+    ))
+    .phase_model(
+        MetallurgicalPhaseModel::new(
+            "metallurgy:fe_c_mn_si/liquid",
+            MetallurgicalPhaseKind::Liquid,
+            properties(62.0, 125.0, 0.52, 0.95, 33.0, 0.46),
+        )
+        .free_energy_model(phase_energy(6.0).temperature_window(1650.0, 3400.0)),
+    )
+    .phase_model(
+        MetallurgicalPhaseModel::new(
+            "metallurgy:fe_c_mn_si/ferrite",
+            MetallurgicalPhaseKind::Ferrite,
+            properties(125.0, 300.0, 0.33, 0.18, 70.0, 0.48),
+        )
+        .limit(ComponentLimit::new("destroy:carbon", 0.0, 0.035))
+        .limit(ComponentLimit::new("Mn", 0.0, 0.12))
+        .limit(ComponentLimit::new("destroy:silicon", 0.0, 0.08))
+        .free_energy_model(
+            composition_phase_energy("destroy:carbon", 0.006, 0.04, 4.0)
+                .temperature_window(250.0, 1185.0),
+        ),
+    )
+    .phase_model(
+        MetallurgicalPhaseModel::new(
+            "metallurgy:fe_c_mn_si/pearlite",
+            MetallurgicalPhaseKind::Pearlite,
+            properties(290.0, 620.0, 0.16, 0.25, 40.0, 0.38),
+        )
+        .limit(ComponentLimit::new("destroy:carbon", 0.018, 0.09))
+        .limit(ComponentLimit::new("Mn", 0.0, 0.16))
+        .free_energy_model(
+            composition_phase_energy("destroy:carbon", 0.035, 0.05, 4.0)
+                .temperature_window(250.0, 1000.0),
+        ),
+    )
+    .phase_model(
+        MetallurgicalPhaseModel::new(
+            "metallurgy:fe_c_mn_si/bainite",
+            MetallurgicalPhaseKind::Bainite,
+            properties(470.0, 1150.0, 0.10, 0.29, 30.0, 0.34),
+        )
+        .limit(ComponentLimit::new("destroy:carbon", 0.012, 0.10))
+        .limit(ComponentLimit::new("Mn", 0.0, 0.18))
+        .limit(ComponentLimit::new("destroy:silicon", 0.0, 0.08))
+        .free_energy_model(
+            composition_phase_energy("destroy:carbon", 0.04, 0.07, 2.2)
+                .composition_term(CompositionEnergyTerm::new("Mn", 0.06, 0.12, 8_000.0))
+                .temperature_window(520.0, 880.0)
+                .cooling_rate_stabilization(6.0, 12_000.0),
+        ),
+    )
+    .phase_model(
+        MetallurgicalPhaseModel::new(
+            "metallurgy:fe_c_mn_si/austenite",
+            MetallurgicalPhaseKind::Austenite,
+            properties(165.0, 360.0, 0.30, 0.16, 16.0, 0.42),
+        )
+        .limit(ComponentLimit::new("destroy:carbon", 0.0, 0.10))
+        .limit(ComponentLimit::new("Mn", 0.0, 0.20))
+        .free_energy_model(
+            composition_phase_energy("Mn", 0.05, 0.16, 3.0).temperature_window(850.0, 1800.0),
+        ),
+    )
+    .phase_model(
+        MetallurgicalPhaseModel::new(
+            "metallurgy:fe_c_mn_si/martensite",
+            MetallurgicalPhaseKind::Martensite,
+            properties(720.0, 1700.0, 0.035, 0.34, 25.0, 0.28),
+        )
+        .limit(ComponentLimit::new("destroy:carbon", 0.012, 0.12))
+        .free_energy_model(
+            composition_phase_energy("destroy:carbon", 0.045, 0.09, 0.0)
+                .temperature_window(0.0, 650.0)
+                .cooling_rate_stabilization(70.0, 35_000.0),
+        ),
+    )
+    .phase_model(
+        MetallurgicalPhaseModel::new(
+            "metallurgy:fe_c_mn_si/tempered_martensite",
+            MetallurgicalPhaseKind::TemperedMartensite,
+            properties(460.0, 1200.0, 0.13, 0.30, 29.0, 0.34),
+        )
+        .limit(ComponentLimit::new("destroy:carbon", 0.012, 0.12))
+        .limit(ComponentLimit::new("Mn", 0.0, 0.20))
+        .free_energy_model(
+            composition_phase_energy("destroy:carbon", 0.045, 0.09, 4.4)
+                .temperature_window(650.0, 980.0),
+        ),
+    )
+}
+
 fn copper_zinc_system() -> MetallurgicalSystem {
     MetallurgicalSystem::new("metallurgy:cu_zn", ["Cu", "Zn"])
+        .phase_boundary(binary_boundary("Cu", "Zn", 0.0, 1358.0, 1358.0))
+        .phase_boundary(binary_boundary("Cu", "Zn", 0.30, 1180.0, 1250.0))
+        .phase_boundary(binary_boundary("Cu", "Zn", 0.45, 1120.0, 1210.0))
+        .phase_boundary(binary_boundary("Cu", "Zn", 1.0, 692.7, 692.7))
         .phase_model(
             MetallurgicalPhaseModel::new(
                 "metallurgy:cu_zn/liquid",
                 MetallurgicalPhaseKind::Liquid,
                 properties(50.0, 100.0, 0.50, 0.20, 55.0, 0.55),
             )
-            .weight_rule(PhaseWeightRule::constant(5.0).temperature_window(1150.0, 3000.0)),
+            .free_energy_model(phase_energy(5.0).temperature_window(1150.0, 3000.0)),
         )
         .phase_model(
             MetallurgicalPhaseModel::new(
@@ -102,7 +413,7 @@ fn copper_zinc_system() -> MetallurgicalSystem {
                 properties(100.0, 260.0, 0.45, 0.08, 85.0, 0.55),
             )
             .limit(ComponentLimit::new("Zn", 0.0, 0.38))
-            .weight_rule(PhaseWeightRule::composition_centered("Zn", 0.18, 0.38, 4.0)),
+            .free_energy_model(composition_phase_energy("Zn", 0.18, 0.38, 4.0)),
         )
         .phase_model(
             MetallurgicalPhaseModel::new(
@@ -111,19 +422,23 @@ fn copper_zinc_system() -> MetallurgicalSystem {
                 properties(170.0, 480.0, 0.25, 0.12, 45.0, 0.45),
             )
             .limit(ComponentLimit::new("Zn", 0.30, 0.55))
-            .weight_rule(PhaseWeightRule::composition_centered("Zn", 0.45, 0.25, 3.0)),
+            .free_energy_model(composition_phase_energy("Zn", 0.45, 0.25, 3.0)),
         )
 }
 
 fn copper_tin_system() -> MetallurgicalSystem {
     MetallurgicalSystem::new("metallurgy:cu_sn", ["Cu", "Sn"])
+        .phase_boundary(binary_boundary("Cu", "Sn", 0.0, 1358.0, 1358.0))
+        .phase_boundary(binary_boundary("Cu", "Sn", 0.10, 1120.0, 1250.0))
+        .phase_boundary(binary_boundary("Cu", "Sn", 0.22, 1070.0, 1120.0))
+        .phase_boundary(binary_boundary("Cu", "Sn", 1.0, 505.0, 505.0))
         .phase_model(
             MetallurgicalPhaseModel::new(
                 "metallurgy:cu_sn/liquid",
                 MetallurgicalPhaseKind::Liquid,
                 properties(45.0, 90.0, 0.45, 0.18, 50.0, 0.50),
             )
-            .weight_rule(PhaseWeightRule::constant(5.0).temperature_window(1050.0, 2900.0)),
+            .free_energy_model(phase_energy(5.0).temperature_window(1050.0, 2900.0)),
         )
         .phase_model(
             MetallurgicalPhaseModel::new(
@@ -132,7 +447,7 @@ fn copper_tin_system() -> MetallurgicalSystem {
                 properties(130.0, 340.0, 0.35, 0.10, 70.0, 0.55),
             )
             .limit(ComponentLimit::new("Sn", 0.0, 0.16))
-            .weight_rule(PhaseWeightRule::composition_centered("Sn", 0.08, 0.16, 4.0)),
+            .free_energy_model(composition_phase_energy("Sn", 0.08, 0.16, 4.0)),
         )
         .phase_model(
             MetallurgicalPhaseModel::new(
@@ -141,19 +456,35 @@ fn copper_tin_system() -> MetallurgicalSystem {
                 properties(360.0, 800.0, 0.06, 0.22, 25.0, 0.35),
             )
             .limit(ComponentLimit::new("Sn", 0.12, 0.45))
-            .weight_rule(PhaseWeightRule::composition_centered("Sn", 0.25, 0.22, 2.5)),
+            .free_energy_model(composition_phase_energy("Sn", 0.25, 0.22, 2.5)),
         )
 }
 
 fn aluminum_silicon_system() -> MetallurgicalSystem {
     MetallurgicalSystem::new("metallurgy:al_si", ["Al", "destroy:silicon"])
+        .phase_boundary(binary_boundary("Al", "destroy:silicon", 0.0, 933.0, 933.0))
+        .phase_boundary(binary_boundary("Al", "destroy:silicon", 0.12, 850.0, 850.0))
+        .phase_boundary(binary_boundary(
+            "Al",
+            "destroy:silicon",
+            0.30,
+            900.0,
+            1200.0,
+        ))
+        .phase_boundary(binary_boundary(
+            "Al",
+            "destroy:silicon",
+            1.0,
+            1687.0,
+            1687.0,
+        ))
         .phase_model(
             MetallurgicalPhaseModel::new(
                 "metallurgy:al_si/liquid",
                 MetallurgicalPhaseKind::Liquid,
                 properties(35.0, 70.0, 0.50, 0.05, 95.0, 0.60),
             )
-            .weight_rule(PhaseWeightRule::constant(5.0).temperature_window(850.0, 2800.0)),
+            .free_energy_model(phase_energy(5.0).temperature_window(850.0, 2800.0)),
         )
         .phase_model(
             MetallurgicalPhaseModel::new(
@@ -162,7 +493,7 @@ fn aluminum_silicon_system() -> MetallurgicalSystem {
                 properties(55.0, 170.0, 0.35, 0.04, 120.0, 0.60),
             )
             .limit(ComponentLimit::new("destroy:silicon", 0.0, 0.15))
-            .weight_rule(PhaseWeightRule::composition_centered(
+            .free_energy_model(composition_phase_energy(
                 "destroy:silicon",
                 0.07,
                 0.15,
@@ -176,12 +507,442 @@ fn aluminum_silicon_system() -> MetallurgicalSystem {
                 properties(450.0, 700.0, 0.03, 0.25, 30.0, 0.35),
             )
             .limit(ComponentLimit::new("destroy:silicon", 0.12, 0.60))
-            .weight_rule(PhaseWeightRule::composition_centered(
+            .free_energy_model(composition_phase_energy(
                 "destroy:silicon",
                 0.25,
                 0.28,
                 2.0,
             )),
+        )
+}
+
+fn aluminum_copper_system() -> MetallurgicalSystem {
+    MetallurgicalSystem::new("metallurgy:al_cu", ["Al", "Cu"])
+        .phase_boundary(binary_boundary("Al", "Cu", 0.0, 933.0, 933.0))
+        .phase_boundary(binary_boundary("Al", "Cu", 0.17, 821.0, 821.0))
+        .phase_boundary(binary_boundary("Al", "Cu", 0.33, 820.0, 900.0))
+        .phase_boundary(binary_boundary("Al", "Cu", 1.0, 1358.0, 1358.0))
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:al_cu/liquid",
+                MetallurgicalPhaseKind::Liquid,
+                properties(35.0, 75.0, 0.52, 0.06, 85.0, 0.45),
+            )
+            .free_energy_model(phase_energy(5.0).temperature_window(850.0, 2800.0)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:al_cu/aluminum_solid_solution",
+                MetallurgicalPhaseKind::SolidSolution,
+                properties(75.0, 240.0, 0.30, 0.055, 110.0, 0.48),
+            )
+            .limit(ComponentLimit::new("Cu", 0.0, 0.08))
+            .free_energy_model(composition_phase_energy("Cu", 0.025, 0.08, 4.5)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:al_cu/theta_precipitate",
+                MetallurgicalPhaseKind::Intermetallic,
+                properties(420.0, 900.0, 0.04, 0.16, 45.0, 0.30),
+            )
+            .limit(ComponentLimit::new("Cu", 0.02, 0.35))
+            .free_energy_model(
+                composition_phase_energy("Cu", 0.10, 0.18, 2.5).temperature_window(250.0, 825.0),
+            ),
+        )
+}
+
+fn aluminum_copper_magnesium_system() -> MetallurgicalSystem {
+    MetallurgicalSystem::new("metallurgy:al_cu_mg", ["Al", "Cu", "Mg"])
+        .phase_boundary(multi_boundary(
+            [("Al", 0.93), ("Cu", 0.05), ("Mg", 0.02)],
+            780.0,
+            910.0,
+        ))
+        .phase_boundary(multi_boundary(
+            [("Al", 0.88), ("Cu", 0.08), ("Mg", 0.04)],
+            760.0,
+            890.0,
+        ))
+        .phase_boundary(multi_boundary(
+            [("Al", 0.80), ("Cu", 0.14), ("Mg", 0.06)],
+            735.0,
+            870.0,
+        ))
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:al_cu_mg/liquid",
+                MetallurgicalPhaseKind::Liquid,
+                properties(34.0, 72.0, 0.50, 0.065, 84.0, 0.44),
+            )
+            .free_energy_model(phase_energy(5.0).temperature_window(850.0, 2800.0)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:al_cu_mg/aluminum_matrix",
+                MetallurgicalPhaseKind::SolidSolution,
+                properties(105.0, 320.0, 0.24, 0.075, 92.0, 0.46),
+            )
+            .limit(ComponentLimit::new("Cu", 0.0, 0.12))
+            .limit(ComponentLimit::new("Mg", 0.0, 0.08))
+            .free_energy_model(
+                composition_phase_energy("Cu", 0.04, 0.10, 4.2)
+                    .composition_term(CompositionEnergyTerm::new("Mg", 0.02, 0.06, 14_000.0)),
+            ),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:al_cu_mg/theta_al2cu",
+                MetallurgicalPhaseKind::Intermetallic,
+                properties(460.0, 980.0, 0.035, 0.17, 42.0, 0.30),
+            )
+            .limit(ComponentLimit::new("Cu", 0.025, 0.28))
+            .free_energy_model(
+                composition_phase_energy("Cu", 0.13, 0.16, 2.4).temperature_window(280.0, 820.0),
+            )
+            .kinetic_model(precipitation_kinetics(1.6e-4)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:al_cu_mg/s_phase_al2cumg",
+                MetallurgicalPhaseKind::Intermetallic,
+                properties(540.0, 1120.0, 0.028, 0.20, 34.0, 0.28),
+            )
+            .limit(ComponentLimit::new("Cu", 0.035, 0.24))
+            .limit(ComponentLimit::new("Mg", 0.012, 0.16))
+            .free_energy_model(
+                composition_phase_energy("Cu", 0.09, 0.14, 2.1)
+                    .composition_term(CompositionEnergyTerm::new("Mg", 0.04, 0.10, 12_000.0))
+                    .temperature_window(280.0, 780.0),
+            )
+            .kinetic_model(precipitation_kinetics(2.2e-4)),
+        )
+}
+
+fn aluminum_magnesium_system() -> MetallurgicalSystem {
+    MetallurgicalSystem::new("metallurgy:al_mg", ["Al", "Mg"])
+        .phase_boundary(binary_boundary("Al", "Mg", 0.0, 933.0, 933.0))
+        .phase_boundary(binary_boundary("Al", "Mg", 0.18, 720.0, 880.0))
+        .phase_boundary(binary_boundary("Al", "Mg", 0.35, 710.0, 820.0))
+        .phase_boundary(binary_boundary("Al", "Mg", 1.0, 923.0, 923.0))
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:al_mg/liquid",
+                MetallurgicalPhaseKind::Liquid,
+                properties(32.0, 68.0, 0.55, 0.055, 95.0, 0.50),
+            )
+            .free_energy_model(phase_energy(5.0).temperature_window(850.0, 2800.0)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:al_mg/solid_solution",
+                MetallurgicalPhaseKind::SolidSolution,
+                properties(85.0, 260.0, 0.34, 0.07, 95.0, 0.56),
+            )
+            .limit(ComponentLimit::new("Mg", 0.0, 0.18))
+            .free_energy_model(composition_phase_energy("Mg", 0.06, 0.16, 4.0)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:al_mg/beta_precipitate",
+                MetallurgicalPhaseKind::Intermetallic,
+                properties(300.0, 650.0, 0.06, 0.18, 40.0, 0.35),
+            )
+            .limit(ComponentLimit::new("Mg", 0.08, 0.45))
+            .free_energy_model(
+                composition_phase_energy("Mg", 0.22, 0.24, 2.0).temperature_window(250.0, 800.0),
+            ),
+        )
+}
+
+fn aluminum_zinc_magnesium_system() -> MetallurgicalSystem {
+    MetallurgicalSystem::new("metallurgy:al_zn_mg", ["Al", "Zn", "Mg"])
+        .phase_boundary(multi_boundary(
+            [("Al", 0.90), ("Zn", 0.07), ("Mg", 0.03)],
+            750.0,
+            890.0,
+        ))
+        .phase_boundary(multi_boundary(
+            [("Al", 0.82), ("Zn", 0.12), ("Mg", 0.06)],
+            720.0,
+            850.0,
+        ))
+        .phase_boundary(multi_boundary(
+            [("Al", 0.70), ("Zn", 0.20), ("Mg", 0.10)],
+            700.0,
+            830.0,
+        ))
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:al_zn_mg/liquid",
+                MetallurgicalPhaseKind::Liquid,
+                properties(34.0, 70.0, 0.50, 0.065, 82.0, 0.44),
+            )
+            .free_energy_model(phase_energy(5.0).temperature_window(820.0, 2800.0)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:al_zn_mg/aluminum_matrix",
+                MetallurgicalPhaseKind::SolidSolution,
+                properties(115.0, 360.0, 0.22, 0.085, 78.0, 0.45),
+            )
+            .limit(ComponentLimit::new("Zn", 0.0, 0.16))
+            .limit(ComponentLimit::new("Mg", 0.0, 0.10))
+            .free_energy_model(composition_phase_energy("Zn", 0.06, 0.14, 4.0)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:al_zn_mg/eta_precipitate",
+                MetallurgicalPhaseKind::Intermetallic,
+                properties(520.0, 1050.0, 0.035, 0.20, 35.0, 0.25),
+            )
+            .limit(ComponentLimit::new("Zn", 0.03, 0.35))
+            .limit(ComponentLimit::new("Mg", 0.01, 0.20))
+            .free_energy_model(
+                composition_phase_energy("Zn", 0.14, 0.22, 2.6).temperature_window(250.0, 760.0),
+            ),
+        )
+}
+
+fn nickel_chromium_system() -> MetallurgicalSystem {
+    MetallurgicalSystem::new("metallurgy:ni_cr", ["Ni", "Cr"])
+        .phase_boundary(binary_boundary("Ni", "Cr", 0.0, 1728.0, 1728.0))
+        .phase_boundary(binary_boundary("Ni", "Cr", 0.20, 1680.0, 1780.0))
+        .phase_boundary(binary_boundary("Ni", "Cr", 0.50, 1750.0, 1900.0))
+        .phase_boundary(binary_boundary("Ni", "Cr", 1.0, 2180.0, 2180.0))
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:ni_cr/liquid",
+                MetallurgicalPhaseKind::Liquid,
+                properties(70.0, 150.0, 0.45, 1.05, 20.0, 0.85),
+            )
+            .free_energy_model(phase_energy(5.0).temperature_window(1650.0, 3500.0)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:ni_cr/nickel_chromium_solution",
+                MetallurgicalPhaseKind::SolidSolution,
+                properties(210.0, 520.0, 0.28, 1.10, 18.0, 0.92),
+            )
+            .limit(ComponentLimit::new("Cr", 0.0, 0.45))
+            .free_energy_model(composition_phase_energy("Cr", 0.18, 0.35, 4.5)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:ni_cr/chromium_rich_phase",
+                MetallurgicalPhaseKind::Intermetallic,
+                properties(520.0, 1000.0, 0.08, 1.20, 14.0, 0.80),
+            )
+            .limit(ComponentLimit::new("Cr", 0.30, 0.80))
+            .free_energy_model(composition_phase_energy("Cr", 0.55, 0.30, 2.0)),
+        )
+}
+
+fn nickel_chromium_aluminum_system() -> MetallurgicalSystem {
+    MetallurgicalSystem::new("metallurgy:ni_cr_al", ["Ni", "Cr", "Al"])
+        .phase_boundary(multi_boundary(
+            [("Ni", 0.80), ("Cr", 0.14), ("Al", 0.06)],
+            1600.0,
+            1720.0,
+        ))
+        .phase_boundary(multi_boundary(
+            [("Ni", 0.72), ("Cr", 0.16), ("Al", 0.12)],
+            1580.0,
+            1710.0,
+        ))
+        .phase_boundary(multi_boundary(
+            [("Ni", 0.62), ("Cr", 0.18), ("Al", 0.20)],
+            1540.0,
+            1690.0,
+        ))
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:ni_cr_al/liquid",
+                MetallurgicalPhaseKind::Liquid,
+                properties(68.0, 145.0, 0.42, 1.08, 18.0, 0.86),
+            )
+            .free_energy_model(phase_energy(5.0).temperature_window(1650.0, 3600.0)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:ni_cr_al/gamma_matrix",
+                MetallurgicalPhaseKind::SolidSolution,
+                properties(260.0, 720.0, 0.22, 1.18, 16.0, 0.94),
+            )
+            .limit(ComponentLimit::new("Cr", 0.05, 0.30))
+            .limit(ComponentLimit::new("Al", 0.0, 0.18))
+            .free_energy_model(
+                composition_phase_energy("Cr", 0.16, 0.24, 4.4)
+                    .composition_term(CompositionEnergyTerm::new("Al", 0.08, 0.14, 10_000.0))
+                    .temperature_window(300.0, 1700.0),
+            ),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:ni_cr_al/gamma_prime_ni3al",
+                MetallurgicalPhaseKind::Intermetallic,
+                properties(620.0, 1250.0, 0.07, 1.35, 12.0, 0.90),
+            )
+            .limit(ComponentLimit::new("Al", 0.06, 0.28))
+            .free_energy_model(
+                composition_phase_energy("Al", 0.18, 0.16, 2.2).temperature_window(700.0, 1450.0),
+            )
+            .kinetic_model(precipitation_kinetics(1.1e-4)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:ni_cr_al/chromium_rich",
+                MetallurgicalPhaseKind::Intermetallic,
+                properties(560.0, 1080.0, 0.06, 1.24, 14.0, 0.88),
+            )
+            .limit(ComponentLimit::new("Cr", 0.22, 0.55))
+            .free_energy_model(composition_phase_energy("Cr", 0.35, 0.28, 1.8)),
+        )
+}
+
+fn copper_nickel_system() -> MetallurgicalSystem {
+    MetallurgicalSystem::new("metallurgy:cu_ni", ["Cu", "Ni"])
+        .phase_boundary(binary_boundary("Cu", "Ni", 0.0, 1358.0, 1358.0))
+        .phase_boundary(binary_boundary("Cu", "Ni", 0.30, 1500.0, 1580.0))
+        .phase_boundary(binary_boundary("Cu", "Ni", 0.70, 1620.0, 1700.0))
+        .phase_boundary(binary_boundary("Cu", "Ni", 1.0, 1728.0, 1728.0))
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:cu_ni/liquid",
+                MetallurgicalPhaseKind::Liquid,
+                properties(48.0, 95.0, 0.48, 0.28, 48.0, 0.72),
+            )
+            .free_energy_model(phase_energy(5.0).temperature_window(1400.0, 3200.0)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:cu_ni/continuous_solid_solution",
+                MetallurgicalPhaseKind::SolidSolution,
+                properties(145.0, 390.0, 0.36, 0.36, 42.0, 0.82),
+            )
+            .limit(ComponentLimit::new("Ni", 0.0, 1.0))
+            .free_energy_model(composition_phase_energy("Ni", 0.35, 0.65, 5.0)),
+        )
+}
+
+fn magnesium_aluminum_zinc_system() -> MetallurgicalSystem {
+    MetallurgicalSystem::new("metallurgy:mg_al_zn", ["Mg", "Al", "Zn"])
+        .phase_boundary(multi_boundary(
+            [("Mg", 0.92), ("Al", 0.06), ("Zn", 0.02)],
+            720.0,
+            900.0,
+        ))
+        .phase_boundary(multi_boundary(
+            [("Mg", 0.84), ("Al", 0.12), ("Zn", 0.04)],
+            690.0,
+            860.0,
+        ))
+        .phase_boundary(multi_boundary(
+            [("Mg", 0.75), ("Al", 0.18), ("Zn", 0.07)],
+            650.0,
+            820.0,
+        ))
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:mg_al_zn/liquid",
+                MetallurgicalPhaseKind::Liquid,
+                properties(28.0, 58.0, 0.58, 0.09, 92.0, 0.42),
+            )
+            .free_energy_model(phase_energy(5.0).temperature_window(820.0, 2500.0)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:mg_al_zn/magnesium_matrix",
+                MetallurgicalPhaseKind::SolidSolution,
+                properties(70.0, 230.0, 0.30, 0.12, 74.0, 0.45),
+            )
+            .limit(ComponentLimit::new("Al", 0.0, 0.20))
+            .limit(ComponentLimit::new("Zn", 0.0, 0.10))
+            .free_energy_model(
+                composition_phase_energy("Al", 0.08, 0.16, 4.2)
+                    .composition_term(CompositionEnergyTerm::new("Zn", 0.03, 0.08, 9_000.0)),
+            ),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:mg_al_zn/beta_mg17al12",
+                MetallurgicalPhaseKind::Intermetallic,
+                properties(220.0, 520.0, 0.08, 0.18, 45.0, 0.30),
+            )
+            .limit(ComponentLimit::new("Al", 0.08, 0.35))
+            .free_energy_model(
+                composition_phase_energy("Al", 0.22, 0.20, 2.1).temperature_window(300.0, 740.0),
+            )
+            .kinetic_model(precipitation_kinetics(1.4e-4)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:mg_al_zn/mgzn_precipitate",
+                MetallurgicalPhaseKind::Intermetallic,
+                properties(260.0, 620.0, 0.055, 0.20, 38.0, 0.28),
+            )
+            .limit(ComponentLimit::new("Zn", 0.025, 0.18))
+            .free_energy_model(
+                composition_phase_energy("Zn", 0.08, 0.12, 1.9).temperature_window(300.0, 700.0),
+            )
+            .kinetic_model(precipitation_kinetics(1.8e-4)),
+        )
+}
+
+fn titanium_aluminum_vanadium_system() -> MetallurgicalSystem {
+    MetallurgicalSystem::new("metallurgy:ti_al_v", ["Ti", "Al", "V"])
+        .phase_boundary(multi_boundary(
+            [("Ti", 0.90), ("Al", 0.06), ("V", 0.04)],
+            1850.0,
+            1940.0,
+        ))
+        .phase_boundary(multi_boundary(
+            [("Ti", 0.82), ("Al", 0.12), ("V", 0.06)],
+            1780.0,
+            1910.0,
+        ))
+        .phase_boundary(multi_boundary(
+            [("Ti", 0.74), ("Al", 0.16), ("V", 0.10)],
+            1720.0,
+            1880.0,
+        ))
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:ti_al_v/liquid",
+                MetallurgicalPhaseKind::Liquid,
+                properties(55.0, 110.0, 0.48, 0.95, 28.0, 0.75),
+            )
+            .free_energy_model(phase_energy(5.0).temperature_window(1900.0, 3600.0)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:ti_al_v/alpha_titanium",
+                MetallurgicalPhaseKind::SolidSolution,
+                properties(320.0, 900.0, 0.15, 1.10, 18.0, 0.82),
+            )
+            .limit(ComponentLimit::new("Al", 0.0, 0.16))
+            .limit(ComponentLimit::new("V", 0.0, 0.12))
+            .free_energy_model(composition_phase_energy("Al", 0.08, 0.14, 4.0)),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:ti_al_v/beta_titanium",
+                MetallurgicalPhaseKind::SolidSolution,
+                properties(280.0, 820.0, 0.22, 1.00, 22.0, 0.76),
+            )
+            .limit(ComponentLimit::new("V", 0.04, 0.30))
+            .free_energy_model(
+                composition_phase_energy("V", 0.12, 0.20, 3.5).temperature_window(900.0, 1900.0),
+            ),
+        )
+        .phase_model(
+            MetallurgicalPhaseModel::new(
+                "metallurgy:ti_al_v/titanium_aluminide",
+                MetallurgicalPhaseKind::Intermetallic,
+                properties(460.0, 1050.0, 0.06, 1.25, 15.0, 0.78),
+            )
+            .limit(ComponentLimit::new("Al", 0.12, 0.45))
+            .free_energy_model(composition_phase_energy("Al", 0.28, 0.25, 1.8)),
         )
 }
 
@@ -201,4 +962,58 @@ fn properties(
         thermal_conductivity_w_per_meter_kelvin,
         corrosion_resistance_score,
     }
+}
+
+fn phase_energy(stability_depth: f64) -> PhaseFreeEnergyModel {
+    PhaseFreeEnergyModel::new(-stability_depth * 5_000.0, 0.0)
+}
+
+fn composition_phase_energy(
+    component: impl Into<crate::chemistry::metallurgy::MetallurgicalComponentId>,
+    center_fraction: f64,
+    width_fraction: f64,
+    stability_depth: f64,
+) -> PhaseFreeEnergyModel {
+    phase_energy(stability_depth).composition_term(CompositionEnergyTerm::new(
+        component,
+        center_fraction,
+        width_fraction,
+        20_000.0,
+    ))
+}
+
+fn precipitation_kinetics(precipitation_rate_per_second: f64) -> PhaseKineticModel {
+    PhaseKineticModel::new(
+        2.0e-13,
+        175_000.0,
+        0.01,
+        0.0015,
+        5.0e-5,
+        precipitation_rate_per_second,
+    )
+}
+
+fn binary_boundary(
+    first_component: &'static str,
+    second_component: &'static str,
+    second_fraction: f64,
+    solidus_kelvin: f64,
+    liquidus_kelvin: f64,
+) -> PhaseBoundaryPoint {
+    PhaseBoundaryPoint::new(
+        [
+            (first_component, 1.0 - second_fraction),
+            (second_component, second_fraction),
+        ],
+        solidus_kelvin,
+        liquidus_kelvin,
+    )
+}
+
+fn multi_boundary<const N: usize>(
+    composition: [(&'static str, f64); N],
+    solidus_kelvin: f64,
+    liquidus_kelvin: f64,
+) -> PhaseBoundaryPoint {
+    PhaseBoundaryPoint::new(composition, solidus_kelvin, liquidus_kelvin)
 }
