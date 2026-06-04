@@ -1,3 +1,5 @@
+#[path = "core/alloy.rs"]
+pub mod alloy;
 #[path = "molecule/canonical.rs"]
 pub mod canonical;
 #[path = "data/catalog.rs"]

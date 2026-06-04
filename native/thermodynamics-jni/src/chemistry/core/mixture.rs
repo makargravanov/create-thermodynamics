@@ -2018,14 +2018,31 @@ impl Mixture {
             .iter()
             .filter_map(|component| {
                 let substance = registry.substance_by_index(component.substance).ok()?;
-                (substance_can_anchor_liquid_phase(substance)
-                    && component.total_concentration() > TRACE_CONCENTRATION_MOL_PER_BUCKET
-                    && (component.condensed_concentration() > TRACE_CONCENTRATION_MOL_PER_BUCKET
-                        || substance
-                            .aggregate_state_at(self.temperature_kelvin)
-                            .ok()
-                            .is_some_and(|state| state == SubstanceAggregateState::Liquid)))
-                .then_some(component.substance)
+                if !substance_can_anchor_liquid_phase(substance)
+                    || component.total_concentration() <= TRACE_CONCENTRATION_MOL_PER_BUCKET
+                {
+                    return None;
+                }
+                let is_liquid_at_temperature = substance
+                    .aggregate_state_at(self.temperature_kelvin)
+                    .ok()
+                    .is_some_and(|state| state == SubstanceAggregateState::Liquid);
+                let has_matching_molten_phase =
+                    match substance.phase_properties.preferred_liquid_phase {
+                        LiquidPhasePreference::MoltenMetal => {
+                            component.amount_in_phase(MixturePhase::MoltenMetal)
+                                > TRACE_CONCENTRATION_MOL_PER_BUCKET
+                        }
+                        LiquidPhasePreference::MoltenSlag => {
+                            component.amount_in_phase(MixturePhase::MoltenSlag)
+                                > TRACE_CONCENTRATION_MOL_PER_BUCKET
+                        }
+                        LiquidPhasePreference::Aqueous | LiquidPhasePreference::Organic => {
+                            component.condensed_concentration() > TRACE_CONCENTRATION_MOL_PER_BUCKET
+                        }
+                    };
+                (is_liquid_at_temperature || has_matching_molten_phase)
+                    .then_some(component.substance)
             })
             .collect::<Vec<_>>();
         let mut clusters: Vec<BTreeSet<SubstanceIndex>> = Vec::new();

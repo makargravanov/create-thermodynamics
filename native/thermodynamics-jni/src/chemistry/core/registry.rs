@@ -15,8 +15,8 @@ use super::solution::{
     IndexedPrecipitation, PrecipitationSpec,
 };
 use super::substance::{
-    MaterialFormulaUnit, SolventRole, Substance, SubstanceAggregateState, SubstanceId,
-    SubstanceRepresentation, SubstanceTagId,
+    LiquidPhasePreference, MaterialFormulaUnit, SolventRole, Substance, SubstanceAggregateState,
+    SubstanceId, SubstanceRepresentation, SubstanceTagId,
 };
 
 const MASS_TOLERANCE_GRAMS_PER_MOL: f64 = 1.0e-6;
@@ -272,9 +272,41 @@ impl ChemistryRegistry {
         if left == right {
             return SolventMiscibility::FullyMiscible;
         }
+        if self.same_default_miscible_material_melt(left, right) {
+            return SolventMiscibility::FullyMiscible;
+        }
         ordered_pair(left, right)
             .and_then(|key| self.solvent_miscibility.get(&key).copied())
             .unwrap_or(SolventMiscibility::Immiscible)
+    }
+
+    fn same_default_miscible_material_melt(
+        &self,
+        left: SubstanceIndex,
+        right: SubstanceIndex,
+    ) -> bool {
+        let (Ok(left), Ok(right)) = (
+            self.substance_by_index(left),
+            self.substance_by_index(right),
+        ) else {
+            return false;
+        };
+        matches!(
+            (
+                left.phase_properties.preferred_liquid_phase,
+                right.phase_properties.preferred_liquid_phase,
+            ),
+            (
+                LiquidPhasePreference::MoltenMetal,
+                LiquidPhasePreference::MoltenMetal
+            ) | (
+                LiquidPhasePreference::MoltenSlag,
+                LiquidPhasePreference::MoltenSlag
+            )
+        ) && left.phase_properties.can_form_liquid_phase
+            && right.phase_properties.can_form_liquid_phase
+            && left.phase_properties.solvent_role == SolventRole::NotSolvent
+            && right.phase_properties.solvent_role == SolventRole::NotSolvent
     }
 
     pub(crate) fn gas_solubility(&self, substance: SubstanceIndex) -> Option<&GasSolubilityModel> {
