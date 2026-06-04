@@ -5,8 +5,9 @@ use crate::chemistry::error::{ChemistryError, ChemistryResult};
 
 use super::constants::{GAS_CONSTANT_J_PER_MOL_KELVIN, TRACE_COMPONENT_FRACTION};
 use super::validation::{
-    validate_kinetic_model, validate_non_negative_finite, validate_phase_boundary_point,
-    validate_phase_model, validate_positive_finite,
+    validate_fraction, validate_kinetic_model, validate_non_negative_finite,
+    validate_phase_boundary_point, validate_phase_model, validate_positive_finite,
+    validate_property_model,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -212,6 +213,98 @@ pub struct MetallurgicalPhasePropertyModel {
     pub electrical_resistivity_micro_ohm_meter: f64,
     pub thermal_conductivity_w_per_meter_kelvin: f64,
     pub corrosion_resistance_score: f64,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum CrystalStructure {
+    BodyCenteredCubic,
+    FaceCenteredCubic,
+    HexagonalClosePacked,
+    DiamondCubic,
+    Tetragonal,
+    Rhombohedral,
+    Complex,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetallurgicalElementData {
+    pub component: MetallurgicalComponentId,
+    pub melting_point_kelvin: f64,
+    pub atomic_radius_pm: f64,
+    pub crystal_structure: CrystalStructure,
+    pub base_property_model: MetallurgicalPhasePropertyModel,
+    pub solid_solution_strengthening_mpa_per_fraction: f64,
+    pub intermetallic_forming_tendency: f64,
+    pub phase_separation_tendency: f64,
+    pub carbide_forming_tendency: f64,
+}
+
+impl MetallurgicalElementData {
+    pub fn new(
+        component: impl Into<MetallurgicalComponentId>,
+        melting_point_kelvin: f64,
+        atomic_radius_pm: f64,
+        crystal_structure: CrystalStructure,
+        base_property_model: MetallurgicalPhasePropertyModel,
+    ) -> Self {
+        Self {
+            component: component.into(),
+            melting_point_kelvin,
+            atomic_radius_pm,
+            crystal_structure,
+            base_property_model,
+            solid_solution_strengthening_mpa_per_fraction: 700.0,
+            intermetallic_forming_tendency: 0.0,
+            phase_separation_tendency: 0.0,
+            carbide_forming_tendency: 0.0,
+        }
+    }
+
+    pub fn solid_solution_strengthening(mut self, value: f64) -> Self {
+        self.solid_solution_strengthening_mpa_per_fraction = value;
+        self
+    }
+
+    pub fn intermetallic_forming_tendency(mut self, value: f64) -> Self {
+        self.intermetallic_forming_tendency = value;
+        self
+    }
+
+    pub fn phase_separation_tendency(mut self, value: f64) -> Self {
+        self.phase_separation_tendency = value;
+        self
+    }
+
+    pub fn carbide_forming_tendency(mut self, value: f64) -> Self {
+        self.carbide_forming_tendency = value;
+        self
+    }
+
+    pub fn validate(&self) -> ChemistryResult<()> {
+        validate_positive_finite(
+            self.melting_point_kelvin,
+            "metallurgical element melting point",
+        )?;
+        validate_positive_finite(self.atomic_radius_pm, "metallurgical element atomic radius")?;
+        validate_property_model(&self.base_property_model)?;
+        validate_non_negative_finite(
+            self.solid_solution_strengthening_mpa_per_fraction,
+            "metallurgical element solid-solution strengthening",
+        )?;
+        validate_fraction(
+            self.intermetallic_forming_tendency,
+            "metallurgical element intermetallic tendency",
+        )?;
+        validate_fraction(
+            self.phase_separation_tendency,
+            "metallurgical element phase-separation tendency",
+        )?;
+        validate_fraction(
+            self.carbide_forming_tendency,
+            "metallurgical element carbide-forming tendency",
+        )?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

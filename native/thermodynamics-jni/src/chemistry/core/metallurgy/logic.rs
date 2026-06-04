@@ -7,6 +7,7 @@ use super::constants::{
     DEFAULT_GRAIN_SIZE_MICROMETERS, DEFAULT_HOMOGENIZATION_LENGTH_MICROMETERS,
     GAS_CONSTANT_J_PER_MOL_KELVIN, TRACE_COMPONENT_FRACTION,
 };
+use super::generation::generated_system_for_composition;
 use super::types::*;
 use super::validation::*;
 
@@ -110,6 +111,7 @@ pub fn apply_mechanical_working(
 pub fn metallurgical_state_from_alloy_phase(
     alloy: &AlloyPhaseSnapshot,
     systems: &[MetallurgicalSystem],
+    element_data: &[MetallurgicalElementData],
     previous: Option<&MetallurgicalState>,
     delta_seconds: f64,
 ) -> ChemistryResult<MetallurgicalState> {
@@ -154,6 +156,24 @@ pub fn metallurgical_state_from_alloy_phase(
             alloy,
             composition,
             system,
+            thermal_treatment,
+            previous,
+            delta_seconds,
+            considered_systems,
+        );
+    }
+    if let Some(generated_system) = generated_system_for_composition(&composition, element_data)? {
+        let generated_distance = system_distance_to_composition(&generated_system, &composition)?;
+        considered_systems.push(MetallurgicalSystemSelectionDiagnostic {
+            system_id: generated_system.id.clone(),
+            covers_composition: true,
+            missing_components: Vec::new(),
+            composition_distance: Some(generated_distance),
+        });
+        return modeled_state(
+            alloy,
+            composition,
+            &generated_system,
             thermal_treatment,
             previous,
             delta_seconds,

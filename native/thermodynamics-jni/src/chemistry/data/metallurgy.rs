@@ -1,8 +1,181 @@
 use crate::chemistry::metallurgy::{
-    ComponentLimit, CompositionEnergyTerm, MetallurgicalPhaseKind, MetallurgicalPhaseModel,
-    MetallurgicalPhasePropertyModel, MetallurgicalSystem, PhaseBoundaryPoint, PhaseFreeEnergyModel,
-    PhaseKineticModel,
+    ComponentLimit, CompositionEnergyTerm, CrystalStructure, MetallurgicalElementData,
+    MetallurgicalPhaseKind, MetallurgicalPhaseModel, MetallurgicalPhasePropertyModel,
+    MetallurgicalSystem, PhaseBoundaryPoint, PhaseFreeEnergyModel, PhaseKineticModel,
 };
+
+pub fn default_metallurgical_element_data() -> Vec<MetallurgicalElementData> {
+    vec![
+        element(
+            "Fe",
+            1811.0,
+            126.0,
+            CrystalStructure::BodyCenteredCubic,
+            properties(90.0, 210.0, 0.35, 0.10, 80.0, 0.45),
+        )
+        .solid_solution_strengthening(850.0),
+        element(
+            "destroy:carbon",
+            3915.0,
+            70.0,
+            CrystalStructure::Complex,
+            properties(900.0, 1200.0, 0.01, 1.50, 8.0, 0.15),
+        )
+        .solid_solution_strengthening(2400.0)
+        .intermetallic_forming_tendency(0.70),
+        element(
+            "Cr",
+            2180.0,
+            128.0,
+            CrystalStructure::BodyCenteredCubic,
+            properties(150.0, 360.0, 0.26, 0.13, 94.0, 0.90),
+        )
+        .solid_solution_strengthening(950.0)
+        .carbide_forming_tendency(0.80),
+        element(
+            "Ni",
+            1728.0,
+            124.0,
+            CrystalStructure::FaceCenteredCubic,
+            properties(90.0, 170.0, 0.45, 0.07, 91.0, 0.72),
+        )
+        .solid_solution_strengthening(700.0),
+        element(
+            "Mn",
+            1519.0,
+            127.0,
+            CrystalStructure::Complex,
+            properties(120.0, 260.0, 0.25, 1.45, 7.8, 0.30),
+        )
+        .solid_solution_strengthening(900.0),
+        element(
+            "destroy:silicon",
+            1687.0,
+            111.0,
+            CrystalStructure::DiamondCubic,
+            properties(1150.0, 700.0, 0.01, 2300.0, 150.0, 0.58),
+        )
+        .solid_solution_strengthening(1200.0)
+        .intermetallic_forming_tendency(0.35),
+        element(
+            "Mo",
+            2896.0,
+            139.0,
+            CrystalStructure::BodyCenteredCubic,
+            properties(250.0, 550.0, 0.18, 0.053, 139.0, 0.78),
+        )
+        .solid_solution_strengthening(1200.0)
+        .carbide_forming_tendency(0.90),
+        element(
+            "V",
+            2183.0,
+            134.0,
+            CrystalStructure::BodyCenteredCubic,
+            properties(260.0, 650.0, 0.16, 0.20, 31.0, 0.70),
+        )
+        .solid_solution_strengthening(1300.0)
+        .carbide_forming_tendency(0.95),
+        element(
+            "Al",
+            933.0,
+            143.0,
+            CrystalStructure::FaceCenteredCubic,
+            properties(25.0, 35.0, 0.42, 0.028, 237.0, 0.76),
+        )
+        .solid_solution_strengthening(480.0),
+        element(
+            "Cu",
+            1358.0,
+            128.0,
+            CrystalStructure::FaceCenteredCubic,
+            properties(45.0, 70.0, 0.50, 0.017, 401.0, 0.62),
+        )
+        .solid_solution_strengthening(520.0),
+        element(
+            "Mg",
+            923.0,
+            160.0,
+            CrystalStructure::HexagonalClosePacked,
+            properties(35.0, 80.0, 0.28, 0.044, 156.0, 0.32),
+        )
+        .solid_solution_strengthening(430.0),
+        element(
+            "Zn",
+            693.0,
+            134.0,
+            CrystalStructure::HexagonalClosePacked,
+            properties(35.0, 90.0, 0.22, 0.059, 116.0, 0.50),
+        )
+        .solid_solution_strengthening(420.0),
+        element(
+            "Sn",
+            505.0,
+            145.0,
+            CrystalStructure::Tetragonal,
+            properties(12.0, 18.0, 0.35, 0.115, 67.0, 0.54),
+        )
+        .solid_solution_strengthening(260.0)
+        .phase_separation_tendency(0.35),
+        element(
+            "Pb",
+            601.0,
+            175.0,
+            CrystalStructure::FaceCenteredCubic,
+            properties(5.0, 12.0, 0.40, 0.208, 35.0, 0.42),
+        )
+        .solid_solution_strengthening(180.0)
+        .phase_separation_tendency(0.70),
+        element(
+            "Ag",
+            1235.0,
+            144.0,
+            CrystalStructure::FaceCenteredCubic,
+            properties(25.0, 55.0, 0.55, 0.016, 429.0, 0.80),
+        )
+        .solid_solution_strengthening(330.0),
+        element(
+            "Au",
+            1337.0,
+            144.0,
+            CrystalStructure::FaceCenteredCubic,
+            properties(25.0, 65.0, 0.55, 0.024, 318.0, 0.95),
+        )
+        .solid_solution_strengthening(350.0),
+        element(
+            "Bi",
+            545.0,
+            160.0,
+            CrystalStructure::Rhombohedral,
+            properties(9.0, 20.0, 0.03, 1.29, 8.0, 0.60),
+        )
+        .phase_separation_tendency(0.75),
+        element(
+            "Ti",
+            1941.0,
+            147.0,
+            CrystalStructure::HexagonalClosePacked,
+            properties(160.0, 330.0, 0.24, 0.42, 22.0, 0.82),
+        )
+        .solid_solution_strengthening(900.0),
+        element(
+            "Co",
+            1768.0,
+            125.0,
+            CrystalStructure::HexagonalClosePacked,
+            properties(125.0, 260.0, 0.28, 0.062, 100.0, 0.70),
+        )
+        .solid_solution_strengthening(780.0),
+        element(
+            "Be",
+            1560.0,
+            112.0,
+            CrystalStructure::HexagonalClosePacked,
+            properties(100.0, 240.0, 0.10, 0.040, 200.0, 0.68),
+        )
+        .solid_solution_strengthening(1700.0)
+        .intermetallic_forming_tendency(0.55),
+    ]
+}
 
 pub fn default_metallurgical_systems() -> Vec<MetallurgicalSystem> {
     vec![
@@ -962,6 +1135,22 @@ fn properties(
         thermal_conductivity_w_per_meter_kelvin,
         corrosion_resistance_score,
     }
+}
+
+fn element(
+    component: &'static str,
+    melting_point_kelvin: f64,
+    atomic_radius_pm: f64,
+    crystal_structure: CrystalStructure,
+    base_property_model: MetallurgicalPhasePropertyModel,
+) -> MetallurgicalElementData {
+    MetallurgicalElementData::new(
+        component,
+        melting_point_kelvin,
+        atomic_radius_pm,
+        crystal_structure,
+        base_property_model,
+    )
 }
 
 fn phase_energy(stability_depth: f64) -> PhaseFreeEnergyModel {

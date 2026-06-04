@@ -1,6 +1,8 @@
 use super::*;
 use crate::chemistry::alloy::{alloy_phase_snapshots, AlloyPhaseSnapshot};
-use crate::chemistry::metallurgy_data::default_metallurgical_systems;
+use crate::chemistry::metallurgy_data::{
+    default_metallurgical_element_data, default_metallurgical_systems,
+};
 use crate::chemistry::mixture::Mixture;
 use crate::chemistry::registry::ChemistryRegistryBuilder;
 use crate::chemistry::substance::{
@@ -12,6 +14,13 @@ use crate::chemistry::substance::{
 fn default_metallurgical_systems_are_valid() {
     for system in default_metallurgical_systems() {
         system.validate().unwrap();
+    }
+}
+
+#[test]
+fn default_metallurgical_element_data_are_valid() {
+    for data in default_metallurgical_element_data() {
+        data.validate().unwrap();
     }
 }
 
@@ -41,6 +50,61 @@ fn iron_carbon_melt_gets_modeled_liquid_state() {
         .phases
         .iter()
         .any(|phase| phase.kind == MetallurgicalPhaseKind::Liquid && phase.fraction > 0.5));
+}
+
+#[test]
+fn unknown_gold_silver_alloy_uses_generated_metallurgical_system() {
+    let registry = test_registry().build().unwrap();
+    let mut mixture = Mixture::new(1400.0).unwrap();
+    mixture
+        .add_substance(&registry, "destroy:test_gold", 0.55)
+        .unwrap();
+    mixture
+        .add_substance(&registry, "destroy:test_silver", 0.45)
+        .unwrap();
+
+    let mut alloy = alloy_phase_snapshots(&registry, &mixture)
+        .unwrap()
+        .remove(0);
+    alloy.temperature_kelvin = 1000.0;
+    let state = registry
+        .metallurgical_state_from_alloy_phase(&alloy, None, 1.0)
+        .unwrap();
+
+    assert!(matches!(
+        state.kind,
+        MetallurgicalStateKind::Modeled { ref system_id }
+            if system_id == "metallurgy:generated/ag_au"
+    ));
+    assert!(state
+        .phases
+        .iter()
+        .any(|phase| phase.kind == MetallurgicalPhaseKind::SolidSolution));
+    assert!(state.properties.electrical_resistivity_micro_ohm_meter > 0.0);
+}
+
+#[test]
+fn exact_registered_system_takes_priority_over_generated_system() {
+    let registry = test_registry().build().unwrap();
+    let mut mixture = Mixture::new(1500.0).unwrap();
+    mixture
+        .add_substance(&registry, "destroy:test_copper", 0.70)
+        .unwrap();
+    mixture
+        .add_substance(&registry, "destroy:test_zinc", 0.30)
+        .unwrap();
+
+    let alloy = alloy_phase_snapshots(&registry, &mixture)
+        .unwrap()
+        .remove(0);
+    let state = registry
+        .metallurgical_state_from_alloy_phase(&alloy, None, 1.0)
+        .unwrap();
+
+    assert!(matches!(
+        state.kind,
+        MetallurgicalStateKind::Modeled { ref system_id } if system_id == "metallurgy:cu_zn"
+    ));
 }
 
 #[test]
@@ -582,7 +646,7 @@ fn unmodeled_state_reports_missing_metallurgical_components() {
     let registry = test_registry().build().unwrap();
     let mut mixture = Mixture::new(2000.0).unwrap();
     mixture
-        .add_substance(&registry, "destroy:test_lead", 1.0)
+        .add_substance(&registry, "destroy:test_unknown_metal", 1.0)
         .unwrap();
     let alloy = alloy_phase_snapshots(&registry, &mixture)
         .unwrap()
@@ -598,7 +662,7 @@ fn unmodeled_state_reports_missing_metallurgical_components() {
             && system
                 .missing_components
                 .iter()
-                .any(|component| component.as_str() == "Pb")
+                .any(|component| component.as_str() == "Xx")
     }));
 }
 
@@ -620,7 +684,7 @@ fn unknown_metal_system_is_explicitly_unmodeled() {
     let registry = test_registry().build().unwrap();
     let mut mixture = Mixture::new(2000.0).unwrap();
     mixture
-        .add_substance(&registry, "destroy:test_lead", 1.0)
+        .add_substance(&registry, "destroy:test_unknown_metal", 1.0)
         .unwrap();
 
     let alloy = alloy_phase_snapshots(&registry, &mixture)
@@ -720,6 +784,7 @@ fn nonferrous_state<const N: usize>(
 fn test_registry() -> ChemistryRegistryBuilder {
     ChemistryRegistryBuilder::new()
         .metallurgical_systems(default_metallurgical_systems())
+        .metallurgical_elements(default_metallurgical_element_data())
         .substance(test_metal("destroy:test_iron", "Fe", 55.845, 1811.0))
         .substance(test_metal("destroy:test_lead", "Pb", 207.2, 600.61))
         .substance(test_metal("destroy:test_aluminum", "Al", 26.982, 933.0))
@@ -728,6 +793,14 @@ fn test_registry() -> ChemistryRegistryBuilder {
         .substance(test_metal("destroy:test_zinc", "Zn", 65.38, 692.7))
         .substance(test_metal("destroy:test_nickel", "Ni", 58.693, 1728.0))
         .substance(test_metal("destroy:test_chromium", "Cr", 51.996, 2180.0))
+        .substance(test_metal("destroy:test_gold", "Au", 196.967, 1337.0))
+        .substance(test_metal("destroy:test_silver", "Ag", 107.868, 1235.0))
+        .substance(test_metal(
+            "destroy:test_unknown_metal",
+            "Xx",
+            100.0,
+            1200.0,
+        ))
         .substance(
             Substance::new("destroy:carbon", 0, 12.011, 2_200.0, 4300.0, 8.5, 0.0)
                 .with_melting_point_kelvin(1000.0)
