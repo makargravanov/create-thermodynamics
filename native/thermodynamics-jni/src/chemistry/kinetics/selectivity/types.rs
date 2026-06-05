@@ -4,7 +4,8 @@ use std::collections::HashMap;
 
 use crate::chemistry::error::ChemistryResult;
 use crate::chemistry::mixture::{
-    Mixture, MixturePhase, STANDARD_PRESSURE_PASCAL, TRACE_CONCENTRATION_MOL_PER_BUCKET,
+    LiquidPhaseSnapshot, Mixture, MixturePhase, STANDARD_PRESSURE_PASCAL,
+    TRACE_CONCENTRATION_MOL_PER_BUCKET,
 };
 use crate::chemistry::redox::RedoxRole;
 use crate::chemistry::registry::ChemistryRegistry;
@@ -119,6 +120,8 @@ pub struct SelectivityContext {
     pub temperature: f64,
     /// pH if applicable (None for non-aqueous/neutral)
     pub ph: Option<f64>,
+    /// Physical reaction medium inferred from actual mixture phases.
+    pub medium: ReactionMedium,
     /// Solvent type
     pub solvent_type: SolventType,
     pub water_activity: f64,
@@ -143,6 +146,7 @@ impl Default for SelectivityContext {
         Self {
             temperature: 298.15, // 25°C
             ph: None,
+            medium: ReactionMedium::Vacuum,
             solvent_type: SolventType::Neutral,
             water_activity: 0.0,
             fluoride_mol_per_bucket: 0.0,
@@ -238,9 +242,11 @@ impl SelectivityContext {
                                 .to_ascii_lowercase()
                                 .contains("palladium")
                     });
+        let medium = ReactionMedium::from_mixture(registry, mixture, reaction_context)?;
         let mut context = Self {
             temperature: mixture.temperature_kelvin(),
             ph,
+            medium,
             solvent_type: SolventType::Neutral,
             water_activity,
             fluoride_mol_per_bucket,
@@ -263,7 +269,7 @@ impl SelectivityContext {
         } else if context.is_acidic() {
             SolventType::Acidic
         } else {
-            dominant_solvent_type(registry, mixture).unwrap_or(SolventType::Neutral)
+            context.medium.solvent_type()
         };
         Ok(context)
     }
@@ -339,6 +345,157 @@ impl SelectivityContext {
 
     pub fn has_complexed_metal(&self) -> bool {
         self.complexed_metal_mol_per_bucket > TRACE_CONCENTRATION_MOL_PER_BUCKET
+    }
+}
+
+/// Physical medium used by organic selectivity rules.
+///
+/// This is a derived view of `Mixture`; it must not duplicate or own phase state.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReactionMedium {
+    Vacuum,
+    Gas {
+        total_mol_per_bucket: f64,
+        pressure_pascal: f64,
+    },
+    Liquid {
+        coarse_phase: MixturePhase,
+        representative_solvent_id: SubstanceId,
+        solvent_type: SolventType,
+        total_solvent_mol_per_bucket: f64,
+        water_mole_fraction: f64,
+    },
+    GasLiquidInterface {
+        liquid: Box<ReactionMedium>,
+        gas_mol_per_bucket: f64,
+        pressure_pascal: f64,
+    },
+    SupercriticalFluid {
+        carrier_id: Option<SubstanceId>,
+        total_mol_per_bucket: f64,
+        pressure_pascal: f64,
+        solvent_type: SolventType,
+    },
+    MoltenMetal {
+        total_mol_per_bucket: f64,
+    },
+    MoltenSlag {
+        total_mol_per_bucket: f64,
+    },
+    SolidSurface {
+        solid_mol_per_bucket: f64,
+        surface_sites_mol_per_bucket: f64,
+    },
+    Heterogeneous {
+        dominant_phase: MixturePhase,
+        total_mol_per_bucket: f64,
+    },
+}
+
+impl ReactionMedium {
+    pub fn from_mixture(
+        registry: &ChemistryRegistry,
+        mixture: &Mixture,
+        reaction_context: &ReactionContext,
+    ) -> ChemistryResult<Self> {
+        let gas_amount = mixture.total_concentration_in_phase(MixturePhase::Gas);
+        let supercritical_amount =
+            mixture.total_concentration_in_phase(MixturePhase::SupercriticalFluid);
+        let molten_metal = mixture.total_concentration_in_phase(MixturePhase::MoltenMetal);
+        let molten_slag = mixture.total_concentration_in_phase(MixturePhase::MoltenSlag);
+        let solid = mixture.total_concentration_in_phase(MixturePhase::Solid);
+        let surface_sites = reaction_context
+            .surfaces
+            .values()
+            .map(|surface| surface.free_sites())
+            .sum::<f64>();
+
+        if supercritical_amount > TRACE_CONCENTRATION_MOL_PER_BUCKET
+            && supercritical_amount >= gas_amount
+            && supercritical_amount >= molten_metal
+            && supercritical_amount >= molten_slag
+        {
+            return Ok(Self::SupercriticalFluid {
+                carrier_id: dominant_substance_in_phase(
+                    registry,
+                    mixture,
+                    MixturePhase::SupercriticalFluid,
+                )?,
+                total_mol_per_bucket: supercritical_amount,
+                pressure_pascal: mixture.gas_pressure_pascal(),
+                solvent_type: supercritical_solvent_type(registry, mixture)?,
+            });
+        }
+
+        if molten_metal > TRACE_CONCENTRATION_MOL_PER_BUCKET && molten_metal >= molten_slag {
+            return Ok(Self::MoltenMetal {
+                total_mol_per_bucket: molten_metal,
+            });
+        }
+        if molten_slag > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            return Ok(Self::MoltenSlag {
+                total_mol_per_bucket: molten_slag,
+            });
+        }
+
+        if let Some(liquid) = dominant_liquid_medium(registry, mixture)? {
+            if gas_amount > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                return Ok(Self::GasLiquidInterface {
+                    liquid: Box::new(liquid),
+                    gas_mol_per_bucket: gas_amount,
+                    pressure_pascal: mixture.gas_pressure_pascal(),
+                });
+            }
+            return Ok(liquid);
+        }
+
+        if surface_sites > TRACE_CONCENTRATION_MOL_PER_BUCKET
+            || solid > TRACE_CONCENTRATION_MOL_PER_BUCKET
+        {
+            return Ok(Self::SolidSurface {
+                solid_mol_per_bucket: solid,
+                surface_sites_mol_per_bucket: surface_sites,
+            });
+        }
+
+        if gas_amount > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            return Ok(Self::Gas {
+                total_mol_per_bucket: gas_amount,
+                pressure_pascal: mixture.gas_pressure_pascal(),
+            });
+        }
+
+        let (dominant_phase, total_mol_per_bucket) = dominant_phase_by_amount(mixture);
+        if total_mol_per_bucket > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            Ok(Self::Heterogeneous {
+                dominant_phase,
+                total_mol_per_bucket,
+            })
+        } else {
+            Ok(Self::Vacuum)
+        }
+    }
+
+    pub fn solvent_type(&self) -> SolventType {
+        match self {
+            ReactionMedium::Liquid { solvent_type, .. }
+            | ReactionMedium::SupercriticalFluid { solvent_type, .. } => *solvent_type,
+            ReactionMedium::GasLiquidInterface { liquid, .. } => liquid.solvent_type(),
+            ReactionMedium::Vacuum
+            | ReactionMedium::Gas { .. }
+            | ReactionMedium::MoltenMetal { .. }
+            | ReactionMedium::MoltenSlag { .. }
+            | ReactionMedium::SolidSurface { .. }
+            | ReactionMedium::Heterogeneous { .. } => SolventType::Neutral,
+        }
+    }
+
+    pub fn is_supercritical(&self) -> bool {
+        matches!(self, ReactionMedium::SupercriticalFluid { .. })
+    }
+
+    pub fn has_gas_liquid_interface(&self) -> bool {
+        matches!(self, ReactionMedium::GasLiquidInterface { .. })
     }
 }
 
@@ -671,49 +828,151 @@ impl CompetingMechanism {
     }
 }
 
-fn dominant_solvent_type(registry: &ChemistryRegistry, mixture: &Mixture) -> Option<SolventType> {
-    let aqueous = mixture.total_concentration_in_phase(MixturePhase::Aqueous);
-    let organic = mixture.total_concentration_in_phase(MixturePhase::Organic);
-    if aqueous <= TRACE_CONCENTRATION_MOL_PER_BUCKET
-        && organic <= TRACE_CONCENTRATION_MOL_PER_BUCKET
-    {
-        return None;
-    }
-    if aqueous >= organic {
-        return Some(SolventType::Protic);
-    }
-    let mut polar_score = 0.0;
-    let mut nonpolar_score = 0.0;
-    for substance_id in mixture.substances() {
-        let amount = mixture.concentration_in_phase(substance_id, MixturePhase::Organic);
-        if amount <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+fn dominant_liquid_medium(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+) -> ChemistryResult<Option<ReactionMedium>> {
+    let mut selected = None;
+    for phase in mixture.liquid_phase_snapshots(registry)? {
+        if phase.total_solvent_mol_per_bucket <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
             continue;
         }
-        let Ok(substance) = registry.substance(substance_id) else {
+        if matches!(
+            phase.coarse_phase,
+            MixturePhase::MoltenMetal | MixturePhase::MoltenSlag
+        ) {
             continue;
-        };
+        }
+        if selected
+            .as_ref()
+            .is_some_and(|(_, amount)| *amount >= phase.total_solvent_mol_per_bucket)
+        {
+            continue;
+        }
+        let water_mole_fraction = phase
+            .solvents
+            .iter()
+            .find(|amount| amount.substance_id.as_str() == "destroy:water")
+            .map(|amount| amount.mole_fraction)
+            .unwrap_or(0.0);
+        let total_solvent_mol_per_bucket = phase.total_solvent_mol_per_bucket;
+        selected = Some((
+            ReactionMedium::Liquid {
+                coarse_phase: phase.coarse_phase,
+                representative_solvent_id: phase.representative_solvent_id.clone(),
+                solvent_type: solvent_type_from_liquid_phase(registry, &phase)?,
+                total_solvent_mol_per_bucket,
+                water_mole_fraction,
+            },
+            total_solvent_mol_per_bucket,
+        ));
+    }
+    Ok(selected.map(|(medium, _)| medium))
+}
+
+fn solvent_type_from_liquid_phase(
+    registry: &ChemistryRegistry,
+    phase: &LiquidPhaseSnapshot,
+) -> ChemistryResult<SolventType> {
+    if phase.coarse_phase == MixturePhase::Aqueous {
+        return Ok(SolventType::Protic);
+    }
+    let mut protic = 0.0;
+    let mut polar_aprotic = 0.0;
+    let mut nonpolar = 0.0;
+    for solvent in &phase.solvents {
+        let substance = registry.substance(&solvent.substance_id)?;
         if substance.phase_properties.solvent_role == SolventRole::NotSolvent {
             continue;
         }
         match substance.phase_properties.preferred_liquid_phase {
-            LiquidPhasePreference::Aqueous => polar_score += amount,
+            LiquidPhasePreference::Aqueous => protic += solvent.concentration_mol_per_bucket,
             LiquidPhasePreference::Organic => {
-                if organic_solvent_looks_polar_aprotic(substance_id.as_str()) {
-                    polar_score += amount;
+                if organic_solvent_looks_protic(solvent.substance_id.as_str()) {
+                    protic += solvent.concentration_mol_per_bucket;
+                } else if organic_solvent_looks_polar_aprotic(solvent.substance_id.as_str()) {
+                    polar_aprotic += solvent.concentration_mol_per_bucket;
                 } else {
-                    nonpolar_score += amount;
+                    nonpolar += solvent.concentration_mol_per_bucket;
                 }
             }
             LiquidPhasePreference::MoltenMetal | LiquidPhasePreference::MoltenSlag => {}
         }
     }
-    if polar_score > nonpolar_score {
-        Some(SolventType::AproticPolar)
-    } else if nonpolar_score > TRACE_CONCENTRATION_MOL_PER_BUCKET {
-        Some(SolventType::NonPolar)
+    if protic >= polar_aprotic && protic >= nonpolar && protic > TRACE_CONCENTRATION_MOL_PER_BUCKET
+    {
+        Ok(SolventType::Protic)
+    } else if polar_aprotic >= nonpolar && polar_aprotic > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+        Ok(SolventType::AproticPolar)
+    } else if nonpolar > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+        Ok(SolventType::NonPolar)
     } else {
-        Some(SolventType::Neutral)
+        Ok(SolventType::Neutral)
     }
+}
+
+fn dominant_substance_in_phase(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+    phase: MixturePhase,
+) -> ChemistryResult<Option<SubstanceId>> {
+    let mut selected = None;
+    for substance_id in mixture.substances() {
+        registry.substance(substance_id)?;
+        let amount = mixture.concentration_in_phase(substance_id, phase);
+        if amount <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            continue;
+        }
+        if selected.as_ref().is_none_or(|(_, current)| amount > *current) {
+            selected = Some((substance_id.clone(), amount));
+        }
+    }
+    Ok(selected.map(|(id, _)| id))
+}
+
+fn supercritical_solvent_type(
+    registry: &ChemistryRegistry,
+    mixture: &Mixture,
+) -> ChemistryResult<SolventType> {
+    let Some(carrier) =
+        dominant_substance_in_phase(registry, mixture, MixturePhase::SupercriticalFluid)?
+    else {
+        return Ok(SolventType::Neutral);
+    };
+    if carrier.as_str() == "destroy:water" {
+        return Ok(SolventType::Protic);
+    }
+    if matches!(
+        carrier.as_str(),
+        "destroy:carbon_dioxide" | "destroy:nitrogen" | "destroy:methane"
+    ) {
+        return Ok(SolventType::NonPolar);
+    }
+    let substance = registry.substance(&carrier)?;
+    match substance.phase_properties.preferred_liquid_phase {
+        LiquidPhasePreference::Aqueous => Ok(SolventType::Protic),
+        LiquidPhasePreference::Organic => {
+            if organic_solvent_looks_polar_aprotic(carrier.as_str()) {
+                Ok(SolventType::AproticPolar)
+            } else if organic_solvent_looks_protic(carrier.as_str()) {
+                Ok(SolventType::Protic)
+            } else {
+                Ok(SolventType::NonPolar)
+            }
+        }
+        LiquidPhasePreference::MoltenMetal | LiquidPhasePreference::MoltenSlag => {
+            Ok(SolventType::Neutral)
+        }
+    }
+}
+
+fn dominant_phase_by_amount(mixture: &Mixture) -> (MixturePhase, f64) {
+    MixturePhase::ALL
+        .iter()
+        .copied()
+        .map(|phase| (phase, mixture.total_concentration_in_phase(phase)))
+        .max_by(|left, right| left.1.total_cmp(&right.1))
+        .unwrap_or((MixturePhase::Aqueous, 0.0))
 }
 
 fn max_known_activity(
@@ -812,6 +1071,15 @@ fn organic_solvent_looks_polar_aprotic(id: &str) -> bool {
         || id.contains("dmf")
         || id.contains("ether")
         || id.contains("ester")
+}
+
+fn organic_solvent_looks_protic(id: &str) -> bool {
+    id.contains("alcohol")
+        || id.contains("ethanol")
+        || id.contains("methanol")
+        || id.contains("propanol")
+        || id.contains("butanol")
+        || id.contains("phenol")
 }
 
 #[cfg(test)]
@@ -915,6 +1183,80 @@ mod tests {
         assert_eq!(context.temperature, 320.0);
         assert!(context.is_acidic());
         assert_eq!(context.solvent_type, SolventType::Acidic);
+    }
+
+    #[test]
+    fn selectivity_context_exposes_gas_liquid_reaction_medium() {
+        let registry = ChemistryRegistryBuilder::new()
+            .substance(
+                Substance::new("destroy:water", 0, 18.0, 1000.0, 373.15, 75.0, 40_000.0)
+                    .with_phase_properties(SubstancePhaseProperties::aqueous_solvent()),
+            )
+            .substance(
+                Substance::new("destroy:oxygen", 0, 32.0, 1_140.0, 90.0, 29.4, 6_820.0)
+                    .with_phase_properties(SubstancePhaseProperties {
+                        preferred_liquid_phase: LiquidPhasePreference::Aqueous,
+                        aqueous_solubility_mol_per_bucket: Some(0.0),
+                        organic_solubility_mol_per_bucket: Some(0.0),
+                        can_precipitate: false,
+                        can_form_liquid_phase: false,
+                        solvent_role: SolventRole::NotSolvent,
+                    }),
+            )
+            .build()
+            .unwrap();
+        let mut mixture = Mixture::new(298.15).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:water", 1.0)
+            .unwrap();
+        mixture
+            .add_substance(&registry, "destroy:oxygen", 0.5)
+            .unwrap();
+
+        let context =
+            SelectivityContext::from_mixture(&registry, &mixture, &ReactionContext::default())
+                .unwrap();
+
+        assert!(context.medium.has_gas_liquid_interface());
+        assert_eq!(context.solvent_type, SolventType::Protic);
+    }
+
+    #[test]
+    fn selectivity_context_exposes_supercritical_medium() {
+        let registry = ChemistryRegistryBuilder::new()
+            .substance(
+                Substance::new(
+                    "destroy:carbon_dioxide",
+                    0,
+                    44.0,
+                    1_100.0,
+                    194.7,
+                    37.0,
+                    16_000.0,
+                )
+                .with_critical_point(304.1, 7_377_000.0)
+                .with_phase_properties(SubstancePhaseProperties {
+                    preferred_liquid_phase: LiquidPhasePreference::Organic,
+                    aqueous_solubility_mol_per_bucket: Some(0.0),
+                    organic_solubility_mol_per_bucket: Some(0.0),
+                    can_precipitate: false,
+                    can_form_liquid_phase: false,
+                    solvent_role: SolventRole::NotSolvent,
+                }),
+            )
+            .build()
+            .unwrap();
+        let mut mixture = Mixture::new(310.0).unwrap();
+        mixture
+            .add_substance(&registry, "destroy:carbon_dioxide", 3.0)
+            .unwrap();
+
+        let context =
+            SelectivityContext::from_mixture(&registry, &mixture, &ReactionContext::default())
+                .unwrap();
+
+        assert!(context.medium.is_supercritical());
+        assert_eq!(context.solvent_type, SolventType::NonPolar);
     }
 
     #[test]
