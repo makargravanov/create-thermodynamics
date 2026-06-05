@@ -150,6 +150,7 @@ fn build_alloy_snapshot(
 fn alloy_component_id(substance: &Substance) -> String {
     match &substance.representation {
         SubstanceRepresentation::Metal { element_symbol } => element_symbol.clone(),
+        SubstanceRepresentation::MetallurgicalSolute { component_id } => component_id.clone(),
         _ => substance.id.to_string(),
     }
 }
@@ -157,6 +158,9 @@ fn alloy_component_id(substance: &Substance) -> String {
 fn alloy_constituent_role(substance: &Substance) -> AlloyConstituentRole {
     match &substance.representation {
         SubstanceRepresentation::Metal { .. } => AlloyConstituentRole::Metal,
+        SubstanceRepresentation::MetallurgicalSolute { .. } => {
+            AlloyConstituentRole::DissolvedMaterial
+        }
         _ => AlloyConstituentRole::DissolvedMaterial,
     }
 }

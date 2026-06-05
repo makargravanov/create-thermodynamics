@@ -6,7 +6,7 @@ use super::registry::{ChemistryRegistry, GasSolubilityModel, SolventMiscibility,
 use super::solution::{self, AqueousEquilibriumSystem, SolutionState};
 use super::substance::{
     LiquidPhasePreference, SolventRole, Substance, SubstanceAggregateState, SubstanceId,
-    SubstanceTagId,
+    SubstanceRepresentation, SubstanceTagId,
 };
 
 pub const DEFAULT_TEMPERATURE_KELVIN: f64 = 298.0;
@@ -2513,6 +2513,18 @@ fn solubility_limit_in_solvent(
         )
     ) && substance.phase_properties.can_form_liquid_phase
     {
+        return None;
+    }
+    if matches!(
+        (
+            &substance.representation,
+            solvent_substance.phase_properties.preferred_liquid_phase
+        ),
+        (
+            SubstanceRepresentation::MetallurgicalSolute { .. },
+            LiquidPhasePreference::MoltenMetal
+        )
+    ) {
         return None;
     }
     if substance_is_solvent(substance) && substance_index != solvent {

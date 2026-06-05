@@ -115,6 +115,9 @@ pub enum SubstanceRepresentation {
     Metal {
         element_symbol: String,
     },
+    MetallurgicalSolute {
+        component_id: String,
+    },
     Oxide {
         formula_units: Vec<MaterialFormulaUnit>,
     },
@@ -196,6 +199,36 @@ impl SubstanceRepresentation {
                 }
                 Ok(())
             }
+            SubstanceRepresentation::MetallurgicalSolute { component_id } => {
+                if substance.charge != 0 {
+                    return invalid_representation(
+                        substance,
+                        "metallurgical solutes must be neutral",
+                    );
+                }
+                validate_non_empty_text(substance, component_id, "metallurgical component id")?;
+                if substance.phase_properties.preferred_liquid_phase
+                    != LiquidPhasePreference::MoltenMetal
+                {
+                    return invalid_representation(
+                        substance,
+                        "metallurgical solutes must prefer the molten metal phase",
+                    );
+                }
+                if substance.phase_properties.can_form_liquid_phase {
+                    return invalid_representation(
+                        substance,
+                        "metallurgical solutes must not anchor their own liquid phase",
+                    );
+                }
+                if substance.phase_properties.solvent_role != SolventRole::NotSolvent {
+                    return invalid_representation(
+                        substance,
+                        "metallurgical solutes must not be solvents",
+                    );
+                }
+                Ok(())
+            }
             SubstanceRepresentation::Oxide { formula_units } => {
                 if substance.charge != 0 {
                     return invalid_representation(substance, "oxide materials must be neutral");
@@ -245,6 +278,7 @@ impl SubstanceRepresentation {
             self,
             SubstanceRepresentation::IonicSolid { .. }
                 | SubstanceRepresentation::Metal { .. }
+                | SubstanceRepresentation::MetallurgicalSolute { .. }
                 | SubstanceRepresentation::Oxide { .. }
                 | SubstanceRepresentation::Hydrate { .. }
                 | SubstanceRepresentation::SurfaceMaterial { .. }

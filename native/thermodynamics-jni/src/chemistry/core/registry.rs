@@ -783,6 +783,7 @@ impl ChemistryRegistry {
                 SubstanceRepresentation::Molecular
                 | SubstanceRepresentation::Ion { .. }
                 | SubstanceRepresentation::Metal { .. }
+                | SubstanceRepresentation::MetallurgicalSolute { .. }
                 | SubstanceRepresentation::SurfaceMaterial { .. }
                 | SubstanceRepresentation::UnspecifiedMaterial { .. } => {}
             }

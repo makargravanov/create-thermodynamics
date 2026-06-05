@@ -8,7 +8,7 @@ use super::redox::{RedoxHalfReaction, FARADAY_CONSTANT_COULOMBS_PER_MOL};
 use super::registry::ChemistryRegistry;
 use super::substance::{MaterialFormulaUnit, Substance, SubstanceId, SubstanceRepresentation};
 
-pub const DESTROY_METALLURGY_REACTION_COUNT: usize = 28;
+pub const DESTROY_METALLURGY_REACTION_COUNT: usize = 46;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MineralFormula {
@@ -114,6 +114,11 @@ fn generated_metallurgy_reactions(registry: &ChemistryRegistry) -> ChemistryResu
     }
     for (oxide, oxide_formula) in &oxides {
         if let Some(metal_products) = metal_products_for_formula(registry, oxide_formula, &metals) {
+            reactions.push(metal_oxidation_reaction(
+                oxide,
+                oxide_formula.oxide,
+                &metal_products,
+            ));
             if carbon_monoxide_reduction_allowed(oxide) {
                 reactions.push(carbon_monoxide_reduction_reaction(
                     oxide,
@@ -145,6 +150,7 @@ fn generated_metallurgy_reactions(registry: &ChemistryRegistry) -> ChemistryResu
             ));
         }
     }
+    reactions.extend(generated_molten_metal_chemistry_reactions(registry)?);
     Ok(reactions)
 }
 
@@ -361,6 +367,207 @@ fn slag_base_oxide_count(silicate: &MineralFormula, oxide: &MineralFormula) -> O
     }
 }
 
+fn generated_molten_metal_chemistry_reactions(
+    registry: &ChemistryRegistry,
+) -> ChemistryResult<Vec<Reaction>> {
+    let required = [
+        "destroy:oxygen",
+        "destroy:carbon_monoxide",
+        "destroy:carbon_dioxide",
+        "destroy:dissolved_carbon",
+        "destroy:dissolved_oxygen",
+        "destroy:dissolved_sulfur",
+        "destroy:dissolved_phosphorus",
+        "destroy:dissolved_silicon",
+        "destroy:aluminum_metal",
+        "destroy:aluminum_oxide",
+        "destroy:silica",
+        "destroy:calcium_oxide",
+        "destroy:calcium_sulfide",
+        "destroy:calcium_phosphate",
+    ];
+    for id in required {
+        registry.substance(&SubstanceId::from(id))?;
+    }
+    Ok(vec![
+        carbon_monoxide_carburization_reaction(),
+        oxygen_decarburization_reaction(),
+        aluminum_deoxidation_reaction(),
+        silicon_deoxidation_reaction(),
+        calcium_desulfurization_reaction(),
+        calcium_dephosphorization_reaction(),
+    ])
+}
+
+fn metal_oxidation_reaction(
+    oxide: &Substance,
+    oxygen_count: u32,
+    metal_products: &[(SubstanceId, u32)],
+) -> Reaction {
+    let mut builder = Reaction::builder(format!("{}.molten_metal_oxidation", oxide.id))
+        .reactant("destroy:oxygen", oxygen_count, 1)
+        .product(oxide.id.clone(), 2)
+        .reactant_phase_access("destroy:oxygen", [MixturePhase::Gas])
+        .product_phase(oxide.id.clone(), MixturePhase::MoltenSlag)
+        .condition(
+            high_temperature_reaction(
+                "molten metal oxidation requires hot metal and gaseous oxygen",
+                oxidation_temperature_kelvin(oxide),
+            )
+            .in_phase(MixturePhase::MoltenMetal),
+        )
+        .pre_exponential_factor(1.5e8)
+        .activation_energy_kj_per_mol(55.0)
+        .enthalpy_change_kj_per_mol(-220.0 * oxygen_count as f64);
+    for (metal, coefficient) in metal_products {
+        builder = builder
+            .reactant(metal.clone(), coefficient * 2, 1)
+            .reactant_phase_access(metal.clone(), [MixturePhase::MoltenMetal]);
+    }
+    builder.build()
+}
+
+fn carbon_monoxide_carburization_reaction() -> Reaction {
+    Reaction::builder("destroy:molten_metal_carbon_monoxide_carburization")
+        .reactant("destroy:carbon_monoxide", 2, 1)
+        .product("destroy:dissolved_carbon", 1)
+        .product("destroy:carbon_dioxide", 1)
+        .reactant_phase_access("destroy:carbon_monoxide", [MixturePhase::Gas])
+        .product_phase("destroy:dissolved_carbon", MixturePhase::MoltenMetal)
+        .product_phase("destroy:carbon_dioxide", MixturePhase::Gas)
+        .condition(
+            high_temperature_reaction(
+                "carbon monoxide carburization requires a hot molten metal phase",
+                1_050.0,
+            )
+            .in_phase(MixturePhase::MoltenMetal),
+        )
+        .condition(reducing_atmosphere(
+            "carburization is blocked by an oxidizing gas phase",
+        ))
+        .pre_exponential_factor(2.0e7)
+        .activation_energy_kj_per_mol(92.0)
+        .enthalpy_change_kj_per_mol(-170.0)
+        .build()
+}
+
+fn oxygen_decarburization_reaction() -> Reaction {
+    Reaction::builder("destroy:molten_metal_oxygen_decarburization")
+        .reactant("destroy:dissolved_carbon", 2, 1)
+        .reactant("destroy:oxygen", 1, 1)
+        .product("destroy:carbon_monoxide", 2)
+        .reactant_phase_access("destroy:dissolved_carbon", [MixturePhase::MoltenMetal])
+        .reactant_phase_access("destroy:oxygen", [MixturePhase::Gas])
+        .product_phase("destroy:carbon_monoxide", MixturePhase::Gas)
+        .condition(
+            high_temperature_reaction(
+                "decarburization requires dissolved carbon in molten metal and gaseous oxygen",
+                1_200.0,
+            )
+            .in_phase(MixturePhase::MoltenMetal),
+        )
+        .pre_exponential_factor(4.0e7)
+        .activation_energy_kj_per_mol(70.0)
+        .enthalpy_change_kj_per_mol(-220.0)
+        .build()
+}
+
+fn aluminum_deoxidation_reaction() -> Reaction {
+    Reaction::builder("destroy:molten_metal_aluminum_deoxidation")
+        .reactant("destroy:aluminum_metal", 2, 1)
+        .reactant("destroy:dissolved_oxygen", 3, 1)
+        .product("destroy:aluminum_oxide", 1)
+        .reactant_phase_access("destroy:aluminum_metal", [MixturePhase::MoltenMetal])
+        .reactant_phase_access("destroy:dissolved_oxygen", [MixturePhase::MoltenMetal])
+        .product_phase("destroy:aluminum_oxide", MixturePhase::MoltenSlag)
+        .condition(
+            high_temperature_reaction(
+                "aluminum deoxidation requires aluminum and dissolved oxygen in molten metal",
+                1_100.0,
+            )
+            .in_phase(MixturePhase::MoltenMetal),
+        )
+        .pre_exponential_factor(8.0e7)
+        .activation_energy_kj_per_mol(58.0)
+        .enthalpy_change_kj_per_mol(-1_675.0)
+        .build()
+}
+
+fn silicon_deoxidation_reaction() -> Reaction {
+    Reaction::builder("destroy:molten_metal_silicon_deoxidation")
+        .reactant("destroy:dissolved_silicon", 1, 1)
+        .reactant("destroy:dissolved_oxygen", 2, 1)
+        .product("destroy:silica", 1)
+        .reactant_phase_access("destroy:dissolved_silicon", [MixturePhase::MoltenMetal])
+        .reactant_phase_access("destroy:dissolved_oxygen", [MixturePhase::MoltenMetal])
+        .product_phase("destroy:silica", MixturePhase::MoltenSlag)
+        .condition(
+            high_temperature_reaction(
+                "silicon deoxidation requires silicon and dissolved oxygen in molten metal",
+                1_150.0,
+            )
+            .in_phase(MixturePhase::MoltenMetal),
+        )
+        .pre_exponential_factor(5.0e7)
+        .activation_energy_kj_per_mol(64.0)
+        .enthalpy_change_kj_per_mol(-860.0)
+        .build()
+}
+
+fn calcium_desulfurization_reaction() -> Reaction {
+    Reaction::builder("destroy:molten_metal_calcium_desulfurization")
+        .reactant("destroy:calcium_oxide", 1, 1)
+        .reactant("destroy:dissolved_sulfur", 1, 1)
+        .product("destroy:calcium_sulfide", 1)
+        .product("destroy:dissolved_oxygen", 1)
+        .reactant_phase_access(
+            "destroy:calcium_oxide",
+            [MixturePhase::Solid, MixturePhase::MoltenSlag],
+        )
+        .reactant_phase_access("destroy:dissolved_sulfur", [MixturePhase::MoltenMetal])
+        .product_phase("destroy:calcium_sulfide", MixturePhase::MoltenSlag)
+        .product_phase("destroy:dissolved_oxygen", MixturePhase::MoltenMetal)
+        .condition(
+            high_temperature_reaction(
+                "desulfurization requires basic slag and dissolved sulfur in molten metal",
+                1_350.0,
+            )
+            .in_phase(MixturePhase::MoltenMetal)
+            .in_phase(MixturePhase::MoltenSlag),
+        )
+        .pre_exponential_factor(2.5e7)
+        .activation_energy_kj_per_mol(78.0)
+        .enthalpy_change_kj_per_mol(-120.0)
+        .build()
+}
+
+fn calcium_dephosphorization_reaction() -> Reaction {
+    Reaction::builder("destroy:molten_metal_calcium_dephosphorization")
+        .reactant("destroy:calcium_oxide", 3, 1)
+        .reactant("destroy:dissolved_phosphorus", 2, 1)
+        .reactant("destroy:dissolved_oxygen", 5, 1)
+        .product("destroy:calcium_phosphate", 1)
+        .reactant_phase_access(
+            "destroy:calcium_oxide",
+            [MixturePhase::Solid, MixturePhase::MoltenSlag],
+        )
+        .reactant_phase_access("destroy:dissolved_phosphorus", [MixturePhase::MoltenMetal])
+        .reactant_phase_access("destroy:dissolved_oxygen", [MixturePhase::MoltenMetal])
+        .product_phase("destroy:calcium_phosphate", MixturePhase::MoltenSlag)
+        .condition(
+            high_temperature_reaction(
+                "dephosphorization requires basic slag, dissolved phosphorus and oxidizing potential",
+                1_450.0,
+            )
+            .in_phase(MixturePhase::MoltenMetal)
+            .in_phase(MixturePhase::MoltenSlag),
+        )
+        .pre_exponential_factor(1.5e7)
+        .activation_energy_kj_per_mol(88.0)
+        .enthalpy_change_kj_per_mol(-430.0)
+        .build()
+}
+
 fn carbonate_calcination_reaction(
     carbonate: &Substance,
     oxide: &Substance,
@@ -542,6 +749,16 @@ fn reduction_temperature_kelvin(oxide: &Substance) -> f64 {
         "destroy:iron_iii_oxide" | "destroy:magnetite" => 1_050.0,
         "destroy:zinc_oxide" => 1_200.0,
         _ => oxide.melting_point_kelvin.min(1_500.0).max(900.0),
+    }
+}
+
+fn oxidation_temperature_kelvin(oxide: &Substance) -> f64 {
+    match oxide.id.as_str() {
+        "destroy:lead_ii_oxide" | "destroy:copper_i_oxide" | "destroy:copper_ii_oxide" => 900.0,
+        "destroy:iron_ii_oxide" | "destroy:iron_iii_oxide" | "destroy:magnetite" => 1_100.0,
+        "destroy:zinc_oxide" | "destroy:nickel_ii_oxide" => 1_200.0,
+        "destroy:aluminum_oxide" | "destroy:magnesium_oxide" | "destroy:calcium_oxide" => 1_350.0,
+        _ => oxide.melting_point_kelvin.min(1_600.0).max(900.0),
     }
 }
 

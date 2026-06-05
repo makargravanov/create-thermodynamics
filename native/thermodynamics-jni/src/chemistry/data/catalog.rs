@@ -59,6 +59,14 @@ struct RawMetallurgyMetal {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct RawMetallurgySolute {
+    id: &'static str,
+    element: &'static str,
+    component_id: &'static str,
+    color_argb: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct RawMetallurgyMaterial {
     id: &'static str,
     representation: RawMetallurgyMaterialRepresentation,
@@ -126,6 +134,7 @@ impl RawMetallurgyIon {
         match self.id {
             "carbonate" => &[("carbon", 1), ("oxide_atom", 3)],
             "silicate" => &[("silicon_atom", 1), ("oxide_atom", 4)],
+            "phosphate" => &[("phosphorus_atom", 1), ("oxide_atom", 4)],
             _ => &[],
         }
     }
@@ -150,6 +159,32 @@ impl RawMetallurgyMetal {
         ))
         .with_representation(SubstanceRepresentation::Metal {
             element_symbol: self.element.to_string(),
+        })
+        .with_catalog_metadata(None, None, self.color_argb, Vec::new()))
+    }
+}
+
+impl RawMetallurgySolute {
+    fn to_substance(self) -> ChemistryResult<Substance> {
+        Ok(Substance::new(
+            SubstanceId::new(format!("destroy:{}", self.id))?,
+            0,
+            element_mass(self.element)?,
+            DEFAULT_DENSITY_GRAMS_PER_BUCKET,
+            3200.0,
+            DEFAULT_MOLAR_HEAT_CAPACITY,
+            DEFAULT_LATENT_HEAT,
+        )
+        .with_phase_properties(SubstancePhaseProperties {
+            preferred_liquid_phase: LiquidPhasePreference::MoltenMetal,
+            aqueous_solubility_mol_per_bucket: Some(0.0),
+            organic_solubility_mol_per_bucket: Some(0.0),
+            can_precipitate: false,
+            can_form_liquid_phase: false,
+            solvent_role: SolventRole::NotSolvent,
+        })
+        .with_representation(SubstanceRepresentation::MetallurgicalSolute {
+            component_id: self.component_id.to_string(),
         })
         .with_catalog_metadata(None, None, self.color_argb, Vec::new()))
     }
@@ -204,6 +239,7 @@ fn material_formula_mass(
             "destroy:silicon_iv" => element_mass("Si")?,
             "destroy:carbonate" => element_mass("C")? + element_mass("O")? * 3.0,
             "destroy:silicate" => element_mass("Si")? + element_mass("O")? * 4.0,
+            "destroy:phosphate" => element_mass("P")? + element_mass("O")? * 4.0,
             "destroy:calcium_ion" => element_mass("Ca")?,
             "destroy:copper_i" | "destroy:copper_ii" => element_mass("Cu")?,
             "destroy:iron_ii" | "destroy:iron_iii" => element_mass("Fe")?,
@@ -214,6 +250,7 @@ fn material_formula_mass(
             "destroy:zinc_ion" => element_mass("Zn")?,
             "carbon" => element_mass("C")?,
             "oxide_atom" => element_mass("O")?,
+            "phosphorus_atom" => element_mass("P")?,
             "silicon_atom" => element_mass("Si")?,
             _ => {
                 return Err(ChemistryError::InvalidSubstance {
@@ -254,6 +291,9 @@ fn register_metallurgy_substances(
     }
     for metal in METALLURGY_METALS {
         builder = builder.substance(metal.to_substance()?);
+    }
+    for solute in METALLURGY_SOLUTES {
+        builder = builder.substance(solute.to_substance()?);
     }
     for material in METALLURGY_MATERIALS {
         builder = builder.substance(material.to_substance()?);
@@ -993,6 +1033,12 @@ const METALLURGY_IONS: &[RawMetallurgyIon] = &[
         charge: -4,
         color_argb: 0x80B8B8A8,
     },
+    RawMetallurgyIon {
+        id: "phosphate",
+        element: None,
+        charge: -3,
+        color_argb: 0x80D8D0C8,
+    },
 ];
 
 const METALLURGY_METALS: &[RawMetallurgyMetal] = &[
@@ -1083,6 +1129,39 @@ const METALLURGY_METALS: &[RawMetallurgyMetal] = &[
         fusion_heat: 8_480.0,
         vaporization_heat: 128_000.0,
         color_argb: 0xFFD6D6D0,
+    },
+];
+
+const METALLURGY_SOLUTES: &[RawMetallurgySolute] = &[
+    RawMetallurgySolute {
+        id: "dissolved_carbon",
+        element: "C",
+        component_id: "destroy:carbon",
+        color_argb: 0xFF202020,
+    },
+    RawMetallurgySolute {
+        id: "dissolved_oxygen",
+        element: "O",
+        component_id: "destroy:oxygen",
+        color_argb: 0xFFE8F0FF,
+    },
+    RawMetallurgySolute {
+        id: "dissolved_sulfur",
+        element: "S",
+        component_id: "destroy:sulfur",
+        color_argb: 0xFFE8D050,
+    },
+    RawMetallurgySolute {
+        id: "dissolved_phosphorus",
+        element: "P",
+        component_id: "destroy:phosphorus",
+        color_argb: 0xFFE8B890,
+    },
+    RawMetallurgySolute {
+        id: "dissolved_silicon",
+        element: "Si",
+        component_id: "destroy:silicon",
+        color_argb: 0xFF9098A0,
     },
 ];
 
@@ -1290,6 +1369,17 @@ const METALLURGY_MATERIALS: &[RawMetallurgyMaterial] = &[
         color_argb: 0xFF2F3023,
     },
     RawMetallurgyMaterial {
+        id: "calcium_sulfide",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:calcium_ion", 1), ("destroy:sulfide", 1)],
+        solid_density: 2_590.0,
+        melting_point_kelvin: 2_798.0,
+        boiling_point_kelvin: 3_000.0,
+        heat_capacity: 50.0,
+        fusion_heat: 52_000.0,
+        color_argb: 0xFFE4D8B0,
+    },
+    RawMetallurgyMaterial {
         id: "calcium_carbonate",
         representation: RawMetallurgyMaterialRepresentation::IonicSolid,
         formula_units: &[("destroy:calcium_ion", 1), ("destroy:carbonate", 1)],
@@ -1387,6 +1477,17 @@ const METALLURGY_MATERIALS: &[RawMetallurgyMaterial] = &[
         heat_capacity: 130.0,
         fusion_heat: 70_000.0,
         color_argb: 0xFF5D5844,
+    },
+    RawMetallurgyMaterial {
+        id: "calcium_phosphate",
+        representation: RawMetallurgyMaterialRepresentation::IonicSolid,
+        formula_units: &[("destroy:calcium_ion", 3), ("destroy:phosphate", 2)],
+        solid_density: 3_140.0,
+        melting_point_kelvin: 1_940.0,
+        boiling_point_kelvin: 3_000.0,
+        heat_capacity: 160.0,
+        fusion_heat: 90_000.0,
+        color_argb: 0xFFE8E0D0,
     },
 ];
 
@@ -3582,7 +3683,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(DESTROY_SUBSTANCE_COUNT, 165);
-        assert_eq!(registry.substance_count(), 211);
+        assert_eq!(registry.substance_count(), 219);
     }
 
     #[test]
@@ -3664,6 +3765,20 @@ mod tests {
             LiquidPhasePreference::MoltenMetal
         );
         assert!(iron.phase_properties.can_form_liquid_phase);
+
+        let dissolved_carbon = registry
+            .substance(&"destroy:dissolved_carbon".into())
+            .unwrap();
+        assert!(matches!(
+            &dissolved_carbon.representation,
+            SubstanceRepresentation::MetallurgicalSolute { component_id }
+                if component_id == "destroy:carbon"
+        ));
+        assert_eq!(
+            dissolved_carbon.phase_properties.preferred_liquid_phase,
+            LiquidPhasePreference::MoltenMetal
+        );
+        assert!(!dissolved_carbon.phase_properties.can_form_liquid_phase);
 
         let hematite = registry
             .substance(&"destroy:iron_iii_oxide".into())
