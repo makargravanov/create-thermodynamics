@@ -303,16 +303,21 @@ fn modeled_state(
             ),
         });
     }
+    let phase_compositions = distribute_components_between_phases(&composition, &phase_fractions)?;
     let phases = phase_fractions
         .into_iter()
-        .filter(|(_, fraction)| *fraction > TRACE_COMPONENT_FRACTION)
-        .map(|(model, fraction)| MetallurgicalPhaseAmount {
-            phase_id: model.id.clone(),
-            kind: model.kind,
-            fraction,
-            property_model: model.property_model.clone(),
-            kinetic_model: model.kinetic_model.clone(),
-        })
+        .zip(phase_compositions)
+        .filter(|((_, fraction), _)| *fraction > TRACE_COMPONENT_FRACTION)
+        .map(
+            |((model, fraction), phase_composition)| MetallurgicalPhaseAmount {
+                phase_id: model.id.clone(),
+                kind: model.kind,
+                fraction,
+                composition: phase_composition,
+                property_model: model.property_model.clone(),
+                kinetic_model: model.kinetic_model.clone(),
+            },
+        )
         .collect::<Vec<_>>();
     let diffusion_state = estimate_diffusion_state(
         &phases,
@@ -477,6 +482,159 @@ fn missing_system_components(
         .filter(|component| !system.components.contains(*component))
         .cloned()
         .collect()
+}
+
+fn distribute_components_between_phases(
+    composition: &MetallurgicalComposition,
+    phase_fractions: &[(&MetallurgicalPhaseModel, f64)],
+) -> ChemistryResult<Vec<BTreeMap<MetallurgicalComponentId, f64>>> {
+    validate_phase_fraction_sum(phase_fractions)?;
+    composition.validate()?;
+
+    let components = composition.components.keys().cloned().collect::<Vec<_>>();
+    if components.is_empty() || phase_fractions.is_empty() {
+        return Err(ChemistryError::InvalidMixtureState(
+            "phase component distribution requires phases and components".to_string(),
+        ));
+    }
+
+    let mut matrix = Vec::with_capacity(phase_fractions.len());
+    for (phase, phase_fraction) in phase_fractions {
+        validate_fraction(*phase_fraction, "metallurgical phase fraction")?;
+        let mut row = Vec::with_capacity(components.len());
+        for component in &components {
+            let component_fraction = composition.fraction_of(component);
+            let affinity = phase_component_affinity(phase, component);
+            row.push((phase_fraction * component_fraction * affinity).max(1.0e-30));
+        }
+        matrix.push(row);
+    }
+
+    for _ in 0..96 {
+        for component_index in 0..components.len() {
+            let target = composition.fraction_of(&components[component_index]);
+            let current = matrix.iter().map(|row| row[component_index]).sum::<f64>();
+            if current <= 0.0 || !current.is_finite() {
+                return Err(ChemistryError::InvalidMixtureState(format!(
+                    "component '{}' cannot be distributed between metallurgical phases",
+                    components[component_index].as_str()
+                )));
+            }
+            let scale = target / current;
+            for row in &mut matrix {
+                row[component_index] *= scale;
+            }
+        }
+        for (phase_index, (_, target)) in phase_fractions.iter().enumerate() {
+            let current = matrix[phase_index].iter().sum::<f64>();
+            if current <= 0.0 || !current.is_finite() {
+                return Err(ChemistryError::InvalidMixtureState(format!(
+                    "metallurgical phase '{}' cannot receive a valid component distribution",
+                    phase_fractions[phase_index].0.id
+                )));
+            }
+            let scale = target / current;
+            for value in &mut matrix[phase_index] {
+                *value *= scale;
+            }
+        }
+    }
+
+    validate_phase_component_distribution(composition, phase_fractions, &components, &matrix)?;
+
+    Ok(matrix
+        .into_iter()
+        .zip(phase_fractions.iter())
+        .map(|(row, (_, phase_fraction))| {
+            if *phase_fraction <= TRACE_COMPONENT_FRACTION {
+                return BTreeMap::new();
+            }
+            components
+                .iter()
+                .cloned()
+                .zip(row)
+                .filter_map(|(component, amount)| {
+                    let fraction_in_phase = amount / phase_fraction;
+                    (fraction_in_phase > TRACE_COMPONENT_FRACTION)
+                        .then_some((component, fraction_in_phase))
+                })
+                .collect()
+        })
+        .collect())
+}
+
+fn phase_component_affinity(
+    phase: &MetallurgicalPhaseModel,
+    component: &MetallurgicalComponentId,
+) -> f64 {
+    let mut affinity: f64 = match phase.kind {
+        MetallurgicalPhaseKind::Liquid
+        | MetallurgicalPhaseKind::SolidSolution
+        | MetallurgicalPhaseKind::Ferrite
+        | MetallurgicalPhaseKind::Austenite
+        | MetallurgicalPhaseKind::Martensite
+        | MetallurgicalPhaseKind::Pearlite
+        | MetallurgicalPhaseKind::Bainite
+        | MetallurgicalPhaseKind::TemperedMartensite => 1.0,
+        MetallurgicalPhaseKind::Intermetallic
+        | MetallurgicalPhaseKind::Cementite
+        | MetallurgicalPhaseKind::Graphite => 0.08,
+    };
+
+    for term in &phase.free_energy_model.composition_terms {
+        if &term.component == component {
+            affinity = affinity.max(1.0 + 80.0 * term.center_fraction.max(0.01));
+        }
+    }
+    for limit in &phase.component_limits {
+        if &limit.component == component {
+            let center = ((limit.min_fraction + limit.max_fraction) * 0.5).max(0.01);
+            affinity = affinity.max(1.0 + 40.0 * center);
+        }
+    }
+    if matches!(phase.kind, MetallurgicalPhaseKind::Graphite)
+        && component.as_str() == "destroy:carbon"
+    {
+        affinity = affinity.max(100.0);
+    }
+    affinity
+}
+
+fn validate_phase_component_distribution(
+    composition: &MetallurgicalComposition,
+    phase_fractions: &[(&MetallurgicalPhaseModel, f64)],
+    components: &[MetallurgicalComponentId],
+    matrix: &[Vec<f64>],
+) -> ChemistryResult<()> {
+    for (phase_index, row) in matrix.iter().enumerate() {
+        for value in row {
+            if !value.is_finite() || *value < 0.0 {
+                return Err(ChemistryError::InvalidMixtureState(format!(
+                    "metallurgical phase '{}' received invalid component amount {value}",
+                    phase_fractions[phase_index].0.id
+                )));
+            }
+        }
+        let row_total = row.iter().sum::<f64>();
+        let target = phase_fractions[phase_index].1;
+        if (row_total - target).abs() > 1.0e-8 {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "metallurgical phase '{}' component total does not match phase fraction: {row_total} vs {target}",
+                phase_fractions[phase_index].0.id
+            )));
+        }
+    }
+    for (component_index, component) in components.iter().enumerate() {
+        let column_total = matrix.iter().map(|row| row[component_index]).sum::<f64>();
+        let target = composition.fraction_of(component);
+        if (column_total - target).abs() > 1.0e-8 {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "metallurgical component '{}' is not conserved across phases: {column_total} vs {target}",
+                component.as_str()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn system_distance_to_composition(

@@ -1084,6 +1084,7 @@ pub struct MetallurgicalPhaseAmount {
     pub phase_id: String,
     pub kind: MetallurgicalPhaseKind,
     pub fraction: f64,
+    pub composition: BTreeMap<MetallurgicalComponentId, f64>,
     pub property_model: MetallurgicalPhasePropertyModel,
     pub kinetic_model: PhaseKineticModel,
 }

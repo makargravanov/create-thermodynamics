@@ -64,6 +64,58 @@ fn iron_carbon_melt_gets_modeled_liquid_state() {
 }
 
 #[test]
+fn phase_compositions_conserve_each_metallurgical_component() {
+    let registry = test_registry().build().unwrap();
+    let state = steel_state_from_temperature(&registry, 0.965, 0.035, 760.0, None, 1.0);
+
+    assert_phase_component_balance(&state, "Fe", 0.965);
+    assert_phase_component_balance(&state, "destroy:carbon", 0.035);
+    for phase in &state.phases {
+        let total = phase.composition.values().sum::<f64>();
+        assert!(
+            (total - 1.0).abs() < 1.0e-8,
+            "phase '{}' composition must sum to one, got {}: {:?}",
+            phase.phase_id,
+            total,
+            phase.composition
+        );
+    }
+}
+
+#[test]
+fn intermetallic_phase_draws_components_from_global_composition() {
+    let registry = test_registry().build().unwrap();
+    let state = nonferrous_state(
+        &registry,
+        [
+            ("destroy:test_copper", 0.98),
+            ("destroy:test_beryllium", 0.02),
+        ],
+        800.0,
+        None,
+        1.0,
+    );
+
+    let compound = state
+        .phases
+        .iter()
+        .find(|phase| phase.phase_id.contains("cube_precipitate"))
+        .expect("Cu-Be state must contain beryllide phase");
+    assert!(
+        compound
+            .composition
+            .get(&MetallurgicalComponentId::from("Be"))
+            .copied()
+            .unwrap_or(0.0)
+            > 0.02,
+        "beryllide phase should be enriched in Be: {:?}",
+        compound.composition
+    );
+    assert_phase_component_balance(&state, "Cu", 0.98);
+    assert_phase_component_balance(&state, "Be", 0.02);
+}
+
+#[test]
 fn unknown_gold_silver_alloy_uses_generated_metallurgical_system() {
     let registry = test_registry().build().unwrap();
     let mut mixture = Mixture::new(1400.0).unwrap();
@@ -1102,6 +1154,27 @@ fn use_score(state: &MetallurgicalState, kind: MetallurgicalUseKind) -> f64 {
         .find(|entry| entry.kind == kind)
         .map(|entry| entry.score)
         .unwrap_or(0.0)
+}
+
+fn assert_phase_component_balance(
+    state: &MetallurgicalState,
+    component: &'static str,
+    expected: f64,
+) {
+    let component = MetallurgicalComponentId::from(component);
+    let reconstructed = state
+        .phases
+        .iter()
+        .map(|phase| phase.fraction * phase.composition.get(&component).copied().unwrap_or(0.0))
+        .sum::<f64>();
+    assert!(
+        (reconstructed - expected).abs() < 1.0e-8,
+        "component '{}' is not conserved across phases: expected {}, got {}, phases: {:?}",
+        component.as_str(),
+        expected,
+        reconstructed,
+        state.phases
+    );
 }
 
 fn steel_state_from_temperature(
