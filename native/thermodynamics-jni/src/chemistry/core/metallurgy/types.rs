@@ -673,6 +673,167 @@ impl MetallurgicalPhaseModel {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ThermalTreatmentProfile {
+    pub id: String,
+    pub austenitizing_temperature_kelvin: Option<f64>,
+    pub martensite_start_kelvin: Option<f64>,
+    pub martensite_cooling_rate_kelvin_per_second: Option<f64>,
+    pub bainite_temperature_window_kelvin: Option<(f64, f64)>,
+    pub bainite_cooling_rate_window_kelvin_per_second: Option<(f64, f64)>,
+    pub tempering_temperature_window_kelvin: Option<(f64, f64)>,
+    pub solution_temperature_kelvin: Option<f64>,
+    pub aging_temperature_window_kelvin: Option<(f64, f64)>,
+    pub precipitation_strength_multiplier: f64,
+    pub recovery_multiplier: f64,
+    pub grain_growth_multiplier: f64,
+    pub quench_vacancy_multiplier: f64,
+}
+
+impl ThermalTreatmentProfile {
+    pub fn neutral() -> Self {
+        Self {
+            id: "metallurgy:thermal/neutral".to_string(),
+            austenitizing_temperature_kelvin: None,
+            martensite_start_kelvin: None,
+            martensite_cooling_rate_kelvin_per_second: None,
+            bainite_temperature_window_kelvin: None,
+            bainite_cooling_rate_window_kelvin_per_second: None,
+            tempering_temperature_window_kelvin: None,
+            solution_temperature_kelvin: None,
+            aging_temperature_window_kelvin: None,
+            precipitation_strength_multiplier: 1.0,
+            recovery_multiplier: 1.0,
+            grain_growth_multiplier: 1.0,
+            quench_vacancy_multiplier: 1.0,
+        }
+    }
+
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            ..Self::neutral()
+        }
+    }
+
+    pub fn steel(
+        mut self,
+        austenitizing_temperature_kelvin: f64,
+        martensite_start_kelvin: f64,
+        martensite_cooling_rate_kelvin_per_second: f64,
+        bainite_temperature_window_kelvin: (f64, f64),
+        bainite_cooling_rate_window_kelvin_per_second: (f64, f64),
+        tempering_temperature_window_kelvin: (f64, f64),
+    ) -> Self {
+        self.austenitizing_temperature_kelvin = Some(austenitizing_temperature_kelvin);
+        self.martensite_start_kelvin = Some(martensite_start_kelvin);
+        self.martensite_cooling_rate_kelvin_per_second =
+            Some(martensite_cooling_rate_kelvin_per_second);
+        self.bainite_temperature_window_kelvin = Some(bainite_temperature_window_kelvin);
+        self.bainite_cooling_rate_window_kelvin_per_second =
+            Some(bainite_cooling_rate_window_kelvin_per_second);
+        self.tempering_temperature_window_kelvin = Some(tempering_temperature_window_kelvin);
+        self
+    }
+
+    pub fn precipitation_aging(
+        mut self,
+        solution_temperature_kelvin: f64,
+        aging_temperature_window_kelvin: (f64, f64),
+        precipitation_strength_multiplier: f64,
+    ) -> Self {
+        self.solution_temperature_kelvin = Some(solution_temperature_kelvin);
+        self.aging_temperature_window_kelvin = Some(aging_temperature_window_kelvin);
+        self.precipitation_strength_multiplier = precipitation_strength_multiplier;
+        self
+    }
+
+    pub fn recovery_multiplier(mut self, value: f64) -> Self {
+        self.recovery_multiplier = value;
+        self
+    }
+
+    pub fn grain_growth_multiplier(mut self, value: f64) -> Self {
+        self.grain_growth_multiplier = value;
+        self
+    }
+
+    pub fn quench_vacancy_multiplier(mut self, value: f64) -> Self {
+        self.quench_vacancy_multiplier = value;
+        self
+    }
+
+    pub fn validate(&self) -> ChemistryResult<()> {
+        if self.id.trim().is_empty() {
+            return Err(ChemistryError::InvalidMixtureState(
+                "thermal treatment profile id must not be empty".to_string(),
+            ));
+        }
+        if let Some(value) = self.austenitizing_temperature_kelvin {
+            validate_positive_finite(value, "austenitizing temperature")?;
+        }
+        if let Some(value) = self.martensite_start_kelvin {
+            validate_positive_finite(value, "martensite start temperature")?;
+        }
+        if let Some(value) = self.martensite_cooling_rate_kelvin_per_second {
+            validate_non_negative_finite(value, "martensite cooling rate")?;
+        }
+        validate_temperature_window(
+            self.bainite_temperature_window_kelvin,
+            "bainite temperature window",
+        )?;
+        validate_rate_window(
+            self.bainite_cooling_rate_window_kelvin_per_second,
+            "bainite cooling-rate window",
+        )?;
+        validate_temperature_window(
+            self.tempering_temperature_window_kelvin,
+            "tempering temperature window",
+        )?;
+        if let Some(value) = self.solution_temperature_kelvin {
+            validate_positive_finite(value, "solution treatment temperature")?;
+        }
+        validate_temperature_window(
+            self.aging_temperature_window_kelvin,
+            "aging temperature window",
+        )?;
+        validate_non_negative_finite(
+            self.precipitation_strength_multiplier,
+            "precipitation strength multiplier",
+        )?;
+        validate_non_negative_finite(self.recovery_multiplier, "recovery multiplier")?;
+        validate_non_negative_finite(self.grain_growth_multiplier, "grain-growth multiplier")?;
+        validate_non_negative_finite(self.quench_vacancy_multiplier, "quench vacancy multiplier")?;
+        Ok(())
+    }
+}
+
+fn validate_temperature_window(window: Option<(f64, f64)>, label: &str) -> ChemistryResult<()> {
+    if let Some((low, high)) = window {
+        validate_positive_finite(low, label)?;
+        validate_positive_finite(high, label)?;
+        if low >= high {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "{label} low bound must be below high bound"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_rate_window(window: Option<(f64, f64)>, label: &str) -> ChemistryResult<()> {
+    if let Some((low, high)) = window {
+        validate_non_negative_finite(low, label)?;
+        validate_non_negative_finite(high, label)?;
+        if low >= high {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "{label} low bound must be below high bound"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct PhaseBoundaryPoint {
     pub composition: BTreeMap<MetallurgicalComponentId, f64>,
     pub solidus_kelvin: f64,
@@ -708,6 +869,7 @@ pub struct MetallurgicalSystem {
     pub components: BTreeSet<MetallurgicalComponentId>,
     pub phase_models: Vec<MetallurgicalPhaseModel>,
     pub phase_boundaries: Vec<PhaseBoundaryPoint>,
+    pub thermal_treatment_profile: ThermalTreatmentProfile,
 }
 
 impl MetallurgicalSystem {
@@ -720,6 +882,7 @@ impl MetallurgicalSystem {
             components: components.into_iter().map(Into::into).collect(),
             phase_models: Vec::new(),
             phase_boundaries: Vec::new(),
+            thermal_treatment_profile: ThermalTreatmentProfile::neutral(),
         }
     }
 
@@ -730,6 +893,11 @@ impl MetallurgicalSystem {
 
     pub fn phase_boundary(mut self, point: PhaseBoundaryPoint) -> Self {
         self.phase_boundaries.push(point);
+        self
+    }
+
+    pub fn thermal_treatment_profile(mut self, profile: ThermalTreatmentProfile) -> Self {
+        self.thermal_treatment_profile = profile;
         self
     }
 
@@ -763,6 +931,7 @@ impl MetallurgicalSystem {
         for point in &self.phase_boundaries {
             validate_phase_boundary_point(self, point)?;
         }
+        self.thermal_treatment_profile.validate()?;
         Ok(())
     }
 }
@@ -990,6 +1159,8 @@ pub struct MetallurgicalThermalDiagnostic {
     pub cooling_rate_kelvin_per_second: f64,
     pub hold_time_seconds: f64,
     pub delta_seconds: f64,
+    pub treatment_profile_id: String,
+    pub treatment_events: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

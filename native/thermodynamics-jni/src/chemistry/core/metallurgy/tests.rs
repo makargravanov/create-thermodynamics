@@ -397,8 +397,11 @@ fn tempering_quenched_steel_replaces_martensite_with_tempered_martensite() {
         .metallurgical_state_from_alloy_phase(&quenched_alloy, Some(&hot_state), 1.0)
         .unwrap();
     let tempered_alloy = steel_alloy(&registry, 0.97, 0.03, 780.0);
-    let tempered_state = registry
+    let tempering_start = registry
         .metallurgical_state_from_alloy_phase(&tempered_alloy, Some(&quenched_state), 3600.0)
+        .unwrap();
+    let tempered_state = registry
+        .metallurgical_state_from_alloy_phase(&tempered_alloy, Some(&tempering_start), 3600.0)
         .unwrap();
 
     let tempered =
@@ -709,7 +712,8 @@ fn aluminum_copper_magnesium_aging_forms_strengthening_precipitates() {
         ("destroy:test_magnesium", 0.03),
     ];
     let solution = nonferrous_state(&registry, composition, 880.0, None, 1.0);
-    let aged = nonferrous_state(&registry, composition, 460.0, Some(&solution), 18_000.0);
+    let aging_start = nonferrous_state(&registry, composition, 460.0, Some(&solution), 1.0);
+    let aged = nonferrous_state(&registry, composition, 460.0, Some(&aging_start), 18_000.0);
 
     assert!(matches!(
         aged.kind,
@@ -732,11 +736,35 @@ fn aluminum_copper_magnesium_aging_forms_strengthening_precipitates() {
         aged.diffusion_state.aging_fraction,
         solution.diffusion_state.aging_fraction
     );
+    assert_eq!(
+        aged.diagnostics.thermal_reason.treatment_profile_id,
+        "metallurgy:thermal/aluminum_precipitation"
+    );
+    assert!(
+        aged.diagnostics
+            .thermal_reason
+            .treatment_events
+            .iter()
+            .any(|event| event.contains("precipitation aging")),
+        "thermal events: {:?}",
+        aged.diagnostics.thermal_reason.treatment_events
+    );
 }
 
 #[test]
 fn nickel_chromium_aluminum_superalloy_forms_gamma_prime() {
     let registry = test_registry().build().unwrap();
+    let solution = nonferrous_state(
+        &registry,
+        [
+            ("destroy:test_nickel", 0.72),
+            ("destroy:test_chromium", 0.16),
+            ("destroy:test_aluminum", 0.12),
+        ],
+        1450.0,
+        None,
+        1.0,
+    );
     let state = nonferrous_state(
         &registry,
         [
@@ -745,7 +773,18 @@ fn nickel_chromium_aluminum_superalloy_forms_gamma_prime() {
             ("destroy:test_aluminum", 0.12),
         ],
         1100.0,
-        None,
+        Some(&solution),
+        1.0,
+    );
+    let state = nonferrous_state(
+        &registry,
+        [
+            ("destroy:test_nickel", 0.72),
+            ("destroy:test_chromium", 0.16),
+            ("destroy:test_aluminum", 0.12),
+        ],
+        1100.0,
+        Some(&state),
         3_600.0,
     );
 
@@ -764,6 +803,65 @@ fn nickel_chromium_aluminum_superalloy_forms_gamma_prime() {
         state.properties.corrosion_resistance_score > 0.85,
         "corrosion score {}",
         state.properties.corrosion_resistance_score
+    );
+    assert_eq!(
+        state.diagnostics.thermal_reason.treatment_profile_id,
+        "metallurgy:thermal/nickel_superalloy"
+    );
+    assert!(
+        state
+            .diagnostics
+            .thermal_reason
+            .treatment_events
+            .iter()
+            .any(|event| event.contains("precipitation aging")),
+        "thermal events: {:?}",
+        state.diagnostics.thermal_reason.treatment_events
+    );
+}
+
+#[test]
+fn steel_thermal_profile_reports_quench_and_tempering_events() {
+    let registry = test_registry().build().unwrap();
+    let hot_state = steel_state_from_temperature(&registry, 0.97, 0.03, 1900.0, None, 1.0);
+    let quenched_alloy = steel_alloy(&registry, 0.97, 0.03, 500.0);
+    let quenched_state = registry
+        .metallurgical_state_from_alloy_phase(&quenched_alloy, Some(&hot_state), 1.0)
+        .unwrap();
+    assert_eq!(
+        quenched_state
+            .diagnostics
+            .thermal_reason
+            .treatment_profile_id,
+        "metallurgy:thermal/plain_carbon_steel"
+    );
+    assert!(
+        quenched_state
+            .diagnostics
+            .thermal_reason
+            .treatment_events
+            .iter()
+            .any(|event| event.contains("martensite")),
+        "thermal events: {:?}",
+        quenched_state.diagnostics.thermal_reason.treatment_events
+    );
+
+    let tempered_alloy = steel_alloy(&registry, 0.97, 0.03, 780.0);
+    let tempering_start = registry
+        .metallurgical_state_from_alloy_phase(&tempered_alloy, Some(&quenched_state), 3600.0)
+        .unwrap();
+    let tempered_state = registry
+        .metallurgical_state_from_alloy_phase(&tempered_alloy, Some(&tempering_start), 3600.0)
+        .unwrap();
+    assert!(
+        tempered_state
+            .diagnostics
+            .thermal_reason
+            .treatment_events
+            .iter()
+            .any(|event| event.contains("tempering")),
+        "thermal events: {:?}",
+        tempered_state.diagnostics.thermal_reason.treatment_events
     );
 }
 

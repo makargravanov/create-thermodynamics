@@ -3,7 +3,7 @@ use crate::chemistry::metallurgy::{
     MetallurgicalCompoundPhaseData, MetallurgicalElementData, MetallurgicalPairInteractionData,
     MetallurgicalPhaseKind, MetallurgicalPhaseModel, MetallurgicalPhasePropertyModel,
     MetallurgicalSystem, PhaseBoundaryPoint, PhaseFreeEnergyModel, PhaseKineticModel,
-    SolidMiscibility,
+    SolidMiscibility, ThermalTreatmentProfile,
 };
 
 pub fn default_metallurgical_element_data() -> Vec<MetallurgicalElementData> {
@@ -586,6 +586,7 @@ fn iron_carbon_system() -> MetallurgicalSystem {
                     .temperature_window(650.0, 950.0),
             ),
         )
+        .thermal_treatment_profile(plain_carbon_steel_treatment())
 }
 
 fn iron_carbon_chromium_nickel_system() -> MetallurgicalSystem {
@@ -696,6 +697,7 @@ fn iron_carbon_chromium_nickel_system() -> MetallurgicalSystem {
                 .temperature_window(650.0, 980.0),
         ),
     )
+    .thermal_treatment_profile(stainless_steel_treatment())
 }
 
 fn iron_carbon_manganese_silicon_system() -> MetallurgicalSystem {
@@ -822,6 +824,7 @@ fn iron_carbon_manganese_silicon_system() -> MetallurgicalSystem {
                 .temperature_window(650.0, 980.0),
         ),
     )
+    .thermal_treatment_profile(manganese_steel_treatment())
 }
 
 fn copper_zinc_system() -> MetallurgicalSystem {
@@ -1121,6 +1124,7 @@ fn aluminum_copper_system() -> MetallurgicalSystem {
                 composition_phase_energy("Cu", 0.10, 0.18, 2.5).temperature_window(250.0, 825.0),
             ),
         )
+        .thermal_treatment_profile(aluminum_precipitation_treatment())
 }
 
 fn aluminum_copper_magnesium_system() -> MetallurgicalSystem {
@@ -1188,6 +1192,7 @@ fn aluminum_copper_magnesium_system() -> MetallurgicalSystem {
             )
             .kinetic_model(precipitation_kinetics(2.2e-4)),
         )
+        .thermal_treatment_profile(aluminum_precipitation_treatment())
 }
 
 fn aluminum_magnesium_system() -> MetallurgicalSystem {
@@ -1224,6 +1229,7 @@ fn aluminum_magnesium_system() -> MetallurgicalSystem {
                 composition_phase_energy("Mg", 0.22, 0.24, 2.0).temperature_window(250.0, 800.0),
             ),
         )
+        .thermal_treatment_profile(aluminum_precipitation_treatment())
 }
 
 fn aluminum_magnesium_silicon_system() -> MetallurgicalSystem {
@@ -1299,6 +1305,7 @@ fn aluminum_magnesium_silicon_system() -> MetallurgicalSystem {
                 1.8,
             )),
         )
+        .thermal_treatment_profile(aluminum_precipitation_treatment())
 }
 
 fn aluminum_zinc_magnesium_system() -> MetallurgicalSystem {
@@ -1348,6 +1355,7 @@ fn aluminum_zinc_magnesium_system() -> MetallurgicalSystem {
                 composition_phase_energy("Zn", 0.14, 0.22, 2.6).temperature_window(250.0, 760.0),
             ),
         )
+        .thermal_treatment_profile(aluminum_precipitation_treatment())
 }
 
 fn aluminum_zinc_magnesium_copper_system() -> MetallurgicalSystem {
@@ -1417,6 +1425,7 @@ fn aluminum_zinc_magnesium_copper_system() -> MetallurgicalSystem {
             )
             .kinetic_model(precipitation_kinetics(1.8e-4)),
         )
+        .thermal_treatment_profile(aluminum_precipitation_treatment())
 }
 
 fn nickel_chromium_system() -> MetallurgicalSystem {
@@ -1513,6 +1522,7 @@ fn nickel_chromium_aluminum_system() -> MetallurgicalSystem {
             .limit(ComponentLimit::new("Cr", 0.22, 0.55))
             .free_energy_model(composition_phase_energy("Cr", 0.35, 0.28, 1.8)),
         )
+        .thermal_treatment_profile(nickel_superalloy_treatment())
 }
 
 fn nickel_chromium_cobalt_molybdenum_system() -> MetallurgicalSystem {
@@ -1577,6 +1587,7 @@ fn nickel_chromium_cobalt_molybdenum_system() -> MetallurgicalSystem {
             .limit(ComponentLimit::new("Cr", 0.24, 0.55))
             .free_energy_model(composition_phase_energy("Cr", 0.34, 0.26, 1.8)),
         )
+        .thermal_treatment_profile(nickel_superalloy_treatment())
 }
 
 fn copper_nickel_system() -> MetallurgicalSystem {
@@ -1639,6 +1650,7 @@ fn copper_beryllium_system() -> MetallurgicalSystem {
             )
             .kinetic_model(precipitation_kinetics(2.0e-4)),
         )
+        .thermal_treatment_profile(copper_beryllium_treatment())
 }
 
 fn copper_aluminum_system() -> MetallurgicalSystem {
@@ -1746,6 +1758,7 @@ fn magnesium_aluminum_zinc_system() -> MetallurgicalSystem {
             )
             .kinetic_model(precipitation_kinetics(1.8e-4)),
         )
+        .thermal_treatment_profile(magnesium_precipitation_treatment())
 }
 
 fn titanium_aluminum_vanadium_system() -> MetallurgicalSystem {
@@ -1803,6 +1816,7 @@ fn titanium_aluminum_vanadium_system() -> MetallurgicalSystem {
             .limit(ComponentLimit::new("Al", 0.12, 0.45))
             .free_energy_model(composition_phase_energy("Al", 0.28, 0.25, 1.8)),
         )
+        .thermal_treatment_profile(titanium_alpha_beta_treatment())
 }
 
 fn titanium_aluminum_molybdenum_system() -> MetallurgicalSystem {
@@ -1869,6 +1883,7 @@ fn titanium_aluminum_molybdenum_system() -> MetallurgicalSystem {
             .limit(ComponentLimit::new("Mo", 0.12, 0.35))
             .free_energy_model(composition_phase_energy("Mo", 0.22, 0.20, 2.0)),
         )
+        .thermal_treatment_profile(titanium_alpha_beta_treatment())
 }
 
 fn iron_carbon_chromium_molybdenum_vanadium_system() -> MetallurgicalSystem {
@@ -1978,6 +1993,7 @@ fn iron_carbon_chromium_molybdenum_vanadium_system() -> MetallurgicalSystem {
         )
         .kinetic_model(precipitation_kinetics(8.0e-5)),
     )
+    .thermal_treatment_profile(tool_steel_treatment())
 }
 
 fn properties(
@@ -2066,6 +2082,108 @@ fn precipitation_kinetics(precipitation_rate_per_second: f64) -> PhaseKineticMod
         5.0e-5,
         precipitation_rate_per_second,
     )
+}
+
+fn plain_carbon_steel_treatment() -> ThermalTreatmentProfile {
+    ThermalTreatmentProfile::new("metallurgy:thermal/plain_carbon_steel")
+        .steel(
+            1020.0,
+            650.0,
+            70.0,
+            (520.0, 850.0),
+            (3.0, 35.0),
+            (650.0, 950.0),
+        )
+        .recovery_multiplier(1.15)
+        .grain_growth_multiplier(1.20)
+        .quench_vacancy_multiplier(1.15)
+}
+
+fn stainless_steel_treatment() -> ThermalTreatmentProfile {
+    ThermalTreatmentProfile::new("metallurgy:thermal/stainless_steel")
+        .steel(
+            1120.0,
+            620.0,
+            95.0,
+            (520.0, 840.0),
+            (5.0, 45.0),
+            (650.0, 980.0),
+        )
+        .precipitation_aging(1320.0, (700.0, 1150.0), 0.8)
+        .recovery_multiplier(0.85)
+        .grain_growth_multiplier(0.90)
+        .quench_vacancy_multiplier(0.95)
+}
+
+fn manganese_steel_treatment() -> ThermalTreatmentProfile {
+    ThermalTreatmentProfile::new("metallurgy:thermal/manganese_silicon_steel")
+        .steel(
+            1010.0,
+            640.0,
+            55.0,
+            (520.0, 880.0),
+            (2.0, 30.0),
+            (650.0, 980.0),
+        )
+        .recovery_multiplier(1.05)
+        .grain_growth_multiplier(1.00)
+        .quench_vacancy_multiplier(1.10)
+}
+
+fn tool_steel_treatment() -> ThermalTreatmentProfile {
+    ThermalTreatmentProfile::new("metallurgy:thermal/tool_steel")
+        .steel(
+            1080.0,
+            700.0,
+            50.0,
+            (550.0, 880.0),
+            (1.5, 25.0),
+            (650.0, 1000.0),
+        )
+        .precipitation_aging(1120.0, (720.0, 920.0), 1.2)
+        .recovery_multiplier(0.75)
+        .grain_growth_multiplier(0.70)
+        .quench_vacancy_multiplier(1.25)
+}
+
+fn aluminum_precipitation_treatment() -> ThermalTreatmentProfile {
+    ThermalTreatmentProfile::new("metallurgy:thermal/aluminum_precipitation")
+        .precipitation_aging(760.0, (360.0, 520.0), 1.6)
+        .recovery_multiplier(1.35)
+        .grain_growth_multiplier(1.35)
+        .quench_vacancy_multiplier(0.75)
+}
+
+fn magnesium_precipitation_treatment() -> ThermalTreatmentProfile {
+    ThermalTreatmentProfile::new("metallurgy:thermal/magnesium_precipitation")
+        .precipitation_aging(650.0, (360.0, 500.0), 1.25)
+        .recovery_multiplier(1.45)
+        .grain_growth_multiplier(1.50)
+        .quench_vacancy_multiplier(0.70)
+}
+
+fn copper_beryllium_treatment() -> ThermalTreatmentProfile {
+    ThermalTreatmentProfile::new("metallurgy:thermal/copper_beryllium")
+        .precipitation_aging(1030.0, (520.0, 700.0), 1.8)
+        .recovery_multiplier(1.10)
+        .grain_growth_multiplier(1.00)
+        .quench_vacancy_multiplier(0.80)
+}
+
+fn nickel_superalloy_treatment() -> ThermalTreatmentProfile {
+    ThermalTreatmentProfile::new("metallurgy:thermal/nickel_superalloy")
+        .precipitation_aging(1450.0, (950.0, 1250.0), 1.35)
+        .recovery_multiplier(0.65)
+        .grain_growth_multiplier(0.55)
+        .quench_vacancy_multiplier(0.65)
+}
+
+fn titanium_alpha_beta_treatment() -> ThermalTreatmentProfile {
+    ThermalTreatmentProfile::new("metallurgy:thermal/titanium_alpha_beta")
+        .precipitation_aging(1180.0, (720.0, 980.0), 0.65)
+        .recovery_multiplier(0.95)
+        .grain_growth_multiplier(0.75)
+        .quench_vacancy_multiplier(0.85)
 }
 
 fn binary_boundary(

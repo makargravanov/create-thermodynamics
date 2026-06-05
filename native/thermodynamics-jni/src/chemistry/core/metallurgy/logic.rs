@@ -267,8 +267,18 @@ fn modeled_state(
         .filter_map(|(_, energy)| energy.is_finite().then_some(*energy))
         .fold(f64::INFINITY, f64::min);
     let phase_fractions = equilibrium_phase_fractions(&phase_energies, alloy.temperature_kelvin)?;
-    let phase_fractions =
-        relax_phase_fractions(phase_fractions, &thermal_treatment, previous, delta_seconds)?;
+    let phase_fractions = apply_thermal_treatment_bias(
+        phase_fractions,
+        &thermal_treatment,
+        &system.thermal_treatment_profile,
+    )?;
+    let phase_fractions = relax_phase_fractions(
+        phase_fractions,
+        &thermal_treatment,
+        &system.thermal_treatment_profile,
+        previous,
+        delta_seconds,
+    )?;
     for (model, fraction) in &phase_fractions {
         let energy = phase_energies
             .iter()
@@ -287,6 +297,7 @@ fn modeled_state(
                 *fraction,
                 energy,
                 &thermal_treatment,
+                &system.thermal_treatment_profile,
                 phase_boundaries,
             ),
         });
@@ -302,12 +313,24 @@ fn modeled_state(
             kinetic_model: model.kinetic_model.clone(),
         })
         .collect::<Vec<_>>();
-    let diffusion_state =
-        estimate_diffusion_state(&phases, alloy.temperature_kelvin, previous, delta_seconds)?;
-    let grain_structure = estimate_grain_structure(&thermal_treatment, &diffusion_state, previous);
+    let diffusion_state = estimate_diffusion_state(
+        &phases,
+        alloy.temperature_kelvin,
+        &thermal_treatment,
+        &system.thermal_treatment_profile,
+        previous,
+        delta_seconds,
+    )?;
+    let grain_structure = estimate_grain_structure(
+        &thermal_treatment,
+        &diffusion_state,
+        &system.thermal_treatment_profile,
+        previous,
+    );
     let mechanical_history = estimate_mechanical_history(
         &thermal_treatment,
         &diffusion_state,
+        &system.thermal_treatment_profile,
         previous,
         alloy.temperature_kelvin,
         delta_seconds,
@@ -315,6 +338,7 @@ fn modeled_state(
     let defect_state = estimate_defect_state(
         &thermal_treatment,
         &diffusion_state,
+        &system.thermal_treatment_profile,
         &mechanical_history,
         previous,
     );
@@ -335,7 +359,12 @@ fn modeled_state(
         generated_system,
         phase_boundaries: Some(phase_boundaries),
         phase_reasons: phase_diagnostics,
-        thermal_reason: thermal_diagnostic(alloy, &thermal_treatment, delta_seconds),
+        thermal_reason: thermal_diagnostic(
+            alloy,
+            &thermal_treatment,
+            &system.thermal_treatment_profile,
+            delta_seconds,
+        ),
         unmodeled_reason: None,
     };
     Ok(MetallurgicalState {
@@ -373,7 +402,12 @@ fn unmodeled_state(
         generated_system: None,
         phase_boundaries: None,
         phase_reasons: Vec::new(),
-        thermal_reason: thermal_diagnostic(alloy, &thermal_treatment, delta_seconds),
+        thermal_reason: thermal_diagnostic(
+            alloy,
+            &thermal_treatment,
+            &ThermalTreatmentProfile::neutral(),
+            delta_seconds,
+        ),
         unmodeled_reason: Some(reason.clone()),
     };
     MetallurgicalState {
@@ -532,6 +566,7 @@ fn selected_phase_reason(
     fraction: f64,
     energy: Option<f64>,
     thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
     boundaries: PhaseBoundarySnapshot,
 ) -> String {
     let energy_text = energy
@@ -574,15 +609,24 @@ fn selected_phase_reason(
             )
         })
         .unwrap_or_else(|| "no phase-fraction hint".to_string());
+    let treatment_text = phase_treatment_reason(phase.kind, thermal_treatment, treatment_profile)
+        .unwrap_or_else(|| "thermal-treatment profile adds no phase-specific bias".to_string());
     format!(
-        "phase '{}' selected fraction {:.6}; {}; {}; {}; {}",
-        phase.id, fraction, energy_text, boundary_text, cooling_text, fraction_hint_text
+        "phase '{}' selected fraction {:.6}; {}; {}; {}; {}; {}",
+        phase.id,
+        fraction,
+        energy_text,
+        boundary_text,
+        cooling_text,
+        fraction_hint_text,
+        treatment_text
     )
 }
 
 fn thermal_diagnostic(
     alloy: &AlloyPhaseSnapshot,
     thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
     delta_seconds: f64,
 ) -> MetallurgicalThermalDiagnostic {
     MetallurgicalThermalDiagnostic {
@@ -591,7 +635,40 @@ fn thermal_diagnostic(
         cooling_rate_kelvin_per_second: thermal_treatment.cooling_rate_kelvin_per_second,
         hold_time_seconds: thermal_treatment.hold_time_seconds,
         delta_seconds,
+        treatment_profile_id: treatment_profile.id.clone(),
+        treatment_events: treatment_events(
+            alloy.temperature_kelvin,
+            thermal_treatment,
+            treatment_profile,
+        ),
     }
+}
+
+fn treatment_events(
+    temperature_kelvin: f64,
+    thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
+) -> Vec<String> {
+    let mut events = Vec::new();
+    if austenitized(thermal_treatment, treatment_profile) {
+        events.push("austenitized before cooling".to_string());
+    }
+    if martensite_bias(temperature_kelvin, thermal_treatment, treatment_profile) > 0.0 {
+        events.push("cooling path favors martensite".to_string());
+    }
+    if bainite_bias(temperature_kelvin, thermal_treatment, treatment_profile) > 0.0 {
+        events.push("cooling path favors bainite".to_string());
+    }
+    if tempering_bias(temperature_kelvin, thermal_treatment, treatment_profile) > 0.0 {
+        events.push("temperature and hold favor tempering".to_string());
+    }
+    if solution_treated(thermal_treatment, treatment_profile) {
+        events.push("previous peak temperature reached solution-treatment range".to_string());
+    }
+    if aging_bias(temperature_kelvin, thermal_treatment, treatment_profile) > 0.0 {
+        events.push("temperature and hold favor precipitation aging".to_string());
+    }
+    events
 }
 
 fn phase_free_energy(
@@ -746,9 +823,61 @@ fn apply_phase_fraction_hints<'a>(
     normalize_phase_fractions(adjusted)
 }
 
+fn apply_thermal_treatment_bias<'a>(
+    phase_fractions: Vec<(&'a MetallurgicalPhaseModel, f64)>,
+    thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
+) -> ChemistryResult<Vec<(&'a MetallurgicalPhaseModel, f64)>> {
+    let mut biased = Vec::with_capacity(phase_fractions.len());
+    for (phase, fraction) in phase_fractions {
+        let multiplier =
+            phase_treatment_multiplier(phase.kind, thermal_treatment, treatment_profile);
+        biased.push((phase, fraction * multiplier));
+    }
+    normalize_phase_fractions(biased)
+}
+
+fn phase_treatment_multiplier(
+    phase_kind: MetallurgicalPhaseKind,
+    thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
+) -> f64 {
+    let temperature_kelvin = thermal_treatment.previous_temperature_kelvin;
+    match phase_kind {
+        MetallurgicalPhaseKind::Martensite => {
+            1.0 + 6.0 * martensite_bias(temperature_kelvin, thermal_treatment, treatment_profile)
+        }
+        MetallurgicalPhaseKind::Bainite => {
+            1.0 + 4.0 * bainite_bias(temperature_kelvin, thermal_treatment, treatment_profile)
+        }
+        MetallurgicalPhaseKind::TemperedMartensite => {
+            1.0 + 5.0 * tempering_bias(temperature_kelvin, thermal_treatment, treatment_profile)
+        }
+        MetallurgicalPhaseKind::Intermetallic => {
+            1.0 + 2.5 * aging_bias(temperature_kelvin, thermal_treatment, treatment_profile)
+        }
+        _ => 1.0,
+    }
+}
+
+fn phase_treatment_reason(
+    phase_kind: MetallurgicalPhaseKind,
+    thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
+) -> Option<String> {
+    let multiplier = phase_treatment_multiplier(phase_kind, thermal_treatment, treatment_profile);
+    (multiplier > 1.0 + 1.0e-9).then(|| {
+        format!(
+            "thermal-treatment profile '{}' applies phase multiplier {:.6}",
+            treatment_profile.id, multiplier
+        )
+    })
+}
+
 fn relax_phase_fractions<'a>(
     equilibrium: Vec<(&'a MetallurgicalPhaseModel, f64)>,
     thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
     previous: Option<&MetallurgicalState>,
     delta_seconds: f64,
 ) -> ChemistryResult<Vec<(&'a MetallurgicalPhaseModel, f64)>> {
@@ -773,8 +902,12 @@ fn relax_phase_fractions<'a>(
             .find(|previous_phase| previous_phase.phase_id == phase.id)
             .map(|previous_phase| previous_phase.fraction)
             .unwrap_or(0.0);
-        let relaxation =
-            1.0 - (-phase.kinetic_model.transformation_rate_per_second * delta_seconds).exp();
+        let treatment_multiplier =
+            phase_treatment_multiplier(phase.kind, thermal_treatment, treatment_profile);
+        let relaxation = 1.0
+            - (-(phase.kinetic_model.transformation_rate_per_second * treatment_multiplier)
+                * delta_seconds)
+                .exp();
         let fraction = previous_fraction
             + (equilibrium_fraction - previous_fraction) * relaxation.clamp(0.0, 1.0);
         relaxed.push((phase, fraction.max(0.0)));
@@ -811,9 +944,137 @@ fn validate_phase_fraction_sum(
     Ok(())
 }
 
+fn austenitized(
+    thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
+) -> bool {
+    treatment_profile
+        .austenitizing_temperature_kelvin
+        .is_some_and(|temperature| thermal_treatment.peak_temperature_kelvin >= temperature)
+}
+
+fn solution_treated(
+    thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
+) -> bool {
+    treatment_profile
+        .solution_temperature_kelvin
+        .is_some_and(|temperature| thermal_treatment.peak_temperature_kelvin >= temperature)
+}
+
+fn martensite_bias(
+    temperature_kelvin: f64,
+    thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
+) -> f64 {
+    let Some(start_temperature) = treatment_profile.martensite_start_kelvin else {
+        return 0.0;
+    };
+    let Some(rate_threshold) = treatment_profile.martensite_cooling_rate_kelvin_per_second else {
+        return 0.0;
+    };
+    if !austenitized(thermal_treatment, treatment_profile) {
+        return 0.0;
+    }
+    let temperature_factor = if temperature_kelvin <= start_temperature {
+        1.0
+    } else {
+        (1.0 - (temperature_kelvin - start_temperature) / start_temperature.max(1.0))
+            .clamp(0.0, 1.0)
+    };
+    let rate_factor = if rate_threshold <= 0.0 {
+        1.0
+    } else {
+        (thermal_treatment.cooling_rate_kelvin_per_second / rate_threshold).clamp(0.0, 2.0) / 2.0
+    };
+    (temperature_factor * rate_factor).clamp(0.0, 1.0)
+}
+
+fn bainite_bias(
+    temperature_kelvin: f64,
+    thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
+) -> f64 {
+    let Some((low_temperature, high_temperature)) =
+        treatment_profile.bainite_temperature_window_kelvin
+    else {
+        return 0.0;
+    };
+    let Some((low_rate, high_rate)) =
+        treatment_profile.bainite_cooling_rate_window_kelvin_per_second
+    else {
+        return 0.0;
+    };
+    if !austenitized(thermal_treatment, treatment_profile)
+        || temperature_kelvin < low_temperature
+        || temperature_kelvin > high_temperature
+    {
+        return 0.0;
+    }
+    let rate = thermal_treatment.cooling_rate_kelvin_per_second;
+    if rate < low_rate || rate > high_rate {
+        return 0.0;
+    }
+    let temperature_center = 0.5 * (low_temperature + high_temperature);
+    let temperature_half_width = 0.5 * (high_temperature - low_temperature).max(1.0);
+    let temperature_factor = (1.0
+        - ((temperature_kelvin - temperature_center).abs() / temperature_half_width))
+        .clamp(0.0, 1.0);
+    let rate_center = 0.5 * (low_rate + high_rate);
+    let rate_half_width = 0.5 * (high_rate - low_rate).max(1.0e-9);
+    let rate_factor = (1.0 - ((rate - rate_center).abs() / rate_half_width)).clamp(0.0, 1.0);
+    (temperature_factor * rate_factor).clamp(0.0, 1.0)
+}
+
+fn tempering_bias(
+    temperature_kelvin: f64,
+    thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
+) -> f64 {
+    let Some((low_temperature, high_temperature)) =
+        treatment_profile.tempering_temperature_window_kelvin
+    else {
+        return 0.0;
+    };
+    if temperature_kelvin < low_temperature || temperature_kelvin > high_temperature {
+        return 0.0;
+    }
+    let temperature_factor = ((temperature_kelvin - low_temperature)
+        / (high_temperature - low_temperature).max(1.0))
+    .clamp(0.0, 1.0);
+    let time_factor = 1.0 - (-(thermal_treatment.hold_time_seconds / 1800.0)).exp();
+    (temperature_factor * time_factor).clamp(0.0, 1.0)
+}
+
+fn aging_bias(
+    temperature_kelvin: f64,
+    thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
+) -> f64 {
+    let Some((low_temperature, high_temperature)) =
+        treatment_profile.aging_temperature_window_kelvin
+    else {
+        return 0.0;
+    };
+    if !solution_treated(thermal_treatment, treatment_profile)
+        || temperature_kelvin < low_temperature
+        || temperature_kelvin > high_temperature
+    {
+        return 0.0;
+    }
+    let center = 0.5 * (low_temperature + high_temperature);
+    let half_width = 0.5 * (high_temperature - low_temperature).max(1.0);
+    let temperature_factor =
+        (1.0 - ((temperature_kelvin - center).abs() / half_width)).clamp(0.0, 1.0);
+    let time_factor = 1.0 - (-(thermal_treatment.hold_time_seconds / 7200.0)).exp();
+    (temperature_factor * time_factor).clamp(0.0, 1.0)
+}
+
 fn estimate_diffusion_state(
     phases: &[MetallurgicalPhaseAmount],
     temperature_kelvin: f64,
+    thermal_treatment: &ThermalTreatmentState,
+    treatment_profile: &ThermalTreatmentProfile,
     previous: Option<&MetallurgicalState>,
     delta_seconds: f64,
 ) -> ChemistryResult<DiffusionState> {
@@ -854,6 +1115,11 @@ fn estimate_diffusion_state(
     let previous_aging = previous
         .map(|state| state.diffusion_state.aging_fraction)
         .unwrap_or(0.0);
+    let aging_bias = aging_bias(temperature_kelvin, thermal_treatment, treatment_profile);
+    precipitation_rate *=
+        1.0 + aging_bias * treatment_profile.precipitation_strength_multiplier.max(0.0);
+    recovery_rate *= treatment_profile.recovery_multiplier.max(0.0);
+
     let precipitation_fraction = if has_liquid {
         previous_precipitation * (-recovery_rate.max(1.0) * delta_seconds).exp()
     } else {
@@ -864,7 +1130,11 @@ fn estimate_diffusion_state(
     let aging_fraction = if has_liquid {
         0.0
     } else {
-        previous_aging + (1.0 - previous_aging) * homogenization_fraction * precipitation_fraction
+        previous_aging
+            + (1.0 - previous_aging)
+                * homogenization_fraction
+                * precipitation_fraction
+                * (1.0 + aging_bias)
     }
     .clamp(0.0, 1.0);
 
@@ -880,6 +1150,7 @@ fn estimate_diffusion_state(
 fn estimate_grain_structure(
     thermal_treatment: &ThermalTreatmentState,
     diffusion_state: &DiffusionState,
+    treatment_profile: &ThermalTreatmentProfile,
     previous: Option<&MetallurgicalState>,
 ) -> GrainStructure {
     let previous_size = previous
@@ -888,7 +1159,8 @@ fn estimate_grain_structure(
     let cooling_refinement = 1.0 / (1.0 + thermal_treatment.cooling_rate_kelvin_per_second / 50.0);
     let hold_growth = 1.0
         + thermal_treatment.hold_time_seconds.min(3600.0) / 3600.0
-            * diffusion_state.homogenization_fraction;
+            * diffusion_state.homogenization_fraction
+            * treatment_profile.grain_growth_multiplier.max(0.0);
     let temperature_growth = if thermal_treatment.previous_temperature_kelvin > 1000.0 {
         thermal_treatment.previous_temperature_kelvin / 1000.0
     } else {
@@ -908,21 +1180,30 @@ fn estimate_grain_structure(
 fn estimate_defect_state(
     thermal_treatment: &ThermalTreatmentState,
     diffusion_state: &DiffusionState,
+    treatment_profile: &ThermalTreatmentProfile,
     mechanical_history: &MechanicalHistoryState,
     previous: Option<&MetallurgicalState>,
 ) -> DefectState {
     let previous_dislocation = previous
         .map(|state| state.defect_state.dislocation_density_per_square_meter)
         .unwrap_or(1.0e10);
-    let quench_factor = (thermal_treatment.cooling_rate_kelvin_per_second / 200.0).clamp(0.0, 1.0);
+    let quench_factor = ((thermal_treatment.cooling_rate_kelvin_per_second / 200.0)
+        * treatment_profile.quench_vacancy_multiplier.max(0.0))
+    .clamp(0.0, 1.0);
     let recovery_factor = (1.0
-        - diffusion_state.homogenization_fraction * thermal_treatment.hold_time_seconds / 7200.0)
+        - diffusion_state.homogenization_fraction
+            * treatment_profile.recovery_multiplier.max(0.0)
+            * thermal_treatment.hold_time_seconds
+            / 7200.0)
         .clamp(0.2, 1.0);
     let previous_cold_work = previous
         .map(|state| state.defect_state.cold_work_fraction)
         .unwrap_or(0.0);
     let cold_work_recovery = mechanical_history.recrystallized_fraction
-        + diffusion_state.homogenization_fraction * thermal_treatment.hold_time_seconds / 7200.0;
+        + diffusion_state.homogenization_fraction
+            * treatment_profile.recovery_multiplier.max(0.0)
+            * thermal_treatment.hold_time_seconds
+            / 7200.0;
     let cold_work_fraction =
         (previous_cold_work * (1.0 - cold_work_recovery.clamp(0.0, 1.0))).clamp(0.0, 1.0);
     DefectState {
@@ -1404,6 +1685,7 @@ fn wear_limiting_factor(
 fn estimate_mechanical_history(
     thermal_treatment: &ThermalTreatmentState,
     diffusion_state: &DiffusionState,
+    treatment_profile: &ThermalTreatmentProfile,
     previous: Option<&MetallurgicalState>,
     temperature_kelvin: f64,
     delta_seconds: f64,
@@ -1414,7 +1696,10 @@ fn estimate_mechanical_history(
     history.recent_true_strain = 0.0;
     history.strain_rate_per_second = 0.0;
     let effective_recovery_time = thermal_treatment.hold_time_seconds.max(delta_seconds);
-    let recovery = (diffusion_state.homogenization_fraction * effective_recovery_time / 3600.0)
+    let recovery = (diffusion_state.homogenization_fraction
+        * treatment_profile.recovery_multiplier.max(0.0)
+        * effective_recovery_time
+        / 3600.0)
         .clamp(0.0, 1.0);
     history.accumulated_true_strain *= 1.0 - recovery;
     history.recrystallized_fraction = (history.recrystallized_fraction
