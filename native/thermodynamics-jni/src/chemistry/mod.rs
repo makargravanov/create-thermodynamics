@@ -65,7 +65,9 @@ pub fn destroy_registry_builder() -> ChemistryResult<ChemistryRegistryBuilder> {
     let builder = reactions::destroy_metallurgy_reactions_registry_builder(builder)?;
     Ok(builder
         .metallurgical_systems(metallurgy_data::default_metallurgical_systems())
-        .metallurgical_elements(metallurgy_data::default_metallurgical_element_data()))
+        .metallurgical_elements(metallurgy_data::default_metallurgical_element_data())
+        .metallurgical_pair_interactions(metallurgy_data::default_metallurgical_pair_interactions())
+        .metallurgical_compound_phases(metallurgy_data::default_metallurgical_compound_phases()))
 }
 
 pub fn destroy_registry_with_generated_reactions_builder(

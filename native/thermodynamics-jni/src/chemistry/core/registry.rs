@@ -5,10 +5,12 @@ use super::catalysis::{CatalystSurfaceId, CatalystSurfaceSpec};
 use super::complex::ComplexSpec;
 use super::error::{ChemistryError, ChemistryResult};
 use super::kinetics::{ChannelConditionEffect, ReactionChannel};
-use super::metallurgy::generation::validate_element_data;
+use super::metallurgy::generation::{
+    validate_compound_phases, validate_element_data, validate_pair_interactions,
+};
 use super::metallurgy::{
-    metallurgical_state_from_alloy_phase, MetallurgicalElementData, MetallurgicalState,
-    MetallurgicalSystem,
+    metallurgical_state_from_alloy_phase, MetallurgicalCompoundPhaseData, MetallurgicalElementData,
+    MetallurgicalPairInteractionData, MetallurgicalState, MetallurgicalSystem,
 };
 use super::mixture::MixturePhase;
 use super::reaction::{ProductDistribution, Reaction, ReactionId, StoichiometricTerm};
@@ -151,6 +153,8 @@ pub struct ChemistryRegistry {
     complex_specs: Vec<ComplexSpec>,
     metallurgical_systems: Vec<MetallurgicalSystem>,
     metallurgical_element_data: Vec<MetallurgicalElementData>,
+    metallurgical_pair_interactions: Vec<MetallurgicalPairInteractionData>,
+    metallurgical_compound_phases: Vec<MetallurgicalCompoundPhaseData>,
 }
 
 impl ChemistryRegistry {
@@ -361,6 +365,14 @@ impl ChemistryRegistry {
         &self.metallurgical_element_data
     }
 
+    pub fn metallurgical_pair_interactions(&self) -> &[MetallurgicalPairInteractionData] {
+        &self.metallurgical_pair_interactions
+    }
+
+    pub fn metallurgical_compound_phases(&self) -> &[MetallurgicalCompoundPhaseData] {
+        &self.metallurgical_compound_phases
+    }
+
     pub fn metallurgical_state_from_alloy_phase(
         &self,
         alloy: &AlloyPhaseSnapshot,
@@ -371,6 +383,8 @@ impl ChemistryRegistry {
             alloy,
             &self.metallurgical_systems,
             &self.metallurgical_element_data,
+            &self.metallurgical_pair_interactions,
+            &self.metallurgical_compound_phases,
             previous,
             delta_seconds,
         )
@@ -394,6 +408,8 @@ pub struct ChemistryRegistryBuilder {
     complex_specs: Vec<ComplexSpec>,
     metallurgical_systems: Vec<MetallurgicalSystem>,
     metallurgical_element_data: Vec<MetallurgicalElementData>,
+    metallurgical_pair_interactions: Vec<MetallurgicalPairInteractionData>,
+    metallurgical_compound_phases: Vec<MetallurgicalCompoundPhaseData>,
 }
 
 impl ChemistryRegistryBuilder {
@@ -459,6 +475,8 @@ impl ChemistryRegistryBuilder {
             complex_specs: registry.complex_specs.clone(),
             metallurgical_systems: registry.metallurgical_systems.clone(),
             metallurgical_element_data: registry.metallurgical_element_data.clone(),
+            metallurgical_pair_interactions: registry.metallurgical_pair_interactions.clone(),
+            metallurgical_compound_phases: registry.metallurgical_compound_phases.clone(),
         }
     }
 
@@ -572,6 +590,35 @@ impl ChemistryRegistryBuilder {
         self
     }
 
+    pub fn metallurgical_pair_interaction(
+        mut self,
+        interaction: MetallurgicalPairInteractionData,
+    ) -> Self {
+        self.metallurgical_pair_interactions.push(interaction);
+        self
+    }
+
+    pub fn metallurgical_pair_interactions(
+        mut self,
+        interactions: impl IntoIterator<Item = MetallurgicalPairInteractionData>,
+    ) -> Self {
+        self.metallurgical_pair_interactions.extend(interactions);
+        self
+    }
+
+    pub fn metallurgical_compound_phase(mut self, phase: MetallurgicalCompoundPhaseData) -> Self {
+        self.metallurgical_compound_phases.push(phase);
+        self
+    }
+
+    pub fn metallurgical_compound_phases(
+        mut self,
+        phases: impl IntoIterator<Item = MetallurgicalCompoundPhaseData>,
+    ) -> Self {
+        self.metallurgical_compound_phases.extend(phases);
+        self
+    }
+
     pub fn build(self) -> ChemistryResult<ChemistryRegistry> {
         let mut redox_half_reactions = BTreeMap::new();
         for half in self.redox_half_reactions {
@@ -603,6 +650,10 @@ impl ChemistryRegistryBuilder {
         let catalyst_surface_specs = build_catalyst_surface_specs(&self.catalyst_surface_specs)?;
         let metallurgical_systems = build_metallurgical_systems(self.metallurgical_systems)?;
         let metallurgical_element_data = validate_element_data(self.metallurgical_element_data)?;
+        let metallurgical_pair_interactions =
+            validate_pair_interactions(self.metallurgical_pair_interactions)?;
+        let metallurgical_compound_phases =
+            validate_compound_phases(self.metallurgical_compound_phases)?;
 
         let mut substance_map = BTreeMap::new();
         for substance in substances {
@@ -688,6 +739,8 @@ impl ChemistryRegistryBuilder {
             complex_specs: complex_specs.into_iter().map(|(spec, _)| spec).collect(),
             metallurgical_systems,
             metallurgical_element_data,
+            metallurgical_pair_interactions,
+            metallurgical_compound_phases,
         };
         registry.validate_redox_half_reactions()?;
         registry.validate_substance_tags()?;

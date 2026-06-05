@@ -112,6 +112,8 @@ pub fn metallurgical_state_from_alloy_phase(
     alloy: &AlloyPhaseSnapshot,
     systems: &[MetallurgicalSystem],
     element_data: &[MetallurgicalElementData],
+    pair_interactions: &[MetallurgicalPairInteractionData],
+    compound_phases: &[MetallurgicalCompoundPhaseData],
     previous: Option<&MetallurgicalState>,
     delta_seconds: f64,
 ) -> ChemistryResult<MetallurgicalState> {
@@ -162,7 +164,12 @@ pub fn metallurgical_state_from_alloy_phase(
             considered_systems,
         );
     }
-    if let Some(generated_system) = generated_system_for_composition(&composition, element_data)? {
+    if let Some(generated_system) = generated_system_for_composition(
+        &composition,
+        element_data,
+        pair_interactions,
+        compound_phases,
+    )? {
         let generated_distance = system_distance_to_composition(&generated_system, &composition)?;
         considered_systems.push(MetallurgicalSystemSelectionDiagnostic {
             system_id: generated_system.id.clone(),

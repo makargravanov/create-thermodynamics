@@ -1,7 +1,9 @@
 use crate::chemistry::metallurgy::{
-    ComponentLimit, CompositionEnergyTerm, CrystalStructure, MetallurgicalElementData,
+    ComponentLimit, CompositionEnergyTerm, CrystalStructure, LiquidMiscibility,
+    MetallurgicalCompoundPhaseData, MetallurgicalElementData, MetallurgicalPairInteractionData,
     MetallurgicalPhaseKind, MetallurgicalPhaseModel, MetallurgicalPhasePropertyModel,
     MetallurgicalSystem, PhaseBoundaryPoint, PhaseFreeEnergyModel, PhaseKineticModel,
+    SolidMiscibility,
 };
 
 pub fn default_metallurgical_element_data() -> Vec<MetallurgicalElementData> {
@@ -194,6 +196,188 @@ pub fn default_metallurgical_systems() -> Vec<MetallurgicalSystem> {
         copper_nickel_system(),
         magnesium_aluminum_zinc_system(),
         titanium_aluminum_vanadium_system(),
+    ]
+}
+
+pub fn default_metallurgical_pair_interactions() -> Vec<MetallurgicalPairInteractionData> {
+    use LiquidMiscibility::Complete as LiquidComplete;
+    use SolidMiscibility::{Complete as SolidComplete, High, Immiscible, Limited, VeryLimited};
+    vec![
+        pair("Au", "Ag", SolidComplete, LiquidComplete)
+            .strengthening(160.0)
+            .resistivity_penalty(0.018),
+        pair("Cu", "Ni", SolidComplete, LiquidComplete)
+            .strengthening(260.0)
+            .resistivity_penalty(0.060),
+        pair("Cu", "Zn", High, LiquidComplete)
+            .strengthening(360.0)
+            .resistivity_penalty(0.075),
+        pair("Cu", "Sn", Limited, LiquidComplete)
+            .strengthening(620.0)
+            .ductility_penalty(0.20)
+            .interaction_strength(-18_000.0),
+        pair("Al", "Cu", Limited, LiquidComplete)
+            .strengthening(760.0)
+            .ductility_penalty(0.22)
+            .interaction_strength(-22_000.0),
+        pair("Al", "Mg", Limited, LiquidComplete)
+            .strengthening(520.0)
+            .ductility_penalty(0.16)
+            .interaction_strength(-16_000.0),
+        pair("Al", "Zn", High, LiquidComplete)
+            .eutectic(655.0, 0.95)
+            .strengthening(480.0)
+            .ductility_penalty(0.12),
+        pair("Al", "destroy:silicon", VeryLimited, LiquidComplete)
+            .eutectic(850.0, 0.12)
+            .strengthening(420.0)
+            .ductility_penalty(0.24),
+        pair("Sn", "Pb", Limited, LiquidComplete)
+            .eutectic(456.0, 0.38)
+            .ductility_penalty(0.12),
+        pair("Bi", "Sn", Limited, LiquidComplete)
+            .eutectic(412.0, 0.43)
+            .ductility_penalty(0.28),
+        pair("Sn", "Ag", Limited, LiquidComplete)
+            .strengthening(480.0)
+            .interaction_strength(-20_000.0),
+        pair("Ni", "Al", Limited, LiquidComplete)
+            .strengthening(900.0)
+            .interaction_strength(-32_000.0)
+            .ductility_penalty(0.20),
+        pair("Cu", "Be", Limited, LiquidComplete)
+            .strengthening(1100.0)
+            .interaction_strength(-28_000.0)
+            .ductility_penalty(0.28),
+        pair("Fe", "destroy:carbon", VeryLimited, LiquidComplete)
+            .strengthening(1800.0)
+            .interaction_strength(-24_000.0)
+            .ductility_penalty(0.35),
+        pair("Cr", "destroy:carbon", VeryLimited, LiquidComplete)
+            .strengthening(1600.0)
+            .interaction_strength(-30_000.0)
+            .ductility_penalty(0.38),
+        pair("Mo", "destroy:carbon", VeryLimited, LiquidComplete)
+            .strengthening(1700.0)
+            .interaction_strength(-34_000.0)
+            .ductility_penalty(0.36),
+        pair("V", "destroy:carbon", VeryLimited, LiquidComplete)
+            .strengthening(1750.0)
+            .interaction_strength(-36_000.0)
+            .ductility_penalty(0.36),
+        pair("Fe", "Cr", High, LiquidComplete)
+            .strengthening(520.0)
+            .resistivity_penalty(0.11),
+        pair("Fe", "Ni", High, LiquidComplete)
+            .strengthening(430.0)
+            .resistivity_penalty(0.08),
+        pair("Fe", "Mn", High, LiquidComplete)
+            .strengthening(520.0)
+            .resistivity_penalty(0.10),
+        pair("Fe", "destroy:silicon", Limited, LiquidComplete)
+            .strengthening(620.0)
+            .resistivity_penalty(0.16),
+        pair("Ag", "Cu", Limited, LiquidComplete)
+            .eutectic(1052.0, 0.40)
+            .strengthening(300.0)
+            .ductility_penalty(0.10),
+        pair("Pb", "Cu", Immiscible, LiquidComplete)
+            .ductility_penalty(0.40)
+            .resistivity_penalty(0.08),
+    ]
+}
+
+pub fn default_metallurgical_compound_phases() -> Vec<MetallurgicalCompoundPhaseData> {
+    vec![
+        compound(
+            "metallurgy:compound/ni3al",
+            [("Ni", 0.75), ("Al", 0.25)],
+            MetallurgicalPhaseKind::Intermetallic,
+            properties(420.0, 1050.0, 0.10, 0.65, 28.0, 0.82),
+            -34_000.0,
+        )
+        .composition_tolerance(0.18)
+        .temperature_window(300.0, 1700.0),
+        compound(
+            "metallurgy:compound/al2cu",
+            [("Al", 0.667), ("Cu", 0.333)],
+            MetallurgicalPhaseKind::Intermetallic,
+            properties(520.0, 850.0, 0.04, 0.42, 38.0, 0.58),
+            -28_000.0,
+        )
+        .composition_tolerance(0.20),
+        compound(
+            "metallurgy:compound/mg17al12",
+            [("Mg", 0.586), ("Al", 0.414)],
+            MetallurgicalPhaseKind::Intermetallic,
+            properties(300.0, 520.0, 0.05, 0.22, 52.0, 0.42),
+            -19_000.0,
+        )
+        .composition_tolerance(0.18),
+        compound(
+            "metallurgy:compound/fe3c",
+            [("Fe", 0.75), ("destroy:carbon", 0.25)],
+            MetallurgicalPhaseKind::Cementite,
+            properties(820.0, 1250.0, 0.015, 0.55, 11.0, 0.18),
+            -30_000.0,
+        )
+        .composition_tolerance(0.22),
+        compound(
+            "metallurgy:compound/cr_carbide",
+            [("Cr", 0.75), ("destroy:carbon", 0.25)],
+            MetallurgicalPhaseKind::Intermetallic,
+            properties(1050.0, 1700.0, 0.01, 0.72, 8.0, 0.50),
+            -38_000.0,
+        )
+        .composition_tolerance(0.24),
+        compound(
+            "metallurgy:compound/mo_carbide",
+            [("Mo", 0.50), ("destroy:carbon", 0.50)],
+            MetallurgicalPhaseKind::Intermetallic,
+            properties(1150.0, 1800.0, 0.008, 0.62, 15.0, 0.62),
+            -40_000.0,
+        )
+        .composition_tolerance(0.24),
+        compound(
+            "metallurgy:compound/v_carbide",
+            [("V", 0.50), ("destroy:carbon", 0.50)],
+            MetallurgicalPhaseKind::Intermetallic,
+            properties(1100.0, 1750.0, 0.008, 0.58, 18.0, 0.58),
+            -42_000.0,
+        )
+        .composition_tolerance(0.24),
+        compound(
+            "metallurgy:compound/cube",
+            [("Cu", 0.50), ("Be", 0.50)],
+            MetallurgicalPhaseKind::Intermetallic,
+            properties(560.0, 1200.0, 0.03, 0.18, 70.0, 0.70),
+            -32_000.0,
+        )
+        .composition_tolerance(0.20),
+        compound(
+            "metallurgy:compound/cu6sn5",
+            [("Cu", 0.545), ("Sn", 0.455)],
+            MetallurgicalPhaseKind::Intermetallic,
+            properties(430.0, 760.0, 0.025, 0.34, 36.0, 0.48),
+            -24_000.0,
+        )
+        .composition_tolerance(0.18),
+        compound(
+            "metallurgy:compound/cu3sn",
+            [("Cu", 0.75), ("Sn", 0.25)],
+            MetallurgicalPhaseKind::Intermetallic,
+            properties(480.0, 820.0, 0.02, 0.30, 42.0, 0.50),
+            -25_000.0,
+        )
+        .composition_tolerance(0.18),
+        compound(
+            "metallurgy:compound/ag3sn",
+            [("Ag", 0.75), ("Sn", 0.25)],
+            MetallurgicalPhaseKind::Intermetallic,
+            properties(260.0, 430.0, 0.06, 0.11, 80.0, 0.66),
+            -21_000.0,
+        )
+        .composition_tolerance(0.18),
     ]
 }
 
@@ -1150,6 +1334,31 @@ fn element(
         atomic_radius_pm,
         crystal_structure,
         base_property_model,
+    )
+}
+
+fn pair(
+    first: &'static str,
+    second: &'static str,
+    solid_miscibility: SolidMiscibility,
+    liquid_miscibility: LiquidMiscibility,
+) -> MetallurgicalPairInteractionData {
+    MetallurgicalPairInteractionData::new(first, second, solid_miscibility, liquid_miscibility)
+}
+
+fn compound<const N: usize>(
+    id: &'static str,
+    components: [(&'static str, f64); N],
+    kind: MetallurgicalPhaseKind,
+    property_model: MetallurgicalPhasePropertyModel,
+    formation_energy_j_per_mol: f64,
+) -> MetallurgicalCompoundPhaseData {
+    MetallurgicalCompoundPhaseData::new(
+        id,
+        components,
+        kind,
+        property_model,
+        formation_energy_j_per_mol,
     )
 }
 

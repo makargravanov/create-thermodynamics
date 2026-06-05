@@ -5,7 +5,7 @@ use crate::chemistry::error::{ChemistryError, ChemistryResult};
 
 use super::constants::{GAS_CONSTANT_J_PER_MOL_KELVIN, TRACE_COMPONENT_FRACTION};
 use super::validation::{
-    validate_fraction, validate_kinetic_model, validate_non_negative_finite,
+    validate_finite, validate_fraction, validate_kinetic_model, validate_non_negative_finite,
     validate_phase_boundary_point, validate_phase_model, validate_positive_finite,
     validate_property_model,
 };
@@ -303,6 +303,238 @@ impl MetallurgicalElementData {
             self.carbide_forming_tendency,
             "metallurgical element carbide-forming tendency",
         )?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum SolidMiscibility {
+    Complete,
+    High,
+    Limited,
+    VeryLimited,
+    Immiscible,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum LiquidMiscibility {
+    Complete,
+    Limited,
+    Immiscible,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetallurgicalPairInteractionData {
+    pub first: MetallurgicalComponentId,
+    pub second: MetallurgicalComponentId,
+    pub solid_miscibility: SolidMiscibility,
+    pub liquid_miscibility: LiquidMiscibility,
+    pub eutectic_temperature_kelvin: Option<f64>,
+    pub eutectic_second_fraction: Option<f64>,
+    pub interaction_strength_j_per_mol: f64,
+    pub resistivity_penalty_per_fraction: f64,
+    pub ductility_penalty_per_fraction: f64,
+    pub strengthening_mpa_per_fraction: f64,
+}
+
+impl MetallurgicalPairInteractionData {
+    pub fn new(
+        first: impl Into<MetallurgicalComponentId>,
+        second: impl Into<MetallurgicalComponentId>,
+        solid_miscibility: SolidMiscibility,
+        liquid_miscibility: LiquidMiscibility,
+    ) -> Self {
+        Self {
+            first: first.into(),
+            second: second.into(),
+            solid_miscibility,
+            liquid_miscibility,
+            eutectic_temperature_kelvin: None,
+            eutectic_second_fraction: None,
+            interaction_strength_j_per_mol: 0.0,
+            resistivity_penalty_per_fraction: 0.0,
+            ductility_penalty_per_fraction: 0.0,
+            strengthening_mpa_per_fraction: 0.0,
+        }
+    }
+
+    pub fn eutectic(mut self, temperature_kelvin: f64, second_fraction: f64) -> Self {
+        self.eutectic_temperature_kelvin = Some(temperature_kelvin);
+        self.eutectic_second_fraction = Some(second_fraction);
+        self
+    }
+
+    pub fn interaction_strength(mut self, value: f64) -> Self {
+        self.interaction_strength_j_per_mol = value;
+        self
+    }
+
+    pub fn resistivity_penalty(mut self, value: f64) -> Self {
+        self.resistivity_penalty_per_fraction = value;
+        self
+    }
+
+    pub fn ductility_penalty(mut self, value: f64) -> Self {
+        self.ductility_penalty_per_fraction = value;
+        self
+    }
+
+    pub fn strengthening(mut self, value: f64) -> Self {
+        self.strengthening_mpa_per_fraction = value;
+        self
+    }
+
+    pub fn contains_pair(
+        &self,
+        left: &MetallurgicalComponentId,
+        right: &MetallurgicalComponentId,
+    ) -> bool {
+        (&self.first == left && &self.second == right)
+            || (&self.first == right && &self.second == left)
+    }
+
+    pub fn validate(&self) -> ChemistryResult<()> {
+        if self.first == self.second {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "metallurgical pair interaction '{}' references the same component twice",
+                self.first.as_str()
+            )));
+        }
+        if let Some(temperature) = self.eutectic_temperature_kelvin {
+            validate_positive_finite(temperature, "metallurgical pair eutectic temperature")?;
+            let Some(second_fraction) = self.eutectic_second_fraction else {
+                return Err(ChemistryError::InvalidMixtureState(
+                    "metallurgical pair eutectic temperature requires eutectic composition"
+                        .to_string(),
+                ));
+            };
+            validate_fraction(second_fraction, "metallurgical pair eutectic composition")?;
+        } else if self.eutectic_second_fraction.is_some() {
+            return Err(ChemistryError::InvalidMixtureState(
+                "metallurgical pair eutectic composition requires eutectic temperature".to_string(),
+            ));
+        }
+        validate_finite(
+            self.interaction_strength_j_per_mol,
+            "metallurgical pair interaction strength",
+        )?;
+        validate_non_negative_finite(
+            self.resistivity_penalty_per_fraction,
+            "metallurgical pair resistivity penalty",
+        )?;
+        validate_non_negative_finite(
+            self.ductility_penalty_per_fraction,
+            "metallurgical pair ductility penalty",
+        )?;
+        validate_non_negative_finite(
+            self.strengthening_mpa_per_fraction,
+            "metallurgical pair strengthening",
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetallurgicalCompoundPhaseData {
+    pub id: String,
+    pub components: BTreeMap<MetallurgicalComponentId, f64>,
+    pub kind: MetallurgicalPhaseKind,
+    pub property_model: MetallurgicalPhasePropertyModel,
+    pub formation_energy_j_per_mol: f64,
+    pub low_temperature_kelvin: f64,
+    pub high_temperature_kelvin: f64,
+    pub composition_tolerance_fraction: f64,
+    pub kinetic_model: Option<PhaseKineticModel>,
+}
+
+impl MetallurgicalCompoundPhaseData {
+    pub fn new(
+        id: impl Into<String>,
+        components: impl IntoIterator<Item = (impl Into<MetallurgicalComponentId>, f64)>,
+        kind: MetallurgicalPhaseKind,
+        property_model: MetallurgicalPhasePropertyModel,
+        formation_energy_j_per_mol: f64,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            components: components
+                .into_iter()
+                .map(|(component, fraction)| (component.into(), fraction))
+                .collect(),
+            kind,
+            property_model,
+            formation_energy_j_per_mol,
+            low_temperature_kelvin: 0.0,
+            high_temperature_kelvin: f64::MAX,
+            composition_tolerance_fraction: 0.20,
+            kinetic_model: None,
+        }
+    }
+
+    pub fn temperature_window(mut self, low: f64, high: f64) -> Self {
+        self.low_temperature_kelvin = low;
+        self.high_temperature_kelvin = high;
+        self
+    }
+
+    pub fn composition_tolerance(mut self, tolerance: f64) -> Self {
+        self.composition_tolerance_fraction = tolerance;
+        self
+    }
+
+    pub fn kinetic_model(mut self, model: PhaseKineticModel) -> Self {
+        self.kinetic_model = Some(model);
+        self
+    }
+
+    pub fn validate(&self) -> ChemistryResult<()> {
+        if self.id.trim().is_empty() {
+            return Err(ChemistryError::InvalidMixtureState(
+                "metallurgical compound phase id must not be empty".to_string(),
+            ));
+        }
+        if self.components.is_empty() {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "metallurgical compound phase '{}' has no components",
+                self.id
+            )));
+        }
+        let total = self.components.values().sum::<f64>();
+        if (total - 1.0).abs() > 1.0e-6 {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "metallurgical compound phase '{}' composition must sum to 1.0, got {total}",
+                self.id
+            )));
+        }
+        for fraction in self.components.values() {
+            validate_fraction(*fraction, "metallurgical compound component fraction")?;
+        }
+        validate_property_model(&self.property_model)?;
+        validate_finite(
+            self.formation_energy_j_per_mol,
+            "metallurgical compound formation energy",
+        )?;
+        validate_non_negative_finite(
+            self.low_temperature_kelvin,
+            "metallurgical compound low temperature",
+        )?;
+        validate_positive_finite(
+            self.high_temperature_kelvin,
+            "metallurgical compound high temperature",
+        )?;
+        if self.low_temperature_kelvin >= self.high_temperature_kelvin {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "metallurgical compound phase '{}' has invalid temperature window",
+                self.id
+            )));
+        }
+        validate_positive_finite(
+            self.composition_tolerance_fraction,
+            "metallurgical compound composition tolerance",
+        )?;
+        if let Some(model) = &self.kinetic_model {
+            validate_kinetic_model(model)?;
+        }
         Ok(())
     }
 }

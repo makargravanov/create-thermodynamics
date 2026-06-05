@@ -1,7 +1,8 @@
 use super::*;
 use crate::chemistry::alloy::{alloy_phase_snapshots, AlloyPhaseSnapshot};
 use crate::chemistry::metallurgy_data::{
-    default_metallurgical_element_data, default_metallurgical_systems,
+    default_metallurgical_compound_phases, default_metallurgical_element_data,
+    default_metallurgical_pair_interactions, default_metallurgical_systems,
 };
 use crate::chemistry::mixture::Mixture;
 use crate::chemistry::registry::ChemistryRegistryBuilder;
@@ -21,6 +22,16 @@ fn default_metallurgical_systems_are_valid() {
 fn default_metallurgical_element_data_are_valid() {
     for data in default_metallurgical_element_data() {
         data.validate().unwrap();
+    }
+}
+
+#[test]
+fn default_generated_metallurgy_data_are_valid() {
+    for interaction in default_metallurgical_pair_interactions() {
+        interaction.validate().unwrap();
+    }
+    for phase in default_metallurgical_compound_phases() {
+        phase.validate().unwrap();
     }
 }
 
@@ -105,6 +116,72 @@ fn exact_registered_system_takes_priority_over_generated_system() {
         state.kind,
         MetallurgicalStateKind::Modeled { ref system_id } if system_id == "metallurgy:cu_zn"
     ));
+}
+
+#[test]
+fn generated_copper_beryllium_system_uses_specific_cube_phase() {
+    let registry = test_registry().build().unwrap();
+    let mut mixture = Mixture::new(1800.0).unwrap();
+    mixture
+        .add_substance(&registry, "destroy:test_copper", 0.50)
+        .unwrap();
+    mixture
+        .add_substance(&registry, "destroy:test_beryllium", 0.50)
+        .unwrap();
+    let mut alloy = alloy_phase_snapshots(&registry, &mixture)
+        .unwrap()
+        .remove(0);
+    alloy.temperature_kelvin = 1200.0;
+    let state = registry
+        .metallurgical_state_from_alloy_phase(&alloy, None, 1.0)
+        .unwrap();
+
+    assert!(matches!(
+        state.kind,
+        MetallurgicalStateKind::Modeled { ref system_id }
+            if system_id == "metallurgy:generated/be_cu"
+    ));
+    assert!(
+        state
+            .diagnostics
+            .phase_reasons
+            .iter()
+            .any(|phase| phase.phase_id.contains("compound/cube")
+                || phase.phase_id.contains("compound_cube")),
+        "phase diagnostics: {:?}",
+        state.diagnostics.phase_reasons
+    );
+}
+
+#[test]
+fn generated_tin_lead_system_uses_eutectic_solidus() {
+    let registry = test_registry().build().unwrap();
+    let mut mixture = Mixture::new(700.0).unwrap();
+    mixture
+        .add_substance(&registry, "destroy:test_tin", 0.62)
+        .unwrap();
+    mixture
+        .add_substance(&registry, "destroy:test_lead", 0.38)
+        .unwrap();
+    let alloy = alloy_phase_snapshots(&registry, &mixture)
+        .unwrap()
+        .remove(0);
+    let state = registry
+        .metallurgical_state_from_alloy_phase(&alloy, None, 1.0)
+        .unwrap();
+
+    assert!(matches!(
+        state.kind,
+        MetallurgicalStateKind::Modeled { ref system_id }
+            if system_id == "metallurgy:generated/pb_sn"
+    ));
+    assert!(
+        state
+            .phase_boundaries
+            .is_some_and(|boundaries| boundaries.solidus_kelvin <= 457.0),
+        "phase boundaries: {:?}",
+        state.phase_boundaries
+    );
 }
 
 #[test]
@@ -785,6 +862,8 @@ fn test_registry() -> ChemistryRegistryBuilder {
     ChemistryRegistryBuilder::new()
         .metallurgical_systems(default_metallurgical_systems())
         .metallurgical_elements(default_metallurgical_element_data())
+        .metallurgical_pair_interactions(default_metallurgical_pair_interactions())
+        .metallurgical_compound_phases(default_metallurgical_compound_phases())
         .substance(test_metal("destroy:test_iron", "Fe", 55.845, 1811.0))
         .substance(test_metal("destroy:test_lead", "Pb", 207.2, 600.61))
         .substance(test_metal("destroy:test_aluminum", "Al", 26.982, 933.0))
@@ -795,6 +874,8 @@ fn test_registry() -> ChemistryRegistryBuilder {
         .substance(test_metal("destroy:test_chromium", "Cr", 51.996, 2180.0))
         .substance(test_metal("destroy:test_gold", "Au", 196.967, 1337.0))
         .substance(test_metal("destroy:test_silver", "Ag", 107.868, 1235.0))
+        .substance(test_metal("destroy:test_tin", "Sn", 118.71, 505.0))
+        .substance(test_metal("destroy:test_beryllium", "Be", 9.0122, 1560.0))
         .substance(test_metal(
             "destroy:test_unknown_metal",
             "Xx",
