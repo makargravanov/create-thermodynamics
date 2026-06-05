@@ -215,6 +215,141 @@ pub struct MetallurgicalPhasePropertyModel {
     pub corrosion_resistance_score: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetallurgicalPropertyCalibration {
+    pub hall_petch_mpa_sqrt_micrometer: f64,
+    pub dislocation_strengthening_mpa_at_1e12: f64,
+    pub precipitation_strengthening_mpa: f64,
+    pub cold_work_strengthening_mpa: f64,
+    pub hardness_per_strength_mpa: f64,
+    pub vacancy_ductility_penalty_per_fraction: f64,
+    pub precipitation_ductility_penalty: f64,
+    pub cold_work_ductility_penalty: f64,
+    pub resistivity_precipitation_penalty_micro_ohm_meter: f64,
+    pub resistivity_cold_work_penalty_micro_ohm_meter: f64,
+    pub thermal_conductivity_precipitation_penalty: f64,
+    pub thermal_conductivity_defect_penalty: f64,
+}
+
+impl MetallurgicalPropertyCalibration {
+    pub fn neutral() -> Self {
+        Self {
+            hall_petch_mpa_sqrt_micrometer: 80.0,
+            dislocation_strengthening_mpa_at_1e12: 15.0,
+            precipitation_strengthening_mpa: 180.0,
+            cold_work_strengthening_mpa: 260.0,
+            hardness_per_strength_mpa: 0.30,
+            vacancy_ductility_penalty_per_fraction: 1000.0,
+            precipitation_ductility_penalty: 0.35,
+            cold_work_ductility_penalty: 0.55,
+            resistivity_precipitation_penalty_micro_ohm_meter: 0.0,
+            resistivity_cold_work_penalty_micro_ohm_meter: 0.0,
+            thermal_conductivity_precipitation_penalty: 0.0,
+            thermal_conductivity_defect_penalty: 0.0,
+        }
+    }
+
+    pub fn strength_response(
+        mut self,
+        hall_petch_mpa_sqrt_micrometer: f64,
+        dislocation_strengthening_mpa_at_1e12: f64,
+        precipitation_strengthening_mpa: f64,
+        cold_work_strengthening_mpa: f64,
+    ) -> Self {
+        self.hall_petch_mpa_sqrt_micrometer = hall_petch_mpa_sqrt_micrometer;
+        self.dislocation_strengthening_mpa_at_1e12 = dislocation_strengthening_mpa_at_1e12;
+        self.precipitation_strengthening_mpa = precipitation_strengthening_mpa;
+        self.cold_work_strengthening_mpa = cold_work_strengthening_mpa;
+        self
+    }
+
+    pub fn hardness_per_strength(mut self, value: f64) -> Self {
+        self.hardness_per_strength_mpa = value;
+        self
+    }
+
+    pub fn ductility_penalties(
+        mut self,
+        vacancy_ductility_penalty_per_fraction: f64,
+        precipitation_ductility_penalty: f64,
+        cold_work_ductility_penalty: f64,
+    ) -> Self {
+        self.vacancy_ductility_penalty_per_fraction = vacancy_ductility_penalty_per_fraction;
+        self.precipitation_ductility_penalty = precipitation_ductility_penalty;
+        self.cold_work_ductility_penalty = cold_work_ductility_penalty;
+        self
+    }
+
+    pub fn transport_penalties(
+        mut self,
+        resistivity_precipitation_penalty_micro_ohm_meter: f64,
+        resistivity_cold_work_penalty_micro_ohm_meter: f64,
+        thermal_conductivity_precipitation_penalty: f64,
+        thermal_conductivity_defect_penalty: f64,
+    ) -> Self {
+        self.resistivity_precipitation_penalty_micro_ohm_meter =
+            resistivity_precipitation_penalty_micro_ohm_meter;
+        self.resistivity_cold_work_penalty_micro_ohm_meter =
+            resistivity_cold_work_penalty_micro_ohm_meter;
+        self.thermal_conductivity_precipitation_penalty =
+            thermal_conductivity_precipitation_penalty;
+        self.thermal_conductivity_defect_penalty = thermal_conductivity_defect_penalty;
+        self
+    }
+
+    pub fn validate(&self) -> ChemistryResult<()> {
+        validate_non_negative_finite(
+            self.hall_petch_mpa_sqrt_micrometer,
+            "property calibration Hall-Petch coefficient",
+        )?;
+        validate_non_negative_finite(
+            self.dislocation_strengthening_mpa_at_1e12,
+            "property calibration dislocation strengthening",
+        )?;
+        validate_non_negative_finite(
+            self.precipitation_strengthening_mpa,
+            "property calibration precipitation strengthening",
+        )?;
+        validate_non_negative_finite(
+            self.cold_work_strengthening_mpa,
+            "property calibration cold-work strengthening",
+        )?;
+        validate_non_negative_finite(
+            self.hardness_per_strength_mpa,
+            "property calibration hardness conversion",
+        )?;
+        validate_non_negative_finite(
+            self.vacancy_ductility_penalty_per_fraction,
+            "property calibration vacancy ductility penalty",
+        )?;
+        validate_non_negative_finite(
+            self.precipitation_ductility_penalty,
+            "property calibration precipitation ductility penalty",
+        )?;
+        validate_non_negative_finite(
+            self.cold_work_ductility_penalty,
+            "property calibration cold-work ductility penalty",
+        )?;
+        validate_non_negative_finite(
+            self.resistivity_precipitation_penalty_micro_ohm_meter,
+            "property calibration precipitation resistivity penalty",
+        )?;
+        validate_non_negative_finite(
+            self.resistivity_cold_work_penalty_micro_ohm_meter,
+            "property calibration cold-work resistivity penalty",
+        )?;
+        validate_non_negative_finite(
+            self.thermal_conductivity_precipitation_penalty,
+            "property calibration precipitation thermal-conductivity penalty",
+        )?;
+        validate_non_negative_finite(
+            self.thermal_conductivity_defect_penalty,
+            "property calibration defect thermal-conductivity penalty",
+        )?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum CrystalStructure {
     BodyCenteredCubic,
@@ -870,6 +1005,7 @@ pub struct MetallurgicalSystem {
     pub phase_models: Vec<MetallurgicalPhaseModel>,
     pub phase_boundaries: Vec<PhaseBoundaryPoint>,
     pub thermal_treatment_profile: ThermalTreatmentProfile,
+    pub property_calibration: MetallurgicalPropertyCalibration,
 }
 
 impl MetallurgicalSystem {
@@ -883,6 +1019,7 @@ impl MetallurgicalSystem {
             phase_models: Vec::new(),
             phase_boundaries: Vec::new(),
             thermal_treatment_profile: ThermalTreatmentProfile::neutral(),
+            property_calibration: MetallurgicalPropertyCalibration::neutral(),
         }
     }
 
@@ -898,6 +1035,11 @@ impl MetallurgicalSystem {
 
     pub fn thermal_treatment_profile(mut self, profile: ThermalTreatmentProfile) -> Self {
         self.thermal_treatment_profile = profile;
+        self
+    }
+
+    pub fn property_calibration(mut self, calibration: MetallurgicalPropertyCalibration) -> Self {
+        self.property_calibration = calibration;
         self
     }
 
@@ -932,6 +1074,7 @@ impl MetallurgicalSystem {
             validate_phase_boundary_point(self, point)?;
         }
         self.thermal_treatment_profile.validate()?;
+        self.property_calibration.validate()?;
         Ok(())
     }
 }
@@ -1192,6 +1335,7 @@ pub struct MetallurgicalState {
     pub mechanical_history: MechanicalHistoryState,
     pub diffusion_state: DiffusionState,
     pub thermal_treatment: ThermalTreatmentState,
+    pub property_calibration: MetallurgicalPropertyCalibration,
     pub properties: AlloyPropertySnapshot,
     pub service_properties: AlloyServicePropertySnapshot,
     pub use_profile: AlloyUseProfile,

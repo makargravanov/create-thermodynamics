@@ -83,6 +83,7 @@ pub fn apply_mechanical_working(
         &worked.grain_structure,
         &worked.defect_state,
         &worked.diffusion_state,
+        &worked.property_calibration,
     )?;
     worked.service_properties = estimate_service_properties(
         &worked.properties,
@@ -342,8 +343,13 @@ fn modeled_state(
         &mechanical_history,
         previous,
     );
-    let properties =
-        estimate_properties(&phases, &grain_structure, &defect_state, &diffusion_state)?;
+    let properties = estimate_properties(
+        &phases,
+        &grain_structure,
+        &defect_state,
+        &diffusion_state,
+        &system.property_calibration,
+    )?;
     let service_properties = estimate_service_properties(
         &properties,
         &phases,
@@ -380,6 +386,7 @@ fn modeled_state(
         mechanical_history,
         diffusion_state,
         thermal_treatment,
+        property_calibration: system.property_calibration.clone(),
         properties,
         service_properties,
         use_profile,
@@ -436,6 +443,7 @@ fn unmodeled_state(
             aging_fraction: 0.0,
         },
         thermal_treatment,
+        property_calibration: MetallurgicalPropertyCalibration::neutral(),
         properties: AlloyPropertySnapshot {
             hardness_hv: 0.0,
             yield_strength_mpa: 0.0,
@@ -1220,7 +1228,9 @@ fn estimate_properties(
     grain_structure: &GrainStructure,
     defect_state: &DefectState,
     diffusion_state: &DiffusionState,
+    calibration: &MetallurgicalPropertyCalibration,
 ) -> ChemistryResult<AlloyPropertySnapshot> {
+    calibration.validate()?;
     let total = phases.iter().map(|phase| phase.fraction).sum::<f64>();
     if !total.is_finite() || (total - 1.0).abs() > 1.0e-6 {
         return Err(ChemistryError::InvalidMixtureState(format!(
@@ -1247,11 +1257,15 @@ fn estimate_properties(
             f * model.thermal_conductivity_w_per_meter_kelvin;
         properties.corrosion_resistance_score += f * model.corrosion_resistance_score;
     }
-    let grain_strengthening = 80.0 / grain_structure.average_grain_size_micrometers.sqrt();
-    let dislocation_strengthening =
-        (defect_state.dislocation_density_per_square_meter / 1.0e12).sqrt() * 15.0;
-    let precipitation_strengthening = 180.0 * diffusion_state.aging_fraction;
-    let cold_work_strengthening = 260.0 * defect_state.cold_work_fraction;
+    let grain_strengthening = calibration.hall_petch_mpa_sqrt_micrometer
+        / grain_structure.average_grain_size_micrometers.sqrt();
+    let dislocation_strengthening = (defect_state.dislocation_density_per_square_meter / 1.0e12)
+        .sqrt()
+        * calibration.dislocation_strengthening_mpa_at_1e12;
+    let precipitation_strengthening =
+        calibration.precipitation_strengthening_mpa * diffusion_state.aging_fraction;
+    let cold_work_strengthening =
+        calibration.cold_work_strengthening_mpa * defect_state.cold_work_fraction;
     properties.yield_strength_mpa += grain_strengthening
         + dislocation_strengthening
         + precipitation_strengthening
@@ -1260,11 +1274,30 @@ fn estimate_properties(
         + dislocation_strengthening
         + precipitation_strengthening
         + cold_work_strengthening)
-        * 0.3;
+        * calibration.hardness_per_strength_mpa;
     properties.ductility_fraction = (properties.ductility_fraction
-        * (1.0 - defect_state.vacancy_fraction * 1000.0))
-        * (1.0 - 0.35 * diffusion_state.precipitation_fraction).clamp(0.0, 1.0)
-        * (1.0 - 0.55 * defect_state.cold_work_fraction).clamp(0.0, 1.0);
+        * (1.0
+            - defect_state.vacancy_fraction * calibration.vacancy_ductility_penalty_per_fraction))
+        * (1.0
+            - calibration.precipitation_ductility_penalty * diffusion_state.precipitation_fraction)
+            .clamp(0.0, 1.0)
+        * (1.0 - calibration.cold_work_ductility_penalty * defect_state.cold_work_fraction)
+            .clamp(0.0, 1.0);
+    properties.electrical_resistivity_micro_ohm_meter += calibration
+        .resistivity_precipitation_penalty_micro_ohm_meter
+        * diffusion_state.precipitation_fraction
+        + calibration.resistivity_cold_work_penalty_micro_ohm_meter
+            * defect_state.cold_work_fraction;
+    let thermal_penalty = 1.0
+        + calibration.thermal_conductivity_precipitation_penalty
+            * diffusion_state.precipitation_fraction
+        + calibration.thermal_conductivity_defect_penalty
+            * (defect_state.cold_work_fraction
+                + (defect_state.dislocation_density_per_square_meter / 1.0e14)
+                    .sqrt()
+                    .clamp(0.0, 1.0));
+    properties.thermal_conductivity_w_per_meter_kelvin /= thermal_penalty.max(1.0);
+    validate_alloy_properties(&properties)?;
     Ok(properties)
 }
 

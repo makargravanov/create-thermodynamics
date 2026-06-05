@@ -575,6 +575,78 @@ fn cold_mechanical_work_accumulates_dislocations_and_strengthens_alloy() {
 }
 
 #[test]
+fn conductor_cold_work_uses_family_transport_calibration() {
+    let registry = test_registry().build().unwrap();
+    let state = nonferrous_state(
+        &registry,
+        [("destroy:test_copper", 0.72), ("destroy:test_nickel", 0.28)],
+        1300.0,
+        None,
+        1.0,
+    );
+    let worked = apply_mechanical_working(
+        &state,
+        MechanicalWorkingProcess::new(
+            MechanicalWorkingMode::Drawing,
+            0.35,
+            3.0,
+            state.temperature_kelvin,
+            20.0,
+        ),
+    )
+    .unwrap();
+
+    assert!(
+        worked.properties.electrical_resistivity_micro_ohm_meter
+            > state.properties.electrical_resistivity_micro_ohm_meter,
+        "worked resistivity {}, initial {}",
+        worked.properties.electrical_resistivity_micro_ohm_meter,
+        state.properties.electrical_resistivity_micro_ohm_meter
+    );
+    assert!(
+        worked.properties.thermal_conductivity_w_per_meter_kelvin
+            < state.properties.thermal_conductivity_w_per_meter_kelvin,
+        "worked thermal conductivity {}, initial {}",
+        worked.properties.thermal_conductivity_w_per_meter_kelvin,
+        state.properties.thermal_conductivity_w_per_meter_kelvin
+    );
+}
+
+#[test]
+fn generated_alloy_gets_data_derived_property_calibration() {
+    let registry = test_registry().build().unwrap();
+    let state = nonferrous_state(
+        &registry,
+        [("destroy:test_gold", 0.55), ("destroy:test_silver", 0.45)],
+        1200.0,
+        None,
+        1.0,
+    );
+    let neutral = MetallurgicalPropertyCalibration::neutral();
+
+    assert!(matches!(
+        state.kind,
+        MetallurgicalStateKind::Modeled { ref system_id }
+            if system_id == "metallurgy:generated/ag_au"
+    ));
+    assert!(
+        state
+            .property_calibration
+            .resistivity_cold_work_penalty_micro_ohm_meter
+            > neutral.resistivity_cold_work_penalty_micro_ohm_meter,
+        "generated calibration must include conductor transport penalties: {:?}",
+        state.property_calibration
+    );
+    assert!(
+        (state.property_calibration.precipitation_strengthening_mpa
+            - neutral.precipitation_strengthening_mpa)
+            .abs()
+            > 1.0,
+        "generated calibration should be derived from element strengthening data"
+    );
+}
+
+#[test]
 fn service_profile_is_derived_from_modeled_state_properties() {
     let registry = test_registry().build().unwrap();
     let state = nonferrous_state(

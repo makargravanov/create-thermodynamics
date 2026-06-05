@@ -2,8 +2,8 @@ use crate::chemistry::metallurgy::{
     ComponentLimit, CompositionEnergyTerm, CrystalStructure, LiquidMiscibility,
     MetallurgicalCompoundPhaseData, MetallurgicalElementData, MetallurgicalPairInteractionData,
     MetallurgicalPhaseKind, MetallurgicalPhaseModel, MetallurgicalPhasePropertyModel,
-    MetallurgicalSystem, PhaseBoundaryPoint, PhaseFreeEnergyModel, PhaseKineticModel,
-    SolidMiscibility, ThermalTreatmentProfile,
+    MetallurgicalPropertyCalibration, MetallurgicalSystem, PhaseBoundaryPoint,
+    PhaseFreeEnergyModel, PhaseKineticModel, SolidMiscibility, ThermalTreatmentProfile,
 };
 
 pub fn default_metallurgical_element_data() -> Vec<MetallurgicalElementData> {
@@ -587,6 +587,7 @@ fn iron_carbon_system() -> MetallurgicalSystem {
             ),
         )
         .thermal_treatment_profile(plain_carbon_steel_treatment())
+        .property_calibration(steel_property_calibration())
 }
 
 fn iron_carbon_chromium_nickel_system() -> MetallurgicalSystem {
@@ -698,6 +699,7 @@ fn iron_carbon_chromium_nickel_system() -> MetallurgicalSystem {
         ),
     )
     .thermal_treatment_profile(stainless_steel_treatment())
+    .property_calibration(stainless_property_calibration())
 }
 
 fn iron_carbon_manganese_silicon_system() -> MetallurgicalSystem {
@@ -825,6 +827,7 @@ fn iron_carbon_manganese_silicon_system() -> MetallurgicalSystem {
         ),
     )
     .thermal_treatment_profile(manganese_steel_treatment())
+    .property_calibration(steel_property_calibration())
 }
 
 fn copper_zinc_system() -> MetallurgicalSystem {
@@ -859,6 +862,7 @@ fn copper_zinc_system() -> MetallurgicalSystem {
             .limit(ComponentLimit::new("Zn", 0.30, 0.55))
             .free_energy_model(composition_phase_energy("Zn", 0.45, 0.25, 3.0)),
         )
+        .property_calibration(copper_property_calibration())
 }
 
 fn copper_tin_system() -> MetallurgicalSystem {
@@ -893,6 +897,7 @@ fn copper_tin_system() -> MetallurgicalSystem {
             .limit(ComponentLimit::new("Sn", 0.12, 0.45))
             .free_energy_model(composition_phase_energy("Sn", 0.25, 0.22, 2.5)),
         )
+        .property_calibration(copper_property_calibration())
 }
 
 fn tin_lead_system() -> MetallurgicalSystem {
@@ -938,6 +943,7 @@ fn tin_lead_system() -> MetallurgicalSystem {
                 composition_phase_energy("Pb", 0.38, 0.14, 2.0).temperature_window(0.0, 520.0),
             ),
         )
+        .property_calibration(solder_property_calibration())
 }
 
 fn tin_silver_copper_system() -> MetallurgicalSystem {
@@ -999,6 +1005,7 @@ fn tin_silver_copper_system() -> MetallurgicalSystem {
             )
             .kinetic_model(precipitation_kinetics(1.7e-4)),
         )
+        .property_calibration(solder_property_calibration())
 }
 
 fn bismuth_tin_system() -> MetallurgicalSystem {
@@ -1032,6 +1039,7 @@ fn bismuth_tin_system() -> MetallurgicalSystem {
             .limit(ComponentLimit::new("Sn", 0.35, 1.0))
             .free_energy_model(composition_phase_energy("Sn", 0.80, 0.25, 3.8)),
         )
+        .property_calibration(solder_property_calibration())
 }
 
 fn aluminum_silicon_system() -> MetallurgicalSystem {
@@ -1088,6 +1096,7 @@ fn aluminum_silicon_system() -> MetallurgicalSystem {
                 2.0,
             )),
         )
+        .property_calibration(aluminum_property_calibration())
 }
 
 fn aluminum_copper_system() -> MetallurgicalSystem {
@@ -1125,6 +1134,7 @@ fn aluminum_copper_system() -> MetallurgicalSystem {
             ),
         )
         .thermal_treatment_profile(aluminum_precipitation_treatment())
+        .property_calibration(aluminum_property_calibration())
 }
 
 fn aluminum_copper_magnesium_system() -> MetallurgicalSystem {
@@ -1193,6 +1203,7 @@ fn aluminum_copper_magnesium_system() -> MetallurgicalSystem {
             .kinetic_model(precipitation_kinetics(2.2e-4)),
         )
         .thermal_treatment_profile(aluminum_precipitation_treatment())
+        .property_calibration(aluminum_property_calibration())
 }
 
 fn aluminum_magnesium_system() -> MetallurgicalSystem {
@@ -1230,6 +1241,7 @@ fn aluminum_magnesium_system() -> MetallurgicalSystem {
             ),
         )
         .thermal_treatment_profile(aluminum_precipitation_treatment())
+        .property_calibration(aluminum_property_calibration())
 }
 
 fn aluminum_magnesium_silicon_system() -> MetallurgicalSystem {
@@ -1306,6 +1318,7 @@ fn aluminum_magnesium_silicon_system() -> MetallurgicalSystem {
             )),
         )
         .thermal_treatment_profile(aluminum_precipitation_treatment())
+        .property_calibration(aluminum_property_calibration())
 }
 
 fn aluminum_zinc_magnesium_system() -> MetallurgicalSystem {
@@ -1356,6 +1369,7 @@ fn aluminum_zinc_magnesium_system() -> MetallurgicalSystem {
             ),
         )
         .thermal_treatment_profile(aluminum_precipitation_treatment())
+        .property_calibration(aluminum_property_calibration())
 }
 
 fn aluminum_zinc_magnesium_copper_system() -> MetallurgicalSystem {
@@ -1426,6 +1440,7 @@ fn aluminum_zinc_magnesium_copper_system() -> MetallurgicalSystem {
             .kinetic_model(precipitation_kinetics(1.8e-4)),
         )
         .thermal_treatment_profile(aluminum_precipitation_treatment())
+        .property_calibration(aluminum_property_calibration())
 }
 
 fn nickel_chromium_system() -> MetallurgicalSystem {
@@ -1460,6 +1475,7 @@ fn nickel_chromium_system() -> MetallurgicalSystem {
             .limit(ComponentLimit::new("Cr", 0.30, 0.80))
             .free_energy_model(composition_phase_energy("Cr", 0.55, 0.30, 2.0)),
         )
+        .property_calibration(nickel_property_calibration())
 }
 
 fn nickel_chromium_aluminum_system() -> MetallurgicalSystem {
@@ -1523,6 +1539,7 @@ fn nickel_chromium_aluminum_system() -> MetallurgicalSystem {
             .free_energy_model(composition_phase_energy("Cr", 0.35, 0.28, 1.8)),
         )
         .thermal_treatment_profile(nickel_superalloy_treatment())
+        .property_calibration(nickel_property_calibration())
 }
 
 fn nickel_chromium_cobalt_molybdenum_system() -> MetallurgicalSystem {
@@ -1588,6 +1605,7 @@ fn nickel_chromium_cobalt_molybdenum_system() -> MetallurgicalSystem {
             .free_energy_model(composition_phase_energy("Cr", 0.34, 0.26, 1.8)),
         )
         .thermal_treatment_profile(nickel_superalloy_treatment())
+        .property_calibration(nickel_property_calibration())
 }
 
 fn copper_nickel_system() -> MetallurgicalSystem {
@@ -1613,6 +1631,7 @@ fn copper_nickel_system() -> MetallurgicalSystem {
             .limit(ComponentLimit::new("Ni", 0.0, 1.0))
             .free_energy_model(composition_phase_energy("Ni", 0.35, 0.65, 5.0)),
         )
+        .property_calibration(copper_property_calibration())
 }
 
 fn copper_beryllium_system() -> MetallurgicalSystem {
@@ -1651,6 +1670,7 @@ fn copper_beryllium_system() -> MetallurgicalSystem {
             .kinetic_model(precipitation_kinetics(2.0e-4)),
         )
         .thermal_treatment_profile(copper_beryllium_treatment())
+        .property_calibration(copper_property_calibration())
 }
 
 fn copper_aluminum_system() -> MetallurgicalSystem {
@@ -1694,6 +1714,7 @@ fn copper_aluminum_system() -> MetallurgicalSystem {
             .limit(ComponentLimit::new("Al", 0.18, 0.45))
             .free_energy_model(composition_phase_energy("Al", 0.28, 0.22, 1.8)),
         )
+        .property_calibration(copper_property_calibration())
 }
 
 fn magnesium_aluminum_zinc_system() -> MetallurgicalSystem {
@@ -1759,6 +1780,7 @@ fn magnesium_aluminum_zinc_system() -> MetallurgicalSystem {
             .kinetic_model(precipitation_kinetics(1.8e-4)),
         )
         .thermal_treatment_profile(magnesium_precipitation_treatment())
+        .property_calibration(magnesium_property_calibration())
 }
 
 fn titanium_aluminum_vanadium_system() -> MetallurgicalSystem {
@@ -1817,6 +1839,7 @@ fn titanium_aluminum_vanadium_system() -> MetallurgicalSystem {
             .free_energy_model(composition_phase_energy("Al", 0.28, 0.25, 1.8)),
         )
         .thermal_treatment_profile(titanium_alpha_beta_treatment())
+        .property_calibration(titanium_property_calibration())
 }
 
 fn titanium_aluminum_molybdenum_system() -> MetallurgicalSystem {
@@ -1884,6 +1907,7 @@ fn titanium_aluminum_molybdenum_system() -> MetallurgicalSystem {
             .free_energy_model(composition_phase_energy("Mo", 0.22, 0.20, 2.0)),
         )
         .thermal_treatment_profile(titanium_alpha_beta_treatment())
+        .property_calibration(titanium_property_calibration())
 }
 
 fn iron_carbon_chromium_molybdenum_vanadium_system() -> MetallurgicalSystem {
@@ -1994,6 +2018,7 @@ fn iron_carbon_chromium_molybdenum_vanadium_system() -> MetallurgicalSystem {
         .kinetic_model(precipitation_kinetics(8.0e-5)),
     )
     .thermal_treatment_profile(tool_steel_treatment())
+    .property_calibration(tool_steel_property_calibration())
 }
 
 fn properties(
@@ -2082,6 +2107,78 @@ fn precipitation_kinetics(precipitation_rate_per_second: f64) -> PhaseKineticMod
         5.0e-5,
         precipitation_rate_per_second,
     )
+}
+
+fn steel_property_calibration() -> MetallurgicalPropertyCalibration {
+    MetallurgicalPropertyCalibration::neutral()
+        .strength_response(105.0, 22.0, 210.0, 340.0)
+        .hardness_per_strength(0.31)
+        .ductility_penalties(1250.0, 0.38, 0.62)
+        .transport_penalties(0.035, 0.020, 0.18, 0.16)
+}
+
+fn stainless_property_calibration() -> MetallurgicalPropertyCalibration {
+    MetallurgicalPropertyCalibration::neutral()
+        .strength_response(92.0, 18.0, 160.0, 280.0)
+        .hardness_per_strength(0.29)
+        .ductility_penalties(1100.0, 0.30, 0.50)
+        .transport_penalties(0.080, 0.040, 0.12, 0.10)
+}
+
+fn tool_steel_property_calibration() -> MetallurgicalPropertyCalibration {
+    MetallurgicalPropertyCalibration::neutral()
+        .strength_response(125.0, 26.0, 320.0, 420.0)
+        .hardness_per_strength(0.34)
+        .ductility_penalties(1500.0, 0.55, 0.72)
+        .transport_penalties(0.060, 0.030, 0.20, 0.18)
+}
+
+fn aluminum_property_calibration() -> MetallurgicalPropertyCalibration {
+    MetallurgicalPropertyCalibration::neutral()
+        .strength_response(62.0, 12.0, 260.0, 220.0)
+        .hardness_per_strength(0.27)
+        .ductility_penalties(850.0, 0.34, 0.48)
+        .transport_penalties(0.018, 0.012, 0.45, 0.35)
+}
+
+fn copper_property_calibration() -> MetallurgicalPropertyCalibration {
+    MetallurgicalPropertyCalibration::neutral()
+        .strength_response(50.0, 10.0, 180.0, 300.0)
+        .hardness_per_strength(0.26)
+        .ductility_penalties(750.0, 0.28, 0.45)
+        .transport_penalties(0.025, 0.018, 0.55, 0.45)
+}
+
+fn nickel_property_calibration() -> MetallurgicalPropertyCalibration {
+    MetallurgicalPropertyCalibration::neutral()
+        .strength_response(95.0, 18.0, 300.0, 270.0)
+        .hardness_per_strength(0.30)
+        .ductility_penalties(1050.0, 0.36, 0.48)
+        .transport_penalties(0.090, 0.045, 0.16, 0.12)
+}
+
+fn titanium_property_calibration() -> MetallurgicalPropertyCalibration {
+    MetallurgicalPropertyCalibration::neutral()
+        .strength_response(88.0, 17.0, 140.0, 260.0)
+        .hardness_per_strength(0.29)
+        .ductility_penalties(1000.0, 0.26, 0.52)
+        .transport_penalties(0.060, 0.030, 0.14, 0.12)
+}
+
+fn magnesium_property_calibration() -> MetallurgicalPropertyCalibration {
+    MetallurgicalPropertyCalibration::neutral()
+        .strength_response(45.0, 9.0, 190.0, 180.0)
+        .hardness_per_strength(0.25)
+        .ductility_penalties(800.0, 0.32, 0.42)
+        .transport_penalties(0.025, 0.016, 0.32, 0.25)
+}
+
+fn solder_property_calibration() -> MetallurgicalPropertyCalibration {
+    MetallurgicalPropertyCalibration::neutral()
+        .strength_response(22.0, 5.0, 55.0, 70.0)
+        .hardness_per_strength(0.22)
+        .ductility_penalties(650.0, 0.22, 0.35)
+        .transport_penalties(0.020, 0.012, 0.20, 0.16)
 }
 
 fn plain_carbon_steel_treatment() -> ThermalTreatmentProfile {

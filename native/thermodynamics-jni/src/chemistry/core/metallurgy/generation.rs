@@ -15,7 +15,7 @@ use phases::{
     compound_phases_for_composition, considered_compound_phase_ids, intermetallic_phase,
     liquid_properties, solid_solution_phase,
 };
-use properties::{radius_mismatch, weighted_average};
+use properties::{radius_mismatch, weighted_average, weighted_property_calibration};
 pub(crate) use validation::{
     validate_compound_phases, validate_element_data, validate_pair_interactions,
 };
@@ -102,6 +102,7 @@ pub(super) fn generated_system_for_composition(
             .map(|(component, _, _)| component.clone())
             .collect::<Vec<_>>(),
     )
+    .property_calibration(weighted_property_calibration(&components)?)
     .phase_boundary(PhaseBoundaryPoint {
         composition: composition.components.clone(),
         solidus_kelvin: solidus,

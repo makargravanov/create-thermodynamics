@@ -6,7 +6,7 @@ use super::super::validation::{validate_finite, validate_fraction, validate_posi
 use super::GeneratedComponent;
 use crate::chemistry::metallurgy::{
     CompositionEnergyTerm, MetallurgicalComponentId, MetallurgicalComposition,
-    MetallurgicalPhasePropertyModel, PhaseFreeEnergyModel,
+    MetallurgicalPhasePropertyModel, MetallurgicalPropertyCalibration, PhaseFreeEnergyModel,
 };
 
 pub(super) fn weighted_properties(
@@ -82,6 +82,60 @@ pub(super) fn weighted_average(
     }
     validate_finite(total, "generated metallurgical weighted average")?;
     Ok(total)
+}
+
+pub(super) fn weighted_property_calibration(
+    components: &[GeneratedComponent<'_>],
+) -> ChemistryResult<MetallurgicalPropertyCalibration> {
+    let yield_strength = weighted_average(components, |data| {
+        data.base_property_model.yield_strength_mpa
+    })?;
+    let ductility = weighted_average(components, |data| {
+        data.base_property_model.ductility_fraction
+    })?;
+    let resistivity = weighted_average(components, |data| {
+        data.base_property_model
+            .electrical_resistivity_micro_ohm_meter
+    })?;
+    let conductivity = weighted_average(components, |data| {
+        data.base_property_model
+            .thermal_conductivity_w_per_meter_kelvin
+    })?;
+    let strengthening = weighted_average(components, |data| {
+        data.solid_solution_strengthening_mpa_per_fraction
+    })?;
+    let precipitation_response = (80.0 + strengthening * 0.16).clamp(100.0, 420.0);
+    let cold_work_response = (yield_strength * (1.5 + ductility)).clamp(80.0, 520.0);
+    let hall_petch = (35.0 + yield_strength.sqrt() * 5.0).clamp(35.0, 150.0);
+    let dislocation = (yield_strength.sqrt() * 1.2).clamp(7.0, 35.0);
+    let transport_sensitivity = if resistivity <= 0.03 || conductivity >= 180.0 {
+        1.0
+    } else if resistivity <= 0.12 || conductivity >= 80.0 {
+        0.45
+    } else {
+        0.18
+    };
+    let calibration = MetallurgicalPropertyCalibration::neutral()
+        .strength_response(
+            hall_petch,
+            dislocation,
+            precipitation_response,
+            cold_work_response,
+        )
+        .hardness_per_strength((0.22 + (1.0 - ductility).clamp(0.0, 1.0) * 0.16).clamp(0.20, 0.42))
+        .ductility_penalties(
+            (700.0 + (1.0 - ductility).clamp(0.0, 1.0) * 900.0).clamp(500.0, 1800.0),
+            (0.20 + (1.0 - ductility).clamp(0.0, 1.0) * 0.40).clamp(0.15, 0.70),
+            (0.30 + (1.0 - ductility).clamp(0.0, 1.0) * 0.40).clamp(0.25, 0.85),
+        )
+        .transport_penalties(
+            resistivity * 0.45 * transport_sensitivity,
+            resistivity * 0.30 * transport_sensitivity,
+            0.35 * transport_sensitivity,
+            0.25 * transport_sensitivity,
+        );
+    calibration.validate()?;
+    Ok(calibration)
 }
 
 pub(super) fn radius_mismatch(
