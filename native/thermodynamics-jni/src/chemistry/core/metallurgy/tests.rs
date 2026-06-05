@@ -92,6 +92,17 @@ fn unknown_gold_silver_alloy_uses_generated_metallurgical_system() {
         .iter()
         .any(|phase| phase.kind == MetallurgicalPhaseKind::SolidSolution));
     assert!(state.properties.electrical_resistivity_micro_ohm_meter > 0.0);
+    let generated = state
+        .diagnostics
+        .generated_system
+        .as_ref()
+        .expect("generated Au-Ag alloy must carry generator diagnostics");
+    assert_eq!(generated.system_id, "metallurgy:generated/ag_au");
+    assert!(generated
+        .used_pair_interactions
+        .iter()
+        .any(|pair| pair == "Ag:Au"));
+    assert!(generated.missing_pair_interactions.is_empty());
 }
 
 #[test]
@@ -181,6 +192,17 @@ fn generated_tin_lead_system_uses_eutectic_solidus() {
             .is_some_and(|boundaries| boundaries.solidus_kelvin <= 457.0),
         "phase boundaries: {:?}",
         state.phase_boundaries
+    );
+    let generated = state
+        .diagnostics
+        .generated_system
+        .as_ref()
+        .expect("generated Sn-Pb alloy must carry generator diagnostics");
+    assert_eq!(generated.eutectic_temperature_kelvin, Some(456.0));
+    assert!(
+        generated.solidus_kelvin <= 457.0,
+        "generated diagnostic solidus {}",
+        generated.solidus_kelvin
     );
 }
 

@@ -939,6 +939,27 @@ pub struct MetallurgicalPhaseDiagnostic {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct GeneratedMetallurgyDiagnostic {
+    pub system_id: String,
+    pub matrix_component: MetallurgicalComponentId,
+    pub generated_components: Vec<MetallurgicalComponentId>,
+    pub missing_element_data: Vec<MetallurgicalComponentId>,
+    pub used_pair_interactions: Vec<String>,
+    pub missing_pair_interactions: Vec<String>,
+    pub considered_compound_phases: Vec<String>,
+    pub selected_compound_phases: Vec<String>,
+    pub used_generic_intermetallic: bool,
+    pub used_component_rich_phase: bool,
+    pub radius_mismatch: f64,
+    pub phase_separation_tendency: f64,
+    pub intermetallic_tendency: f64,
+    pub eutectic_temperature_kelvin: Option<f64>,
+    pub solidus_kelvin: f64,
+    pub liquidus_kelvin: f64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct MetallurgicalThermalDiagnostic {
     pub previous_temperature_kelvin: f64,
     pub current_temperature_kelvin: f64,
@@ -951,6 +972,7 @@ pub struct MetallurgicalThermalDiagnostic {
 pub struct MetallurgicalDiagnosticReport {
     pub selected_system_id: Option<String>,
     pub considered_systems: Vec<MetallurgicalSystemSelectionDiagnostic>,
+    pub generated_system: Option<GeneratedMetallurgyDiagnostic>,
     pub phase_boundaries: Option<PhaseBoundarySnapshot>,
     pub phase_reasons: Vec<MetallurgicalPhaseDiagnostic>,
     pub thermal_reason: MetallurgicalThermalDiagnostic,

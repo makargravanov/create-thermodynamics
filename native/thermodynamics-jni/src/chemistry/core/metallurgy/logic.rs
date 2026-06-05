@@ -162,6 +162,7 @@ pub fn metallurgical_state_from_alloy_phase(
             previous,
             delta_seconds,
             considered_systems,
+            None,
         );
     }
     if let Some(generated_system) = generated_system_for_composition(
@@ -170,9 +171,10 @@ pub fn metallurgical_state_from_alloy_phase(
         pair_interactions,
         compound_phases,
     )? {
-        let generated_distance = system_distance_to_composition(&generated_system, &composition)?;
+        let generated_distance =
+            system_distance_to_composition(&generated_system.system, &composition)?;
         considered_systems.push(MetallurgicalSystemSelectionDiagnostic {
-            system_id: generated_system.id.clone(),
+            system_id: generated_system.system.id.clone(),
             covers_composition: true,
             missing_components: Vec::new(),
             composition_distance: Some(generated_distance),
@@ -180,11 +182,12 @@ pub fn metallurgical_state_from_alloy_phase(
         return modeled_state(
             alloy,
             composition,
-            &generated_system,
+            &generated_system.system,
             thermal_treatment,
             previous,
             delta_seconds,
             considered_systems,
+            Some(generated_system.diagnostic),
         );
     }
     let reason = "no registered metallurgical system covers all components";
@@ -206,6 +209,7 @@ fn modeled_state(
     previous: Option<&MetallurgicalState>,
     delta_seconds: f64,
     considered_systems: Vec<MetallurgicalSystemSelectionDiagnostic>,
+    generated_system: Option<GeneratedMetallurgyDiagnostic>,
 ) -> ChemistryResult<MetallurgicalState> {
     let phase_boundaries = phase_boundaries_for_composition(system, &composition)?;
     let mut phase_energies = Vec::new();
@@ -328,6 +332,7 @@ fn modeled_state(
     let diagnostics = MetallurgicalDiagnosticReport {
         selected_system_id: Some(system.id.clone()),
         considered_systems,
+        generated_system,
         phase_boundaries: Some(phase_boundaries),
         phase_reasons: phase_diagnostics,
         thermal_reason: thermal_diagnostic(alloy, &thermal_treatment, delta_seconds),
@@ -365,6 +370,7 @@ fn unmodeled_state(
     let diagnostics = MetallurgicalDiagnosticReport {
         selected_system_id: None,
         considered_systems,
+        generated_system: None,
         phase_boundaries: None,
         phase_reasons: Vec::new(),
         thermal_reason: thermal_diagnostic(alloy, &thermal_treatment, delta_seconds),
