@@ -2,10 +2,11 @@ use crate::chemistry::error::{ChemistryError, ChemistryResult};
 use crate::chemistry::metallurgy::{
     ComponentLimit, CompositionEnergyTerm, MetallurgicalComponentId, MetallurgicalComposition,
     MetallurgicalCompoundPhaseData, MetallurgicalPhaseKind, MetallurgicalPhaseModel,
-    MetallurgicalPhasePropertyModel, PhaseFreeEnergyModel,
+    MetallurgicalPhasePropertyModel, PhaseFractionHint, PhaseFreeEnergyModel,
 };
 
-use super::pair::PairInteractionSummary;
+use super::super::constants::TRACE_COMPONENT_FRACTION;
+use super::pair::{EutecticPairSummary, PairInteractionSummary};
 use super::properties::{composition_energy, composition_energy_for_map, weighted_properties};
 use super::GeneratedComponent;
 
@@ -80,15 +81,20 @@ pub(super) fn compound_phase_model(
             compound.low_temperature_kelvin,
             compound.high_temperature_kelvin,
         ),
-    );
+    )
+    .fraction_hint(PhaseFractionHint::new(
+        stoichiometric_phase_fraction(&compound.components, composition).clamp(0.0, 1.0),
+        5.0,
+        format!(
+            "stoichiometric lever rule from available components for compound '{}'",
+            compound.id
+        ),
+    ));
     if let Some(kinetic_model) = &compound.kinetic_model {
         model = model.kinetic_model(kinetic_model.clone());
     }
     for (component, _, _) in components {
-        let target = compound.components.get(component).copied().unwrap_or(0.0);
-        let min = (target - compound.composition_tolerance_fraction).clamp(0.0, 1.0);
-        let max = (target + compound.composition_tolerance_fraction).clamp(0.0, 1.0);
-        model = model.limit(ComponentLimit::new(component.clone(), min, max.max(min)));
+        model = model.limit(ComponentLimit::new(component.clone(), 0.0, 1.0));
     }
     for component in compound.components.keys() {
         if !composition.components.contains_key(component) {
@@ -144,6 +150,7 @@ pub(super) fn component_rich_phase(
     matrix: &MetallurgicalComponentId,
     tendency: f64,
     solidus: f64,
+    eutectic_pair: Option<&EutecticPairSummary>,
 ) -> ChemistryResult<MetallurgicalPhaseModel> {
     let richest_secondary = components
         .iter()
@@ -178,7 +185,12 @@ pub(super) fn component_rich_phase(
                 16_000.0,
             ))
             .temperature_window(0.0, solidus * 1.05),
-    );
+    )
+    .fraction_hint(component_rich_fraction_hint(
+        &richest_secondary.0,
+        richest_secondary.1,
+        eutectic_pair,
+    ));
     for (component, _, _) in components {
         let (min, max) = if component == &richest_secondary.0 {
             (0.08, 1.0)
@@ -213,7 +225,8 @@ pub(super) fn compound_phases_for_composition<'a>(
                 .components
                 .keys()
                 .all(|component| composition.components.contains_key(component))
-                && compound_distance(phase, composition) <= phase.composition_tolerance_fraction
+                && stoichiometric_phase_fraction(&phase.components, composition)
+                    > TRACE_COMPONENT_FRACTION
         })
         .collect()
 }
@@ -234,15 +247,46 @@ pub(super) fn considered_compound_phase_ids(
         .collect()
 }
 
-fn compound_distance(
-    phase: &MetallurgicalCompoundPhaseData,
-    composition: &MetallurgicalComposition,
+fn stoichiometric_phase_fraction(
+    phase_composition: &std::collections::BTreeMap<MetallurgicalComponentId, f64>,
+    alloy_composition: &MetallurgicalComposition,
 ) -> f64 {
-    phase
-        .components
+    phase_composition
         .iter()
-        .map(|(component, target)| (composition.fraction_of(component) - target).abs())
-        .sum::<f64>()
+        .filter(|(_, target)| **target > 0.0)
+        .map(|(component, target)| alloy_composition.fraction_of(component) / target)
+        .fold(1.0, f64::min)
+        .clamp(0.0, 1.0)
+}
+
+fn component_rich_fraction_hint(
+    rich_component: &MetallurgicalComponentId,
+    rich_component_fraction: f64,
+    eutectic_pair: Option<&EutecticPairSummary>,
+) -> PhaseFractionHint {
+    let rich_phase_component_fraction = eutectic_pair
+        .and_then(|pair| {
+            if &pair.second == rich_component {
+                Some(pair.second_fraction.max(0.82))
+            } else if &pair.first == rich_component {
+                Some((1.0 - pair.second_fraction).max(0.82))
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0.82)
+        .clamp(0.08, 1.0);
+    let target_fraction = (rich_component_fraction / rich_phase_component_fraction).clamp(0.0, 1.0);
+    PhaseFractionHint::new(
+        target_fraction,
+        4.0,
+        format!(
+            "component-rich lever rule: component '{}' fraction {:.6} divided by phase-side fraction {:.6}",
+            rich_component.as_str(),
+            rich_component_fraction,
+            rich_phase_component_fraction
+        ),
+    )
 }
 
 pub(super) fn carbide_phase_required(components: &[GeneratedComponent<'_>]) -> bool {

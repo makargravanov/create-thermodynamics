@@ -116,9 +116,10 @@ fn exact_registered_system_takes_priority_over_generated_system() {
         .add_substance(&registry, "destroy:test_zinc", 0.30)
         .unwrap();
 
-    let alloy = alloy_phase_snapshots(&registry, &mixture)
+    let mut alloy = alloy_phase_snapshots(&registry, &mixture)
         .unwrap()
         .remove(0);
+    alloy.temperature_kelvin = 350.0;
     let state = registry
         .metallurgical_state_from_alloy_phase(&alloy, None, 1.0)
         .unwrap();
@@ -130,19 +131,19 @@ fn exact_registered_system_takes_priority_over_generated_system() {
 }
 
 #[test]
-fn generated_copper_beryllium_system_uses_specific_cube_phase() {
+fn registered_copper_beryllium_system_uses_specific_cube_phase() {
     let registry = test_registry().build().unwrap();
     let mut mixture = Mixture::new(1800.0).unwrap();
     mixture
-        .add_substance(&registry, "destroy:test_copper", 0.50)
+        .add_substance(&registry, "destroy:test_copper", 0.98)
         .unwrap();
     mixture
-        .add_substance(&registry, "destroy:test_beryllium", 0.50)
+        .add_substance(&registry, "destroy:test_beryllium", 0.02)
         .unwrap();
     let mut alloy = alloy_phase_snapshots(&registry, &mixture)
         .unwrap()
         .remove(0);
-    alloy.temperature_kelvin = 1200.0;
+    alloy.temperature_kelvin = 800.0;
     let state = registry
         .metallurgical_state_from_alloy_phase(&alloy, None, 1.0)
         .unwrap();
@@ -150,22 +151,33 @@ fn generated_copper_beryllium_system_uses_specific_cube_phase() {
     assert!(matches!(
         state.kind,
         MetallurgicalStateKind::Modeled { ref system_id }
-            if system_id == "metallurgy:generated/be_cu"
+            if system_id == "metallurgy:cu_be"
     ));
+    assert!(state.diagnostics.generated_system.is_none());
     assert!(
         state
             .diagnostics
             .phase_reasons
             .iter()
-            .any(|phase| phase.phase_id.contains("compound/cube")
-                || phase.phase_id.contains("compound_cube")),
+            .any(|phase| phase.phase_id.contains("cube_precipitate")),
         "phase diagnostics: {:?}",
         state.diagnostics.phase_reasons
+    );
+    let compound_fraction = state
+        .phases
+        .iter()
+        .filter(|phase| phase.phase_id.contains("cube_precipitate"))
+        .map(|phase| phase.fraction)
+        .sum::<f64>();
+    assert!(
+        compound_fraction > 0.0,
+        "Cu-Be manual system should expose the beryllide phase, phases: {:?}",
+        state.phases
     );
 }
 
 #[test]
-fn generated_tin_lead_system_uses_eutectic_solidus() {
+fn registered_tin_lead_system_uses_eutectic_solidus() {
     let registry = test_registry().build().unwrap();
     let mut mixture = Mixture::new(700.0).unwrap();
     mixture
@@ -174,9 +186,10 @@ fn generated_tin_lead_system_uses_eutectic_solidus() {
     mixture
         .add_substance(&registry, "destroy:test_lead", 0.38)
         .unwrap();
-    let alloy = alloy_phase_snapshots(&registry, &mixture)
+    let mut alloy = alloy_phase_snapshots(&registry, &mixture)
         .unwrap()
         .remove(0);
+    alloy.temperature_kelvin = 350.0;
     let state = registry
         .metallurgical_state_from_alloy_phase(&alloy, None, 1.0)
         .unwrap();
@@ -184,8 +197,9 @@ fn generated_tin_lead_system_uses_eutectic_solidus() {
     assert!(matches!(
         state.kind,
         MetallurgicalStateKind::Modeled { ref system_id }
-            if system_id == "metallurgy:generated/pb_sn"
+            if system_id == "metallurgy:sn_pb"
     ));
+    assert!(state.diagnostics.generated_system.is_none());
     assert!(
         state
             .phase_boundaries
@@ -193,17 +207,109 @@ fn generated_tin_lead_system_uses_eutectic_solidus() {
         "phase boundaries: {:?}",
         state.phase_boundaries
     );
-    let generated = state
-        .diagnostics
-        .generated_system
-        .as_ref()
-        .expect("generated Sn-Pb alloy must carry generator diagnostics");
-    assert_eq!(generated.eutectic_temperature_kelvin, Some(456.0));
+    let eutectic_fraction = state
+        .phases
+        .iter()
+        .find(|phase| phase.phase_id.contains("eutectic"))
+        .map(|phase| phase.fraction)
+        .unwrap_or(0.0);
     assert!(
-        generated.solidus_kelvin <= 457.0,
-        "generated diagnostic solidus {}",
-        generated.solidus_kelvin
+        eutectic_fraction > 0.90,
+        "Sn-Pb eutectic composition should allocate the eutectic phase, phases: {:?}",
+        state.phases
     );
+    assert!(
+        state
+            .diagnostics
+            .phase_reasons
+            .iter()
+            .any(|phase| phase.phase_id.contains("eutectic")),
+        "phase diagnostics: {:?}",
+        state.diagnostics.phase_reasons
+    );
+}
+
+#[test]
+fn newly_registered_alloy_families_take_priority_over_generation() {
+    let registry = test_registry().build().unwrap();
+    let cases = [
+        (
+            [
+                ("destroy:test_tin", 0.965),
+                ("destroy:test_silver", 0.030),
+                ("destroy:test_copper", 0.005),
+                ("destroy:test_aluminum", 0.0),
+                ("destroy:test_magnesium", 0.0),
+            ],
+            "metallurgy:sn_ag_cu",
+            500.0,
+        ),
+        (
+            [
+                ("destroy:test_aluminum", 0.950),
+                ("destroy:test_magnesium", 0.025),
+                ("destroy:test_silicon", 0.025),
+                ("destroy:test_copper", 0.0),
+                ("destroy:test_zinc", 0.0),
+            ],
+            "metallurgy:al_mg_si",
+            700.0,
+        ),
+        (
+            [
+                ("destroy:test_aluminum", 0.820),
+                ("destroy:test_zinc", 0.105),
+                ("destroy:test_magnesium", 0.040),
+                ("destroy:test_copper", 0.035),
+                ("destroy:test_tin", 0.0),
+            ],
+            "metallurgy:al_zn_mg_cu",
+            700.0,
+        ),
+        (
+            [
+                ("destroy:test_nickel", 0.550),
+                ("destroy:test_chromium", 0.220),
+                ("destroy:test_cobalt", 0.150),
+                ("destroy:test_molybdenum", 0.080),
+                ("destroy:test_copper", 0.0),
+            ],
+            "metallurgy:ni_cr_co_mo",
+            1650.0,
+        ),
+        (
+            [
+                ("destroy:test_iron", 0.800),
+                ("destroy:carbon", 0.020),
+                ("destroy:test_chromium", 0.090),
+                ("destroy:test_molybdenum", 0.060),
+                ("destroy:test_vanadium", 0.030),
+            ],
+            "metallurgy:fe_c_cr_mo_v",
+            800.0,
+        ),
+    ];
+
+    for (components, expected_system_id, temperature_kelvin) in cases {
+        let active_components = components
+            .into_iter()
+            .filter(|(_, fraction)| *fraction > 0.0)
+            .collect::<Vec<_>>();
+        let state = state_for_components_vec(&registry, &active_components, temperature_kelvin);
+        assert!(
+            matches!(
+                state.kind,
+                MetallurgicalStateKind::Modeled { ref system_id } if system_id == expected_system_id
+            ),
+            "expected {expected_system_id}, got {:?}, diagnostics {:?}",
+            state.kind,
+            state.diagnostics
+        );
+        assert!(
+            state.diagnostics.generated_system.is_none(),
+            "manual system {expected_system_id} must not carry generated diagnostics"
+        );
+    }
 }
 
 #[test]
@@ -880,6 +986,37 @@ fn nonferrous_state<const N: usize>(
         .unwrap()
 }
 
+fn state_for_components_vec(
+    registry: &crate::chemistry::registry::ChemistryRegistry,
+    components: &[(&'static str, f64)],
+    temperature_kelvin: f64,
+) -> MetallurgicalState {
+    let mut mixture = Mixture::new(3200.0).unwrap();
+    for (substance_id, fraction) in components {
+        mixture
+            .add_substance(registry, *substance_id, *fraction)
+            .unwrap();
+    }
+    let snapshots = alloy_phase_snapshots(registry, &mixture).unwrap();
+    let mut alloy = snapshots
+        .first()
+        .cloned()
+        .expect("test alloy must create at least one molten-metal phase");
+    alloy.constituents = snapshots
+        .iter()
+        .flat_map(|snapshot| snapshot.constituents.iter().cloned())
+        .collect();
+    alloy.temperature_kelvin = temperature_kelvin;
+    registry
+        .metallurgical_state_from_alloy_phase(&alloy, None, 1.0)
+        .unwrap_or_else(|error| {
+            panic!(
+                "failed to model components {:?} at {} K: {}",
+                components, temperature_kelvin, error
+            )
+        })
+}
+
 fn test_registry() -> ChemistryRegistryBuilder {
     ChemistryRegistryBuilder::new()
         .metallurgical_systems(default_metallurgical_systems())
@@ -898,6 +1035,17 @@ fn test_registry() -> ChemistryRegistryBuilder {
         .substance(test_metal("destroy:test_silver", "Ag", 107.868, 1235.0))
         .substance(test_metal("destroy:test_tin", "Sn", 118.71, 505.0))
         .substance(test_metal("destroy:test_beryllium", "Be", 9.0122, 1560.0))
+        .substance(test_metal("destroy:test_bismuth", "Bi", 208.98, 545.0))
+        .substance(test_metal("destroy:test_titanium", "Ti", 47.867, 1941.0))
+        .substance(test_metal("destroy:test_cobalt", "Co", 58.933, 1768.0))
+        .substance(test_metal("destroy:test_molybdenum", "Mo", 95.95, 2896.0))
+        .substance(test_metal("destroy:test_vanadium", "V", 50.942, 2183.0))
+        .substance(test_metal(
+            "destroy:test_silicon",
+            "destroy:silicon",
+            28.085,
+            1687.0,
+        ))
         .substance(test_metal(
             "destroy:test_unknown_metal",
             "Xx",

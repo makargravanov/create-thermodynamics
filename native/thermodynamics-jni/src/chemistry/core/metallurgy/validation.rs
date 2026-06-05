@@ -31,6 +31,16 @@ pub(super) fn validate_phase_model(
         }
     }
     validate_phase_free_energy_model(&phase.free_energy_model)?;
+    if let Some(hint) = &phase.fraction_hint {
+        validate_fraction(hint.target_fraction, "phase fraction hint target")?;
+        validate_non_negative_finite(hint.strength, "phase fraction hint strength")?;
+        if hint.reason.trim().is_empty() {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "phase '{}' has a fraction hint without a reason",
+                phase.id
+            )));
+        }
+    }
     validate_property_model(&phase.property_model)?;
     validate_kinetic_model(&phase.kinetic_model)?;
     Ok(())

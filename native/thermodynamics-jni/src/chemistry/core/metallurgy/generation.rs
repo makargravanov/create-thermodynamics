@@ -176,6 +176,7 @@ pub(super) fn generated_system_for_composition(
             &matrix.0,
             phase_separation_tendency,
             solidus,
+            pair_summary.eutectic_pair.as_ref(),
         )?);
     }
     system.validate()?;

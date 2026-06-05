@@ -13,9 +13,18 @@ pub(super) struct PairInteractionSummary {
     pub ductility_penalty: f64,
     pub strengthening_mpa: f64,
     pub eutectic_temperature_kelvin: Option<f64>,
+    pub eutectic_pair: Option<EutecticPairSummary>,
     pub solid_solution_limits: BTreeMap<MetallurgicalComponentId, f64>,
     pub used_pair_interactions: Vec<String>,
     pub missing_pair_interactions: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct EutecticPairSummary {
+    pub first: MetallurgicalComponentId,
+    pub second: MetallurgicalComponentId,
+    pub second_fraction: f64,
+    pub temperature_kelvin: f64,
 }
 
 impl PairInteractionSummary {
@@ -38,6 +47,7 @@ pub(super) fn pair_summary(
         ductility_penalty: 0.0,
         strengthening_mpa: 0.0,
         eutectic_temperature_kelvin: None,
+        eutectic_pair: None,
         solid_solution_limits: BTreeMap::new(),
         used_pair_interactions: Vec::new(),
         missing_pair_interactions: Vec::new(),
@@ -82,6 +92,21 @@ pub(super) fn pair_summary(
                 * pair_weight;
             if let Some(interaction) = interaction {
                 if let Some(eutectic_temperature) = interaction.eutectic_temperature_kelvin {
+                    let second_fraction = interaction
+                        .eutectic_second_fraction
+                        .expect("validated pair interaction has eutectic composition");
+                    if summary
+                        .eutectic_pair
+                        .as_ref()
+                        .is_none_or(|current| eutectic_temperature < current.temperature_kelvin)
+                    {
+                        summary.eutectic_pair = Some(EutecticPairSummary {
+                            first: interaction.first.clone(),
+                            second: interaction.second.clone(),
+                            second_fraction,
+                            temperature_kelvin: eutectic_temperature,
+                        });
+                    }
                     summary.eutectic_temperature_kelvin = Some(
                         summary
                             .eutectic_temperature_kelvin

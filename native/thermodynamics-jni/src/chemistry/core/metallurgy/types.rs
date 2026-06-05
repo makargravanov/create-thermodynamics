@@ -612,8 +612,26 @@ pub struct MetallurgicalPhaseModel {
     pub kind: MetallurgicalPhaseKind,
     pub component_limits: Vec<ComponentLimit>,
     pub free_energy_model: PhaseFreeEnergyModel,
+    pub fraction_hint: Option<PhaseFractionHint>,
     pub property_model: MetallurgicalPhasePropertyModel,
     pub kinetic_model: PhaseKineticModel,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhaseFractionHint {
+    pub target_fraction: f64,
+    pub strength: f64,
+    pub reason: String,
+}
+
+impl PhaseFractionHint {
+    pub fn new(target_fraction: f64, strength: f64, reason: impl Into<String>) -> Self {
+        Self {
+            target_fraction,
+            strength,
+            reason: reason.into(),
+        }
+    }
 }
 
 impl MetallurgicalPhaseModel {
@@ -627,6 +645,7 @@ impl MetallurgicalPhaseModel {
             kind,
             component_limits: Vec::new(),
             free_energy_model: PhaseFreeEnergyModel::new(0.0, 0.0),
+            fraction_hint: None,
             property_model,
             kinetic_model: PhaseKineticModel::for_phase_kind(kind),
         }
@@ -639,6 +658,11 @@ impl MetallurgicalPhaseModel {
 
     pub fn free_energy_model(mut self, model: PhaseFreeEnergyModel) -> Self {
         self.free_energy_model = model;
+        self
+    }
+
+    pub fn fraction_hint(mut self, hint: PhaseFractionHint) -> Self {
+        self.fraction_hint = Some(hint);
         self
     }
 

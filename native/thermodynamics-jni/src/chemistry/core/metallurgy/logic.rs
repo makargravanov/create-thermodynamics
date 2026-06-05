@@ -564,9 +564,19 @@ fn selected_phase_reason(
             }
         })
         .unwrap_or_else(|| "no cooling-rate stabilization term".to_string());
+    let fraction_hint_text = phase
+        .fraction_hint
+        .as_ref()
+        .map(|hint| {
+            format!(
+                "fraction hint target {:.6} with strength {:.3}: {}",
+                hint.target_fraction, hint.strength, hint.reason
+            )
+        })
+        .unwrap_or_else(|| "no phase-fraction hint".to_string());
     format!(
-        "phase '{}' selected fraction {:.6}; {}; {}; {}",
-        phase.id, fraction, energy_text, boundary_text, cooling_text
+        "phase '{}' selected fraction {:.6}; {}; {}; {}; {}",
+        phase.id, fraction, energy_text, boundary_text, cooling_text, fraction_hint_text
     )
 }
 
@@ -702,10 +712,38 @@ fn equilibrium_phase_fractions<'a>(
     }
     let total = weights.iter().map(|(_, weight)| *weight).sum::<f64>();
     validate_positive_finite(total, "metallurgical equilibrium partition function")?;
-    Ok(weights
-        .into_iter()
-        .map(|(phase, weight)| (phase, weight / total))
-        .collect())
+    apply_phase_fraction_hints(
+        weights
+            .into_iter()
+            .map(|(phase, weight)| (phase, weight / total))
+            .collect(),
+    )
+}
+
+fn apply_phase_fraction_hints<'a>(
+    phase_fractions: Vec<(&'a MetallurgicalPhaseModel, f64)>,
+) -> ChemistryResult<Vec<(&'a MetallurgicalPhaseModel, f64)>> {
+    if phase_fractions
+        .iter()
+        .all(|(phase, _)| phase.fraction_hint.is_none())
+    {
+        validate_phase_fraction_sum(&phase_fractions)?;
+        return Ok(phase_fractions);
+    }
+
+    let mut adjusted = Vec::with_capacity(phase_fractions.len());
+    for (phase, base_fraction) in phase_fractions {
+        let fraction = if let Some(hint) = &phase.fraction_hint {
+            validate_fraction(hint.target_fraction, "phase fraction hint target")?;
+            validate_non_negative_finite(hint.strength, "phase fraction hint strength")?;
+            let blend = hint.strength / (1.0 + hint.strength);
+            base_fraction * (1.0 - blend) + hint.target_fraction * blend
+        } else {
+            base_fraction
+        };
+        adjusted.push((phase, fraction.clamp(0.0, 1.0)));
+    }
+    normalize_phase_fractions(adjusted)
 }
 
 fn relax_phase_fractions<'a>(
