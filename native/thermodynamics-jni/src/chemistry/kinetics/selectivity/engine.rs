@@ -74,6 +74,36 @@ impl SelectivityEngine {
                 }
                 score
             }
+            ReactionType::OrganicOxidation => {
+                let mut score = ReactivityScore::new(1.0, "organic oxidation");
+                if context.is_oxidizing() {
+                    score.value *= 1.5 + context.oxidizing_strength.min(4.0) * 0.5;
+                    score.activation_delta -= (context.oxidizing_strength.min(4.0) * 1.5).max(1.0);
+                    score.reason = "oxidizing medium favors organic oxidation".to_string();
+                }
+                if context.is_reducing() {
+                    let penalty = redox_competition_penalty(context);
+                    score.value *= penalty;
+                    score.activation_delta += 5.0 + (1.0 - penalty) * 8.0;
+                    score.reason = "reducing medium competes with organic oxidation".to_string();
+                }
+                if context.is_water_rich()
+                    && matches!(
+                        profile.primary_site.site_kind,
+                        ReactiveSiteKind::Aldehyde | ReactiveSiteKind::Alcohol
+                    )
+                {
+                    score.value *= 1.15;
+                    score.activation_delta -= 0.8;
+                }
+                if context.medium.is_supercritical()
+                    && matches!(context.solvent_type, SolventType::NonPolar)
+                {
+                    score.value *= 0.85;
+                    score.activation_delta += 1.0;
+                }
+                score
+            }
             ReactionType::WittigOlefination
             | ReactionType::HornerWadsworthEmmonsOlefination
             | ReactionType::JuliaOlefination => {
@@ -598,6 +628,19 @@ impl SiteDescriptorBuilder {
             ReactiveSiteKind::CarboxylicAcid,
             site.carbon,
             1,
+        )
+    }
+
+    pub(crate) fn from_unsaturated_bond_site(
+        site: &crate::chemistry::organic::centers::UnsaturatedBondSite,
+    ) -> SiteDescriptor {
+        descriptor_from_carbon(
+            site.participant.structure,
+            site.participant.site.kind.clone(),
+            site.high_degree_carbon,
+            site.participant
+                .structure
+                .carbon_degree(site.high_degree_carbon),
         )
     }
 

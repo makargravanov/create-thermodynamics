@@ -102,6 +102,7 @@ enum OrganicGeneratorKind {
     AmineCbzProtection,
     CbzDeprotection,
     OrganicCombustion,
+    AlkeneEpoxidation,
 }
 
 impl OrganicGeneratorKind {
@@ -174,6 +175,7 @@ impl OrganicGeneratorKind {
             OrganicGeneratorKind::AmineCbzProtection => 60,
             OrganicGeneratorKind::CbzDeprotection => 61,
             OrganicGeneratorKind::OrganicCombustion => 62,
+            OrganicGeneratorKind::AlkeneEpoxidation => 63,
         }
     }
 }
@@ -1802,6 +1804,7 @@ fn generators_for_site(
             OrganicGeneratorKind::AlkeneHydrogenation,
             OrganicGeneratorKind::AlkeneHydroiodination,
             OrganicGeneratorKind::AlkeneIodination,
+            OrganicGeneratorKind::AlkeneEpoxidation,
             OrganicGeneratorKind::MichaelAddition,
         ],
         ReactiveSiteKind::Alkyne => &[

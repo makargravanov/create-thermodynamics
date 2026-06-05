@@ -392,10 +392,8 @@ impl Mixture {
             .find(|component| &component.substance_id == substance_id)
             .map(|component| {
                 gas_pressure_for_moles(
-                    component.amount_in_phases(&[
-                        MixturePhase::Gas,
-                        MixturePhase::SupercriticalFluid,
-                    ]),
+                    component
+                        .amount_in_phases(&[MixturePhase::Gas, MixturePhase::SupercriticalFluid]),
                     self.temperature_kelvin,
                     self.gas_volume_cubic_meters,
                 )
@@ -653,10 +651,8 @@ impl Mixture {
             .components
             .iter()
             .filter(|component| {
-                component.amount_in_phases(&[
-                    MixturePhase::Gas,
-                    MixturePhase::SupercriticalFluid,
-                ]) > 0.0
+                component.amount_in_phases(&[MixturePhase::Gas, MixturePhase::SupercriticalFluid])
+                    > 0.0
             })
             .map(|component| component.substance)
             .collect::<BTreeSet<_>>();
@@ -671,11 +667,10 @@ impl Mixture {
                 self.temperature_kelvin,
                 self.gas_volume_cubic_meters,
             )?;
-            let current_gas =
-                self.concentration_of_index_in_phases(
-                    substance,
-                    &[MixturePhase::Gas, MixturePhase::SupercriticalFluid],
-                );
+            let current_gas = self.concentration_of_index_in_phases(
+                substance,
+                &[MixturePhase::Gas, MixturePhase::SupercriticalFluid],
+            );
             let delta = (target_gas - current_gas) * fraction;
             if delta.abs() <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
                 continue;
@@ -1399,81 +1394,81 @@ impl Mixture {
                 next.supercritical_mol_per_bucket = total;
             } else {
                 match substance.aggregate_state_at(self.temperature_kelvin)? {
-                SubstanceAggregateState::Gas => {
-                    let current_gas = self.components[position].amount_in_phases(&[
-                        MixturePhase::Gas,
-                        MixturePhase::SupercriticalFluid,
-                    ]);
-                    let dissolved = (total - current_gas).max(0.0);
-                    next.gas_mol_per_bucket = total - dissolved;
-                    if dissolved > 0.0 {
-                        distribute_condensed_amount(
-                            registry,
-                            self.components[position].substance,
-                            substance,
-                            &liquid_phases,
-                            substance.phase_properties.can_precipitate,
-                            dissolved,
-                            &mut next,
-                        )?;
+                    SubstanceAggregateState::Gas => {
+                        let current_gas = self.components[position].amount_in_phases(&[
+                            MixturePhase::Gas,
+                            MixturePhase::SupercriticalFluid,
+                        ]);
+                        let dissolved = (total - current_gas).max(0.0);
+                        next.gas_mol_per_bucket = total - dissolved;
+                        if dissolved > 0.0 {
+                            distribute_condensed_amount(
+                                registry,
+                                self.components[position].substance,
+                                substance,
+                                &liquid_phases,
+                                substance.phase_properties.can_precipitate,
+                                dissolved,
+                                &mut next,
+                            )?;
+                        }
                     }
-                }
-                SubstanceAggregateState::Solid => {
-                    let dissolved =
-                        condensed_solubility_capacity(registry, substance, &liquid_phases)
-                            .map(|limit| total.min(limit))
-                            .unwrap_or(0.0);
-                    if dissolved > 0.0 {
-                        distribute_condensed_amount(
-                            registry,
-                            self.components[position].substance,
-                            substance,
-                            &liquid_phases,
-                            substance.phase_properties.can_precipitate,
-                            dissolved,
-                            &mut next,
-                        )?;
-                    }
-                    let remaining = total - dissolved;
-                    if remaining > TRACE_CONCENTRATION_MOL_PER_BUCKET {
-                        if substance.phase_properties.can_precipitate {
-                            *next
-                                .solid_mol_per_bucket_by_phase
-                                .entry(SolidPhaseKey::new(self.components[position].substance))
-                                .or_insert(0.0) += remaining;
-                        } else {
-                            return Err(ChemistryError::InvalidMixtureState(format!(
+                    SubstanceAggregateState::Solid => {
+                        let dissolved =
+                            condensed_solubility_capacity(registry, substance, &liquid_phases)
+                                .map(|limit| total.min(limit))
+                                .unwrap_or(0.0);
+                        if dissolved > 0.0 {
+                            distribute_condensed_amount(
+                                registry,
+                                self.components[position].substance,
+                                substance,
+                                &liquid_phases,
+                                substance.phase_properties.can_precipitate,
+                                dissolved,
+                                &mut next,
+                            )?;
+                        }
+                        let remaining = total - dissolved;
+                        if remaining > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                            if substance.phase_properties.can_precipitate {
+                                *next
+                                    .solid_mol_per_bucket_by_phase
+                                    .entry(SolidPhaseKey::new(self.components[position].substance))
+                                    .or_insert(0.0) += remaining;
+                            } else {
+                                return Err(ChemistryError::InvalidMixtureState(format!(
                                 "substance '{}' is solid at current temperature but cannot precipitate",
                                 substance.id
                             )));
+                            }
                         }
                     }
+                    SubstanceAggregateState::Liquid => {
+                        let current_gas = if substance
+                            .vapor_pressure_pascal(self.temperature_kelvin)?
+                            .is_some()
+                        {
+                            self.components[position].amount_in_phases(&[
+                                MixturePhase::Gas,
+                                MixturePhase::SupercriticalFluid,
+                            ])
+                        } else {
+                            0.0
+                        };
+                        let condensed = (total - current_gas).max(0.0);
+                        next.gas_mol_per_bucket = current_gas.min(total);
+                        distribute_condensed_amount(
+                            registry,
+                            self.components[position].substance,
+                            substance,
+                            &liquid_phases,
+                            substance.phase_properties.can_precipitate,
+                            condensed,
+                            &mut next,
+                        )?;
+                    }
                 }
-                SubstanceAggregateState::Liquid => {
-                    let current_gas = if substance
-                        .vapor_pressure_pascal(self.temperature_kelvin)?
-                        .is_some()
-                    {
-                        self.components[position].amount_in_phases(&[
-                            MixturePhase::Gas,
-                            MixturePhase::SupercriticalFluid,
-                        ])
-                    } else {
-                        0.0
-                    };
-                    let condensed = (total - current_gas).max(0.0);
-                    next.gas_mol_per_bucket = current_gas.min(total);
-                    distribute_condensed_amount(
-                        registry,
-                        self.components[position].substance,
-                        substance,
-                        &liquid_phases,
-                        substance.phase_properties.can_precipitate,
-                        condensed,
-                        &mut next,
-                    )?;
-                }
-            }
             }
             self.components[position].set_phase_amounts(next);
         }
@@ -1550,11 +1545,10 @@ impl Mixture {
                 self.gas_volume_cubic_meters,
             )?;
             let total = self.concentration_of_index(substance_index);
-            let current_gas =
-                self.concentration_of_index_in_phases(
-                    substance_index,
-                    &[MixturePhase::Gas, MixturePhase::SupercriticalFluid],
-                );
+            let current_gas = self.concentration_of_index_in_phases(
+                substance_index,
+                &[MixturePhase::Gas, MixturePhase::SupercriticalFluid],
+            );
             let current_liquid = self.liquid_concentration_of_index(substance_index);
             let desired_gas = total.min(target_gas);
             if current_gas > desired_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET {
@@ -2177,10 +2171,7 @@ impl Mixture {
         self.components
             .iter()
             .map(|component| {
-                component.amount_in_phases(&[
-                    MixturePhase::Gas,
-                    MixturePhase::SupercriticalFluid,
-                ])
+                component.amount_in_phases(&[MixturePhase::Gas, MixturePhase::SupercriticalFluid])
             })
             .sum()
     }
@@ -3652,7 +3643,9 @@ mod tests {
         let fluid: SubstanceId = "destroy:supercritical_gas".into();
         let mut mixture = Mixture::new(320.0).unwrap();
 
-        mixture.add_substance(&registry, fluid.clone(), 3.0).unwrap();
+        mixture
+            .add_substance(&registry, fluid.clone(), 3.0)
+            .unwrap();
 
         assert!(
             mixture.gas_pressure_pascal()
@@ -3666,7 +3659,10 @@ mod tests {
             mixture.concentration_in_phase(&fluid, MixturePhase::SupercriticalFluid),
             3.0
         );
-        assert_eq!(mixture.concentration_in_phase(&fluid, MixturePhase::Gas), 0.0);
+        assert_eq!(
+            mixture.concentration_in_phase(&fluid, MixturePhase::Gas),
+            0.0
+        );
     }
 
     #[test]
@@ -3675,7 +3671,9 @@ mod tests {
         let fluid: SubstanceId = "destroy:supercritical_gas".into();
         let mut mixture = Mixture::new(320.0).unwrap();
 
-        mixture.add_substance(&registry, fluid.clone(), 0.1).unwrap();
+        mixture
+            .add_substance(&registry, fluid.clone(), 0.1)
+            .unwrap();
 
         assert!(
             mixture.gas_pressure_pascal()
@@ -3685,7 +3683,10 @@ mod tests {
                     .critical_pressure_pascal
                     .unwrap()
         );
-        assert_eq!(mixture.concentration_in_phase(&fluid, MixturePhase::Gas), 0.1);
+        assert_eq!(
+            mixture.concentration_in_phase(&fluid, MixturePhase::Gas),
+            0.1
+        );
         assert_eq!(
             mixture.concentration_in_phase(&fluid, MixturePhase::SupercriticalFluid),
             0.0
@@ -3697,10 +3698,10 @@ mod tests {
         let registry = vapor_liquid_registry();
         let fluid: SubstanceId = "destroy:supercritical_gas".into();
         let mut mixture = Mixture::new(320.0).unwrap();
-        mixture.add_substance(&registry, fluid.clone(), 3.0).unwrap();
-        assert!(
-            mixture.concentration_in_phase(&fluid, MixturePhase::SupercriticalFluid) > 0.0
-        );
+        mixture
+            .add_substance(&registry, fluid.clone(), 3.0)
+            .unwrap();
+        assert!(mixture.concentration_in_phase(&fluid, MixturePhase::SupercriticalFluid) > 0.0);
 
         mixture.temperature_kelvin = 280.0;
         mixture.equilibrate_phases(&registry).unwrap();

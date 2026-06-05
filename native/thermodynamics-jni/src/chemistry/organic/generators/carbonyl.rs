@@ -233,40 +233,6 @@ pub(crate) fn generate_organometallic_carbonyl_addition(
     .build())
 }
 
-pub(crate) fn generate_aldehyde_oxidation(
-    site: &CarbonylSite<'_>,
-    resolver: &mut DerivedSubstanceResolver,
-) -> ChemistryResult<Option<Reaction>> {
-    let substance = site.participant.substance;
-    let structure = site.participant.structure;
-    if site.is_ketone {
-        return Ok(None);
-    }
-    let carbon = site.carbon;
-    let Some(hydrogen) = first_bonded_hydrogen(structure, carbon) else {
-        return Ok(None);
-    };
-    let mut editor = MolecularEditor::new(structure);
-    let mapping = editor.remove_atoms(&[hydrogen])?;
-    let carbon = mapped_atom(&mapping, carbon, "aldehyde carbon")?;
-    add_hydroxyl(&mut editor, carbon)?;
-    let product = resolver.resolve(editor.finish()?)?;
-    Ok(Some(
-        Reaction::builder(generated_site_reaction_id(
-            "aldehyde_oxidation",
-            &site.participant,
-        ))
-        .reactant(substance.id.clone(), 3, 1)
-        .reactant("destroy:dichromate", 1, 1)
-        .reactant("destroy:proton", 8, 1)
-        .product(product, 3)
-        .product("destroy:chromium_iii", 2)
-        .product("destroy:water", 4)
-        .activation_energy_kj_per_mol(25.0)
-        .build(),
-    ))
-}
-
 pub(crate) fn generate_cyanide_nucleophilic_addition(
     site: &CarbonylSite<'_>,
     resolver: &mut DerivedSubstanceResolver,

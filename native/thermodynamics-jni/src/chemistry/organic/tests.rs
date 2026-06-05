@@ -165,6 +165,52 @@ fn reactive_site_generators_add_aromatic_nitration_and_epoxide_hydrolysis() {
 }
 
 #[test]
+fn organic_redox_generates_graph_based_oxidation_paths() {
+    let registry = generated_registry();
+    let alcohol = reaction_with_prefix(&registry, "alcohol_oxidation/destroy_ethanol/");
+    assert!(alcohol
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:dichromate"));
+    assert!(alcohol.selectivity_profile.is_some());
+
+    let peroxide =
+        reaction_with_prefix(&registry, "alcohol_peroxide_overoxidation/destroy_ethanol/");
+    assert!(peroxide
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:hydrogen_peroxide"));
+    assert!(peroxide
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:acetic_acid"));
+}
+
+#[test]
+fn alkene_epoxidation_creates_epoxide_center_from_double_bond() {
+    let registry = generated_registry();
+    let epoxidation = reaction_with_prefix(&registry, "alkene_epoxidation/destroy_ethene/");
+    assert!(epoxidation
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:hydrogen_peroxide"));
+    let product_id = epoxidation
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("epoxidation must have an organic product")
+        .substance_id
+        .clone();
+    let product = registry.substance(&product_id).unwrap();
+    let site_kinds = try_find_reactive_sites(product.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(site_kinds.contains(&ReactiveSiteKind::Epoxide));
+}
+
+#[test]
 fn organometallic_and_aldol_generators_create_carbon_carbon_bonds() {
     let mut dynamic =
         super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();

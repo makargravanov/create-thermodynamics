@@ -533,6 +533,8 @@ pub enum ReactionType {
     CarbonylAddition,
     /// Hydride reduction of aldehydes and ketones to alcohols
     CarbonylReduction,
+    /// Oxygen-transfer or dehydrogenating oxidation of an organic reactive site
+    OrganicOxidation,
     /// Electrophilic addition to alkene/alkyne
     ElectrophilicAddition,
     /// Halogenation at the alpha carbon of an enolizable carbonyl
@@ -923,7 +925,10 @@ fn dominant_substance_in_phase(
         if amount <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
             continue;
         }
-        if selected.as_ref().is_none_or(|(_, current)| amount > *current) {
+        if selected
+            .as_ref()
+            .is_none_or(|(_, current)| amount > *current)
+        {
             selected = Some((substance_id.clone(), amount));
         }
     }

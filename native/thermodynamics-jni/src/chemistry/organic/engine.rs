@@ -92,7 +92,7 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
             }
             ReactiveSiteKind::Alcohol => {
                 let site = participant.clone().alcohol_site()?;
-                if let Some(reaction) = generate_alcohol_oxidation(&site, &mut resolver)? {
+                for reaction in generate_alcohol_oxidations(&site, &mut resolver)? {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
                 if let Some(reaction) = generate_alcohol_dehydration(&site, &mut resolver)? {
@@ -132,7 +132,7 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
             }
             ReactiveSiteKind::Aldehyde | ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl => {
                 let site = participant.clone().carbonyl_site()?;
-                if let Some(reaction) = generate_aldehyde_oxidation(&site, &mut resolver)? {
+                for reaction in generate_aldehyde_oxidations(&site, &mut resolver)? {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
                 let reaction =
@@ -241,6 +241,9 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
             }
             ReactiveSiteKind::Alkene => {
                 let site = participant.clone().unsaturated_bond_site()?;
+                if let Some(reaction) = generate_alkene_epoxidation(&site, &mut resolver)? {
+                    push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                }
                 for spec in electrophilic_addition_specs(false) {
                     let reaction = match generate_electrophilic_addition(&site, spec, &mut resolver)
                     {
