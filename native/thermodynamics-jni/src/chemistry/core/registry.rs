@@ -1482,6 +1482,7 @@ fn build_complex_specs(
                 MixturePhase::MoltenMetal
                 | MixturePhase::MoltenSlag
                 | MixturePhase::Gas
+                | MixturePhase::SupercriticalFluid
                 | MixturePhase::Solid => None,
             };
             if ligand_substance.phase_properties.can_precipitate && ligand_solubility == Some(0.0) {

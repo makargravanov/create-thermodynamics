@@ -256,6 +256,7 @@ impl ComplexSpec {
             MixturePhase::MoltenMetal
             | MixturePhase::MoltenSlag
             | MixturePhase::Gas
+            | MixturePhase::SupercriticalFluid
             | MixturePhase::Solid => {
                 return Err(ChemistryError::InvalidReaction {
                     reaction_id: format!("{}.formation", self.id),
@@ -272,6 +273,7 @@ impl ComplexSpec {
                 MixturePhase::MoltenMetal
                 | MixturePhase::MoltenSlag
                 | MixturePhase::Gas
+                | MixturePhase::SupercriticalFluid
                 | MixturePhase::Solid => unreachable!(),
             };
 
