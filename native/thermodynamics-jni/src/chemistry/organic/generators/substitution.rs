@@ -2,7 +2,7 @@ use super::super::centers::*;
 use super::super::resolver::DerivedSubstanceResolver;
 use super::common::*;
 use crate::chemistry::error::{ChemistryError, ChemistryResult};
-use crate::chemistry::molecule::MolecularEditor;
+use crate::chemistry::molecule::{bond_order_matches, MolecularEditor};
 use crate::chemistry::reaction::Reaction;
 use crate::chemistry::selectivity::{
     engine::SiteDescriptorBuilder,
@@ -21,20 +21,10 @@ pub(crate) fn generate_halide_hydroxide_substitution(
     let structure = site.participant.structure;
     let carbon = site.carbon;
     let halogen = site.halogen;
-    let halide_ion = match structure.atoms[halogen].element.as_str() {
-        "Cl" => "destroy:chloride",
-        "F" => "destroy:fluoride",
-        "I" => "destroy:iodide",
-        _ => {
-            return Err(ChemistryError::InvalidReaction {
-                reaction_id: generated_site_reaction_id(
-                    "halide_hydroxide_substitution",
-                    &site.participant,
-                ),
-                reason: "halide group does not contain a supported halogen".to_string(),
-            })
-        }
-    };
+    // Delegate to the shared halide_ion mapping so every halogen the perception
+    // layer can tag (incl. Br) yields its ion here — no local Cl/F/I subset that
+    // silently diverges from centers.rs / common.rs.
+    let halide_ion = halide_ion(structure, halogen, "halide_hydroxide_substitution", &site.participant)?;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[halogen])?;
     let carbon = mapped_atom(&mapping, carbon, "halide substitution carbon")?;
@@ -195,6 +185,21 @@ pub(crate) fn generate_halide_amine_substitution(
 ) -> ChemistryResult<Option<Reaction>> {
     let base_ea = 25.0;
     let halide_desc = SiteDescriptorBuilder::from_halide_site(halide_site);
+
+    // Reject sp2 (vinyl/aryl) halide carbons: an SN2 needs back-side attack on a
+    // tetrahedral sp3 carbon, geometrically impossible at a planar sp2 carbon. The
+    // functional-group detector tags vinyl halides as plain Halide sites, so this
+    // generator must screen them out itself.
+    let halide_carbon_structure = halide_site.participant.structure;
+    if halide_carbon_structure
+        .neighbors(halide_site.carbon)
+        .into_iter()
+        .any(|(n, order)| {
+            bond_order_matches(order, 2.0) && halide_carbon_structure.atoms[n].element == "C"
+        })
+    {
+        return Ok(None);
+    }
 
     let halide = halide_site.participant.substance;
     let halide_structure = halide_site.participant.structure;

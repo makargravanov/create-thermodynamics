@@ -49,6 +49,7 @@ pub(crate) fn halide_ion(
     match structure.atoms[halogen].element.as_str() {
         "Cl" => Ok("destroy:chloride"),
         "F" => Ok("destroy:fluoride"),
+        "Br" => Ok("destroy:bromide"),
         "I" => Ok("destroy:iodide"),
         _ => Err(ChemistryError::InvalidReaction {
             reaction_id: generated_site_reaction_id(prefix, participant),
@@ -207,6 +208,28 @@ pub(crate) fn generated_pair_site_reaction_id(
         atoms_token(first),
         atoms_token(second),
         site_kind_suffix(&first.site.kind)
+    )
+}
+
+/// Reaction id for a condensation among THREE sites: two carbonyl centers on one
+/// substrate plus a heteroatom donor (Paal–Knorr pyrrole/thiophene). Folds all
+/// three atom tokens so a carbonyl that is 1,4-related to two different partners
+/// yields distinct ids per product — otherwise `push_unique_reaction` would
+/// silently keep only the first and drop the rest.
+pub(crate) fn generated_triple_site_reaction_id(
+    prefix: &str,
+    first: &SiteParticipant<'_>,
+    second: &SiteParticipant<'_>,
+    donor: &SiteParticipant<'_>,
+) -> String {
+    format!(
+        "{}/{}/{}/{}/{}/{}",
+        generated_pair_reaction_id(prefix, first.substance, donor.substance),
+        atoms_token(first),
+        atoms_token(second),
+        atoms_token(donor),
+        site_kind_suffix(&first.site.kind),
+        site_kind_suffix(&donor.site.kind)
     )
 }
 

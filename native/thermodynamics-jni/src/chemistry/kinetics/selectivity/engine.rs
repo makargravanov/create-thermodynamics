@@ -711,6 +711,23 @@ impl SiteDescriptorBuilder {
         )
     }
 
+    pub(crate) fn from_thiol_site(
+        site: &crate::chemistry::organic::centers::ThiolSite,
+    ) -> SiteDescriptor {
+        let degree = match site.participant.structure.carbon_degree(site.sulfur) {
+            0 | 1 => SubstitutionDegree::Primary,
+            2 => SubstitutionDegree::Secondary,
+            _ => SubstitutionDegree::Tertiary,
+        };
+        SiteDescriptor::new(
+            ReactiveSiteKind::Thiol,
+            degree,
+            electronic_environment(site.participant.structure, site.sulfur),
+            bulky_substituent_count(site.participant.structure, site.sulfur),
+            has_beta_hydrogen(site.participant.structure, site.sulfur),
+        )
+    }
+
     pub(crate) fn from_phosphorus_ylide_site(
         site: &crate::chemistry::organic::centers::PhosphorusYlideSite,
     ) -> SiteDescriptor {

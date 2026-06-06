@@ -122,6 +122,13 @@ pub(crate) struct AmineSite<'a> {
 }
 
 #[derive(Clone)]
+pub(crate) struct ThiolSite<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) sulfur: usize,
+    pub(crate) hydrogens: Vec<usize>,
+}
+
+#[derive(Clone)]
 pub(crate) struct PhosphineSite<'a> {
     pub(crate) participant: SiteParticipant<'a>,
     pub(crate) phosphorus: usize,
@@ -268,7 +275,7 @@ impl<'a> SiteParticipant<'a> {
                 self.site.atoms.iter().copied().find(|atom| {
                     matches!(
                         self.structure.atoms[*atom].element.as_str(),
-                        "F" | "Cl" | "I"
+                        "F" | "Cl" | "Br" | "I"
                     )
                 })
             })
@@ -497,6 +504,20 @@ impl<'a> SiteParticipant<'a> {
         Ok(AmineSite {
             participant: self,
             nitrogen,
+            hydrogens,
+        })
+    }
+
+    pub(crate) fn thiol_site(self) -> ChemistryResult<ThiolSite<'a>> {
+        self.require_kind(ReactiveSiteKind::Thiol)?;
+        let sulfur = self.site_atom_by_element("S", "thiol sulfur")?;
+        let hydrogens = bonded_hydrogens(self.structure, sulfur);
+        if hydrogens.is_empty() {
+            return Err(self.site_error("thiol has no explicit sulfur hydrogen"));
+        }
+        Ok(ThiolSite {
+            participant: self,
+            sulfur,
             hydrogens,
         })
     }

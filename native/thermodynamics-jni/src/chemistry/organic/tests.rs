@@ -1785,6 +1785,66 @@ fn lactonization_closes_a_five_membered_lactone_from_a_hydroxy_acid() {
 }
 
 #[test]
+fn lactonization_fuses_a_lactone_onto_an_existing_aromatic_ring() {
+    // EMERGENCE CHECK: the generic ring-closure core uses `would_form_ring_of_size`,
+    // a graph BFS blind to whether the closing atoms already sit in another ring.
+    // So a closure that FUSES a new ring onto an existing one must fall out for free,
+    // with no fused-ring-specific code. 2-(hydroxymethyl)benzoic acid (a benzene ring
+    // bearing ortho -COOH and -CH2OH) closes into phthalide: a 5-membered lactone
+    // sharing its C–C edge with the benzene ring.
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let benzoic = dynamic
+        .resolve_frowns("destroy:benzene:C(=O)O,CO,,,,")
+        .unwrap();
+    dynamic.generate_reactions_for(&benzoic, 1).unwrap();
+
+    let lactonization = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("lactonization_5/"))
+        .expect("ortho hydroxymethyl benzoic acid must close to a 5-membered lactone");
+
+    let product_id = lactonization
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("lactonization must have an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap().clone();
+    let structure = product.molecular_structure.as_ref().unwrap();
+
+    // The new lactone is present (cyclic ester)...
+    let site_kinds = try_find_reactive_sites(structure)
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(
+        site_kinds.contains(&ReactiveSiteKind::Ester),
+        "the fused product is a lactone (cyclic ester)"
+    );
+
+    // ...AND the benzene ring survived intact: six aromatic-order (1.5) C–C bonds
+    // remain, proving the lactone FUSED onto the ring rather than consuming it.
+    let aromatic_cc_bonds = structure
+        .bonds
+        .iter()
+        .filter(|bond| {
+            crate::chemistry::molecule::bond_order_matches(bond.order, 1.5)
+                && structure.atoms[bond.from].element == "C"
+                && structure.atoms[bond.to].element == "C"
+        })
+        .count();
+    assert_eq!(
+        aromatic_cc_bonds, 6,
+        "the benzene ring stays aromatic after a lactone fuses onto it"
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
 fn lactamization_closes_a_five_membered_lactam_from_an_amino_acid() {
     let mut dynamic =
         super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
@@ -1847,6 +1907,582 @@ fn lactonization_is_rejected_for_a_strained_three_membered_ring() {
             .reactions()
             .all(|reaction| !reaction.id.as_str().starts_with("lactonization_")),
         "alpha-lactone closure must be rejected as too strained"
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn paal_knorr_closes_a_furan_from_a_1_4_diketone() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // Hexane-2,5-dione: CH3-CO-CH2-CH2-CO-CH3. The two carbonyl carbons are
+    // 1,4-related, so acid-catalysed cyclodehydration closes a furan ring
+    // (2,5-dimethylfuran) with loss of water.
+    let diketone = dynamic.resolve_frowns("CC(=O)CCC(=O)C").unwrap();
+    dynamic.generate_reactions_for(&diketone, 1).unwrap();
+
+    let paal_knorr = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("paal_knorr_furan/"))
+        .expect("1,4-diketone must close to a furan");
+    // Furan closure is intramolecular: the diketone is the sole reactant and
+    // exactly one water leaves (only one of the two carbonyl oxygens departs).
+    assert!(paal_knorr
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == diketone));
+    let water_term = paal_knorr
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() == "destroy:water")
+        .expect("furan closure must expel water");
+    assert_eq!(water_term.coefficient, 1, "one carbonyl oxygen leaves as water");
+
+    let product_id = paal_knorr
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("Paal–Knorr must have an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap().clone();
+    let structure = product.molecular_structure.as_ref().unwrap();
+    // The product furan is aromatic: its ring bonds were aromatised on finish().
+    let aromatic_bonds = structure
+        .bonds
+        .iter()
+        .filter(|bond| crate::chemistry::molecule::bond_order_matches(bond.order, 1.5))
+        .count();
+    assert!(
+        aromatic_bonds >= 5,
+        "furan ring must be aromatic (got {aromatic_bonds} aromatic bonds)"
+    );
+    // The closure consumed both carbonyls; no ketone site should remain.
+    let site_kinds = try_find_reactive_sites(structure)
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(!site_kinds.contains(&ReactiveSiteKind::Ketone));
+    // The single furan oxygen is retained (one carbonyl O left as water).
+    let oxygen_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == "O")
+        .count();
+    assert_eq!(oxygen_count, 1, "furan keeps a single ring oxygen");
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn paal_knorr_closes_a_pyrrole_from_a_1_4_diketone_and_amine() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // Hexane-2,5-dione + methylamine condense to an N-methylpyrrole, losing two
+    // waters. The closure is intermolecular: the amine is a separate donor.
+    let diketone = dynamic.resolve_frowns("CC(=O)CCC(=O)C").unwrap();
+    let methylamine = dynamic.resolve_frowns("CN").unwrap();
+    dynamic
+        .generate_reactions_for_substances([diketone.clone(), methylamine.clone()], 1)
+        .unwrap();
+
+    let pyrrole = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("paal_knorr_pyrrole/"))
+        .expect("1,4-diketone and amine must close to a pyrrole");
+    // Two waters leave (one per carbonyl oxygen).
+    let water_term = pyrrole
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() == "destroy:water")
+        .expect("pyrrole closure must expel water");
+    assert_eq!(water_term.coefficient, 2, "two carbonyl oxygens leave as water");
+    // Both the diketone and the amine are consumed.
+    assert!(pyrrole
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == diketone));
+    assert!(pyrrole
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == methylamine));
+
+    let product_id = pyrrole
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("Paal–Knorr must have an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap().clone();
+    let structure = product.molecular_structure.as_ref().unwrap();
+    // The pyrrole ring is aromatic.
+    let aromatic_bonds = structure
+        .bonds
+        .iter()
+        .filter(|bond| crate::chemistry::molecule::bond_order_matches(bond.order, 1.5))
+        .count();
+    assert!(
+        aromatic_bonds >= 5,
+        "pyrrole ring must be aromatic (got {aromatic_bonds} aromatic bonds)"
+    );
+    // No carbonyl survived the condensation.
+    let site_kinds = try_find_reactive_sites(structure)
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(!site_kinds.contains(&ReactiveSiteKind::Ketone));
+    // The ring nitrogen is the amine's nitrogen, now aromatic and oxygen-free.
+    let oxygen_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == "O")
+        .count();
+    assert_eq!(oxygen_count, 0, "pyrrole has no oxygen");
+    // Exactly one nitrogen — the amine fragment was spliced in once, not
+    // duplicated or dropped (a 2-N or 0-N product would still be aromatic and
+    // oxygen-free, so this guards a blind spot the other assertions miss).
+    let nitrogen_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == "N")
+        .count();
+    assert_eq!(nitrogen_count, 1, "pyrrole keeps a single ring nitrogen");
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn paal_knorr_closes_a_thiophene_from_a_1_4_diketone_and_hydrogen_sulfide() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // Hexane-2,5-dione + hydrogen sulfide condense to 2,5-dimethylthiophene,
+    // losing two waters. The sulfur donor (H2S) bridges both ring carbons.
+    let diketone = dynamic.resolve_frowns("CC(=O)CCC(=O)C").unwrap();
+    let hydrogen_sulfide = dynamic.resolve_frowns("S").unwrap();
+    dynamic
+        .generate_reactions_for_substances([diketone.clone(), hydrogen_sulfide.clone()], 1)
+        .unwrap();
+
+    let thiophene = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("paal_knorr_thiophene/"))
+        .expect("1,4-diketone and H2S must close to a thiophene");
+    let water_term = thiophene
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() == "destroy:water")
+        .expect("thiophene closure must expel water");
+    assert_eq!(water_term.coefficient, 2, "two carbonyl oxygens leave as water");
+    assert!(thiophene
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == hydrogen_sulfide));
+
+    let product_id = thiophene
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("Paal–Knorr must have an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap().clone();
+    let structure = product.molecular_structure.as_ref().unwrap();
+    // The thiophene ring is aromatic.
+    let aromatic_bonds = structure
+        .bonds
+        .iter()
+        .filter(|bond| crate::chemistry::molecule::bond_order_matches(bond.order, 1.5))
+        .count();
+    assert!(
+        aromatic_bonds >= 5,
+        "thiophene ring must be aromatic (got {aromatic_bonds} aromatic bonds)"
+    );
+    // No carbonyl survived; the product carries exactly one ring sulfur and no oxygen.
+    let site_kinds = try_find_reactive_sites(structure)
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(!site_kinds.contains(&ReactiveSiteKind::Ketone));
+    let sulfur_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == "S")
+        .count();
+    assert_eq!(sulfur_count, 1, "thiophene keeps a single ring sulfur");
+    let oxygen_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == "O")
+        .count();
+    assert_eq!(oxygen_count, 0, "thiophene has no oxygen");
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn paal_knorr_thiophene_rejects_a_monothiol_donor() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // Ethanethiol (CCS) has a single S-H, so it cannot bridge both ring carbons.
+    // The generator's `thiol.hydrogens.len() < 2` guard must reject it: pairing a
+    // monothiol with the 1,4-diketone yields no thiophene closure.
+    let diketone = dynamic.resolve_frowns("CC(=O)CCC(=O)C").unwrap();
+    let ethanethiol = dynamic.resolve_frowns("CCS").unwrap();
+    dynamic
+        .generate_reactions_for_substances([diketone.clone(), ethanethiol.clone()], 1)
+        .unwrap();
+
+    assert!(
+        dynamic
+            .reactions()
+            .all(|reaction| !reaction.id.as_str().starts_with("paal_knorr_thiophene/")),
+        "a monothiol with one S-H must not be accepted as a thiophene sulfur donor"
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn diels_alder_closes_a_cyclohexene_from_butadiene_and_ethylene() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // 1,3-butadiene (C=CC=C) + ethylene (C=C) cycloadd to cyclohexene. No atoms
+    // leave: the six ring carbons are the four diene carbons plus the two
+    // dienophile carbons; one ring double bond remains.
+    let butadiene = dynamic.resolve_frowns("C=CC=C").unwrap();
+    let ethylene = dynamic.resolve_frowns("C=C").unwrap();
+    dynamic
+        .generate_reactions_for_substances([butadiene.clone(), ethylene.clone()], 1)
+        .unwrap();
+
+    let diels_alder = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("diels_alder/")
+                && reaction.reactants.iter().any(|term| term.substance_id == ethylene)
+        })
+        .expect("butadiene and ethylene must cycloadd to a cyclohexene");
+    // Both partners are consumed; the cycloaddition is atom-economical (no byproduct).
+    assert!(diels_alder
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == butadiene));
+    assert!(diels_alder
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == ethylene));
+    assert_eq!(
+        diels_alder.products.len(),
+        1,
+        "Diels–Alder produces a single product with no byproduct"
+    );
+
+    let product_id = diels_alder.products[0].substance_id.clone();
+    let product = dynamic.substance(&product_id).unwrap().clone();
+    let structure = product.molecular_structure.as_ref().unwrap();
+    // Cyclohexene: six carbons, exactly one C=C double bond, all atoms retained.
+    let carbon_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == "C")
+        .count();
+    assert_eq!(carbon_count, 6, "cyclohexene has six ring carbons");
+    let double_bonds = structure
+        .bonds
+        .iter()
+        .filter(|bond| crate::chemistry::molecule::bond_order_matches(bond.order, 2.0))
+        .count();
+    assert_eq!(double_bonds, 1, "cyclohexene retains exactly one C=C double bond");
+    // The product is a ring: a six-membered carbocycle has 6 C–C ring bonds.
+    let carbon_carbon_bonds = structure
+        .bonds
+        .iter()
+        .filter(|bond| {
+            structure.atoms[bond.from].element == "C" && structure.atoms[bond.to].element == "C"
+        })
+        .count();
+    assert_eq!(
+        carbon_carbon_bonds, 6,
+        "cyclohexene ring has six carbon-carbon bonds"
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn diels_alder_rejects_a_non_conjugated_diene() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // Penta-1,4-diene (C=CCC=C) has its two double bonds separated by an sp3 CH2,
+    // so they are not conjugated. conjugated_diene_carbons walks a single C2–C3
+    // bond to a C3=C4 double bond and finds only a saturated carbon here, so no
+    // [4+2] may fire.
+    let pentadiene = dynamic.resolve_frowns("C=CCC=C").unwrap();
+    let ethylene = dynamic.resolve_frowns("C=C").unwrap();
+    dynamic
+        .generate_reactions_for_substances([pentadiene.clone(), ethylene.clone()], 1)
+        .unwrap();
+
+    assert!(
+        dynamic
+            .reactions()
+            .all(|reaction| !reaction.id.as_str().starts_with("diels_alder/")),
+        "a non-conjugated 1,4-diene must not undergo a Diels–Alder cycloaddition"
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn diels_alder_rejects_an_alkyne_dienophile() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // Acetylene (C#C) is an alkyne, not an alkene; the generator's is_alkyne guard
+    // must keep it out of the dienophile role for this [4+2] generator.
+    let butadiene = dynamic.resolve_frowns("C=CC=C").unwrap();
+    let acetylene = dynamic.resolve_frowns("C#C").unwrap();
+    dynamic
+        .generate_reactions_for_substances([butadiene.clone(), acetylene.clone()], 1)
+        .unwrap();
+
+    // Butadiene homodimerizes, so a diels_alder reaction does exist — but none may
+    // involve acetylene, which the is_alkyne guard keeps out of the dienophile role.
+    assert!(
+        dynamic.reactions().all(|reaction| {
+            !reaction.id.as_str().starts_with("diels_alder/")
+                || reaction
+                    .reactants
+                    .iter()
+                    .all(|term| term.substance_id != acetylene)
+        }),
+        "an alkyne must not be accepted as a dienophile by this generator"
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn diels_alder_homodimerizes_butadiene() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // Two molecules of one species react: butadiene acts as both diene and
+    // dienophile (2 C4H6 → 4-vinylcyclohexene, C8H12). This intermolecular
+    // homodimerization is a real Diels–Alder and must be generated even though
+    // both partners share a substance id.
+    let butadiene = dynamic.resolve_frowns("C=CC=C").unwrap();
+    dynamic.generate_reactions_for(&butadiene, 1).unwrap();
+
+    let dimer = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("diels_alder/"))
+        .expect("butadiene must homodimerize via Diels–Alder");
+    // The one species is consumed twice: a single coefficient-2 reactant term
+    // (second-order), not two duplicate terms.
+    assert_eq!(
+        dimer.reactants.len(),
+        1,
+        "homodimerization lists the species once, not twice"
+    );
+    assert_eq!(dimer.reactants[0].substance_id, butadiene);
+    assert_eq!(
+        dimer.reactants[0].coefficient, 2,
+        "two molecules of butadiene are consumed"
+    );
+
+    let product_id = dimer.products[0].substance_id.clone();
+    let product = dynamic.substance(&product_id).unwrap().clone();
+    let structure = product.molecular_structure.as_ref().unwrap();
+    // 4-vinylcyclohexene: eight carbons (six-membered ring + vinyl), and two C=C
+    // double bonds (one in the ring, one in the pendant vinyl group).
+    let carbon_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == "C")
+        .count();
+    assert_eq!(carbon_count, 8, "4-vinylcyclohexene has eight carbons");
+    let double_bonds = structure
+        .bonds
+        .iter()
+        .filter(|bond| crate::chemistry::molecule::bond_order_matches(bond.order, 2.0))
+        .count();
+    assert_eq!(
+        double_bonds, 2,
+        "ring double bond plus the pendant vinyl double bond"
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn intramolecular_n_alkylation_closes_a_pyrrolidine() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // 4-chlorobutan-1-amine (N-C-C-C-C-Cl): the amine nitrogen displaces the
+    // terminal chloride in an internal SN2, closing a five-membered pyrrolidine
+    // ring and expelling HCl (chloride + proton).
+    let amino_halide = dynamic.resolve_frowns("NCCCCCl").unwrap();
+    dynamic.generate_reactions_for(&amino_halide, 1).unwrap();
+
+    let closure = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("intramolecular_n_alkylation_5/")
+        })
+        .expect("4-chlorobutan-1-amine must close to a pyrrolidine");
+    // Intramolecular: the single substance is the only reactant.
+    assert_eq!(closure.reactants.len(), 1);
+    assert_eq!(closure.reactants[0].substance_id, amino_halide);
+    // HX leaves as a halide ion plus a proton.
+    assert!(closure
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:chloride"));
+    assert!(closure
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:proton"));
+
+    let product_id = closure
+        .products
+        .iter()
+        .find(|term| {
+            term.substance_id.as_str() != "destroy:chloride"
+                && term.substance_id.as_str() != "destroy:proton"
+        })
+        .expect("must have an organic ring product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap().clone();
+    let structure = product.molecular_structure.as_ref().unwrap();
+    // Pyrrolidine: one nitrogen, four carbons, no halogen remaining.
+    let nitrogen_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == "N")
+        .count();
+    assert_eq!(nitrogen_count, 1, "pyrrolidine has one ring nitrogen");
+    let chlorine_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == "Cl")
+        .count();
+    assert_eq!(chlorine_count, 0, "the chloride left the molecule");
+    // The nitrogen is now bonded to two ring carbons (it closed the ring).
+    let nitrogen_index = structure
+        .atoms
+        .iter()
+        .position(|atom| atom.element == "N")
+        .unwrap();
+    let nitrogen_carbon_bonds = structure
+        .neighbors(nitrogen_index)
+        .into_iter()
+        .filter(|(n, _)| structure.atoms[*n].element == "C")
+        .count();
+    assert_eq!(
+        nitrogen_carbon_bonds, 2,
+        "ring nitrogen bonds to two carbons after closure"
+    );
+    // Prove a RING actually closed (not an open-chain secondary amine, which would
+    // also have 2 N–C bonds): pyrrolidine has 4 carbons all retained, and the ring
+    // means C-count + N-count == bond count among those ring atoms forms a cycle.
+    let total_carbons = structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == "C")
+        .count();
+    assert_eq!(total_carbons, 4, "pyrrolidine ring has four carbons");
+    // A 5-membered ring of 4 C + 1 N has exactly 5 ring bonds; an open chain of the
+    // same atoms would have only 4. Count bonds among the {C,N} heavy atoms.
+    let heavy_bonds = structure
+        .bonds
+        .iter()
+        .filter(|bond| {
+            let a = &structure.atoms[bond.from].element;
+            let b = &structure.atoms[bond.to].element;
+            (a == "C" || a == "N") && (b == "C" || b == "N")
+        })
+        .count();
+    assert_eq!(
+        heavy_bonds, 5,
+        "a closed pyrrolidine ring has five heavy-atom ring bonds (open chain would have four)"
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn intramolecular_n_alkylation_rejects_a_strained_three_membered_ring() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // 2-chloroethan-1-amine (N-C-C-Cl) could only close a 3-membered aziridine,
+    // below MIN_CLOSABLE_RING (4); the ring-size guard must reject it.
+    let amino_halide = dynamic.resolve_frowns("NCCCl").unwrap();
+    dynamic.generate_reactions_for(&amino_halide, 1).unwrap();
+
+    assert!(
+        dynamic
+            .reactions()
+            .all(|reaction| !reaction.id.as_str().starts_with("intramolecular_n_alkylation_")),
+        "a strained three-membered aziridine closure must be rejected"
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn intramolecular_n_alkylation_does_not_cross_substance_boundaries() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // Two DIFFERENT amino-halide molecules in one registry. The intramolecular
+    // closure must only fire within a single molecule (same substance id), never
+    // pairing molecule A's amine with molecule B's halide.
+    let a = dynamic.resolve_frowns("NCCCCCl").unwrap();
+    let b = dynamic.resolve_frowns("NCCCCCCl").unwrap();
+    dynamic
+        .generate_reactions_for_substances([a.clone(), b.clone()], 1)
+        .unwrap();
+
+    for reaction in dynamic.reactions() {
+        if reaction
+            .id
+            .as_str()
+            .starts_with("intramolecular_n_alkylation_")
+        {
+            // Each closure has exactly one reactant — the single molecule it closes.
+            assert_eq!(
+                reaction.reactants.len(),
+                1,
+                "an intramolecular closure consumes one substance, not a cross-substance pair"
+            );
+        }
+    }
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn intramolecular_n_alkylation_rejects_a_vinyl_halide() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // 4-amino-1-chlorobut-1-ene (N-C-C-C=C-Cl): the chloride sits on an sp2 alkene
+    // carbon. An internal SN2 needs back-side attack on a tetrahedral sp3 carbon,
+    // impossible at a planar vinyl carbon, so the sp2 guard must reject it.
+    let vinyl_halide = dynamic.resolve_frowns("NCCC=CCl").unwrap();
+    dynamic.generate_reactions_for(&vinyl_halide, 1).unwrap();
+
+    assert!(
+        dynamic
+            .reactions()
+            .all(|reaction| !reaction.id.as_str().starts_with("intramolecular_n_alkylation_")),
+        "an internal SN2 on an sp2 vinyl-halide carbon must be rejected"
     );
 
     dynamic.to_registry().unwrap();

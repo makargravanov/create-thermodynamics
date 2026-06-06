@@ -2716,6 +2716,19 @@ const DESTROY_SUBSTANCES: &[RawSubstance] = &[
         tags: &[],
     },
     RawSubstance {
+        id: "bromide",
+        structure_code: None,
+        java_structure_code: Some(r#"LegacyMolecularStructure.atom(LegacyElement.BROMINE, -1)"#),
+        translation_key: None,
+        boiling_point_celsius: None,
+        boiling_point_kelvin: None,
+        density: None,
+        molar_heat_capacity: None,
+        specific_heat_capacity: None,
+        color_argb: 0,
+        tags: &[],
+    },
+    RawSubstance {
         id: "iodine",
         structure_code: Some(r#"destroy:linear:II"#),
         java_structure_code: None,
@@ -3682,8 +3695,8 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(DESTROY_SUBSTANCE_COUNT, 165);
-        assert_eq!(registry.substance_count(), 219);
+        assert_eq!(DESTROY_SUBSTANCE_COUNT, 166);
+        assert_eq!(registry.substance_count(), 220);
     }
 
     #[test]

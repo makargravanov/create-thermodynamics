@@ -262,6 +262,16 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                         push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                     }
                 }
+                // Diels–Alder: this alkene is the diene seed; pair it with every
+                // other alkene (on a different molecule) as the dienophile.
+                for other in space.sites_of(&ReactiveSiteKind::Alkene) {
+                    let dienophile = other.unsaturated_bond_site()?;
+                    if let Some(reaction) =
+                        generate_diels_alder(&site, &dienophile, &mut resolver)?
+                    {
+                        push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                    }
+                }
             }
             ReactiveSiteKind::Alkyne => {
                 let site = participant.clone().unsaturated_bond_site()?;
@@ -555,6 +565,24 @@ fn generate_pair_reactions_for_seed(
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
+            // Intramolecular N-alkylation: an amine on the same molecule as this
+            // halide closes a saturated N-heterocycle (self-gated by substance id
+            // and ring size).
+            for amine_kind in [
+                ReactiveSiteKind::PrimaryAmine,
+                ReactiveSiteKind::NonTertiaryAmine,
+            ] {
+                for amine in space.sites_of(&amine_kind) {
+                    let amine_site = amine.amine_site()?;
+                    if let Some(reaction) = generate_intramolecular_n_alkylation(
+                        &amine_site,
+                        &halide_site,
+                        resolver,
+                    )? {
+                        push_unique_reaction(reactions, reaction_ids, reaction)?;
+                    }
+                }
+            }
             for aromatic in space.sites_of(&ReactiveSiteKind::AromaticRing) {
                 if let Some(reaction) = generate_fc_alkylation(aromatic, seed.clone(), resolver)? {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
@@ -621,6 +649,41 @@ fn generate_pair_reactions_for_seed(
         }
         ReactiveSiteKind::Aldehyde | ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl => {
             let carbonyl_site = seed.clone().carbonyl_site()?;
+            for carbonyl_kind in carbonyl_site_kinds() {
+                for other in space
+                    .sites_of(&carbonyl_kind)
+                    .filter(|site| site.substance.id == carbonyl_site.participant.substance.id)
+                {
+                    let other_site = other.carbonyl_site()?;
+                    if let Some(reaction) =
+                        generate_paal_knorr_furan(&carbonyl_site, &other_site, resolver)?
+                    {
+                        push_unique_reaction(reactions, reaction_ids, reaction)?;
+                    }
+                    for amine in space.sites_of(&ReactiveSiteKind::PrimaryAmine) {
+                        let amine_site = amine.amine_site()?;
+                        if let Some(reaction) = generate_paal_knorr_pyrrole(
+                            &carbonyl_site,
+                            &other_site,
+                            &amine_site,
+                            resolver,
+                        )? {
+                            push_unique_reaction(reactions, reaction_ids, reaction)?;
+                        }
+                    }
+                    for thiol in space.sites_of(&ReactiveSiteKind::Thiol) {
+                        let thiol_site = thiol.thiol_site()?;
+                        if let Some(reaction) = generate_paal_knorr_thiophene(
+                            &carbonyl_site,
+                            &other_site,
+                            &thiol_site,
+                            resolver,
+                        )? {
+                            push_unique_reaction(reactions, reaction_ids, reaction)?;
+                        }
+                    }
+                }
+            }
             for alcohol in space.sites_of(&ReactiveSiteKind::Alcohol) {
                 let alcohol_site = alcohol.alcohol_site()?;
                 let reaction =
