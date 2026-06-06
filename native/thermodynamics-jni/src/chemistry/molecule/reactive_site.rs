@@ -14,6 +14,7 @@ pub enum ReactiveSiteKind {
     Alkyne,
     Aldehyde,
     Amide,
+    AmideNitrogen,
     AromaticCarbon,
     AromaticRing,
     ArylHalide,
@@ -313,6 +314,10 @@ pub fn try_find_reactive_sites(
             FunctionalGroupType::SubstitutedAmide => {
                 (ReactiveSiteKind::Amide, vec![ReactiveRole::Electrophile])
             }
+            FunctionalGroupType::AmideNitrogen => (
+                ReactiveSiteKind::AmideNitrogen,
+                vec![ReactiveRole::Nucleophile],
+            ),
             FunctionalGroupType::SilylEther => (ReactiveSiteKind::SilylEther, vec![]),
             FunctionalGroupType::Acetal => (ReactiveSiteKind::Acetal, vec![]),
             FunctionalGroupType::Ketal => (ReactiveSiteKind::Ketal, vec![]),

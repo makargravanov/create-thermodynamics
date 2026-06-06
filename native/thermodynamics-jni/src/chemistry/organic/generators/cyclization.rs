@@ -44,6 +44,11 @@ struct IntramolecularClosure<'a> {
     electrophile: usize,
     nucleophile_label: &'static str,
     electrophile_label: &'static str,
+    /// Bond order of the new ring-closing bond. Usually 1.0 (a σ bond), but a
+    /// dehydrative closure that forms a C=N (e.g. an imidazole/amidine ring)
+    /// lays a 2.0 bond so the electrophilic carbon stays in valence after its
+    /// carbonyl oxygen leaves; `finish()` then aromatises the Kekulé ring.
+    closure_bond_order: f64,
     /// Atoms removed before the new bond forms (leaving group + shed hydrogens).
     leaving_atoms: Vec<usize>,
     /// Small-molecule byproducts (water, halide ion, proton, …).
@@ -88,7 +93,7 @@ fn close_intramolecular_ring(
     let mapping = editor.remove_atoms(&spec.leaving_atoms)?;
     let ring_nucleophile = mapped_atom(&mapping, spec.nucleophile, spec.nucleophile_label)?;
     let ring_electrophile = mapped_atom(&mapping, spec.electrophile, spec.electrophile_label)?;
-    editor.add_bond(ring_nucleophile, ring_electrophile, 1.0)?;
+    editor.add_bond(ring_nucleophile, ring_electrophile, spec.closure_bond_order)?;
     let product = resolver.resolve(editor.finish()?)?;
 
     let mut builder = Reaction::builder(format!(
@@ -136,6 +141,7 @@ pub(crate) fn generate_lactonization(
             electrophile: acid_site.carbon,
             nucleophile_label: "lactone alkyl oxygen",
             electrophile_label: "lactone acyl carbon",
+            closure_bond_order: 1.0,
             leaving_atoms: vec![
                 acid_site.hydroxyl_oxygen,
                 acid_site.hydroxyl_hydrogen,
@@ -183,6 +189,7 @@ pub(crate) fn generate_lactamization(
             electrophile: acid_site.carbon,
             nucleophile_label: "lactam nitrogen",
             electrophile_label: "lactam acyl carbon",
+            closure_bond_order: 1.0,
             leaving_atoms: vec![
                 acid_site.hydroxyl_oxygen,
                 acid_site.hydroxyl_hydrogen,
@@ -257,6 +264,7 @@ pub(crate) fn generate_intramolecular_n_alkylation(
             electrophile: halide_site.carbon,
             nucleophile_label: "azacycle nitrogen",
             electrophile_label: "azacycle carbon",
+            closure_bond_order: 1.0,
             leaving_atoms: vec![halide_site.halogen, nitrogen_hydrogen],
             byproducts: vec![leaving_halide, "destroy:proton"],
             catalysts: vec![],
@@ -266,6 +274,62 @@ pub(crate) fn generate_intramolecular_n_alkylation(
                 amine_desc,
             )
             .with_secondary_site(halide_desc),
+        },
+        resolver,
+    )
+}
+
+/// Intramolecular dehydrative amidine cyclization: a primary amine and an amide
+/// on the SAME molecule close to a cyclic amidine, expelling water. The amine
+/// nitrogen attacks the amide carbon, forming a C=N double bond while the amide
+/// carbonyl oxygen leaves (with both amine hydrogens) as water. This is the
+/// generic Traube/imidazole-forming step: applied to a 4,5-diaminopyrimidinedione
+/// bearing a 5-formamido group it closes the imidazole of a purine — and because
+/// `would_form_ring_of_size` is blind to existing rings, the fused bicycle (and
+/// its aromatisation in `finish()`) falls out of the shared core for free, with
+/// no purine/xanthine-specific code. Equally closes a free-standing imidazoline
+/// or a benzimidazole from an ortho-formamido aniline.
+pub(crate) fn generate_amidine_cyclization(
+    amine_site: &AmineSite<'_>,
+    amide_site: &AmideSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    // Both groups must live on one molecule for an intramolecular closure.
+    if amine_site.participant.substance.id != amide_site.participant.substance.id {
+        return Ok(None);
+    }
+    // The amine must shed two N-H to become the imine-type (=N-) ring nitrogen.
+    if amine_site.hydrogens.len() < 2 {
+        return Ok(None);
+    }
+    let amine_desc = SiteDescriptorBuilder::from_amine_site(amine_site);
+    let amide_desc = SiteDescriptorBuilder::from_amide_site(amide_site);
+    // Nucleophile = amine nitrogen, electrophile = amide carbon. The amide oxygen
+    // and both amine hydrogens leave as water; the new N=C double bond closes the
+    // (aromatic, once Hückel is satisfied) amidine ring. Acid-catalysed, water-poor.
+    close_intramolecular_ring(
+        IntramolecularClosure {
+            prefix: "amidine_cyclization",
+            structure: amine_site.participant.structure,
+            substance_id: amine_site.participant.substance.id.clone(),
+            nucleophile: amine_site.nitrogen,
+            electrophile: amide_site.carbon,
+            nucleophile_label: "amidine imine nitrogen",
+            electrophile_label: "amidine carbon",
+            closure_bond_order: 2.0,
+            leaving_atoms: vec![
+                amide_site.carbonyl_oxygen,
+                amine_site.hydrogens[0],
+                amine_site.hydrogens[1],
+            ],
+            byproducts: vec!["destroy:water"],
+            catalysts: vec!["destroy:proton"],
+            base_activation_energy_kj_per_mol: 50.0,
+            selectivity_profile: SelectivityProfile::new(
+                ReactionType::HeterocycleCondensation,
+                amine_desc,
+            )
+            .with_secondary_site(amide_desc),
         },
         resolver,
     )

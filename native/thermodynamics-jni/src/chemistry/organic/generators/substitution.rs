@@ -1,6 +1,7 @@
 use super::super::centers::*;
 use super::super::resolver::DerivedSubstanceResolver;
 use super::common::*;
+use crate::chemistry::condition::{AcidityCondition, ReactionCondition};
 use crate::chemistry::error::{ChemistryError, ChemistryResult};
 use crate::chemistry::molecule::{bond_order_matches, MolecularEditor};
 use crate::chemistry::reaction::Reaction;
@@ -258,6 +259,93 @@ pub(crate) fn generate_halide_amine_substitution(
         .product("destroy:proton", 1)
         .activation_energy_kj_per_mol(base_ea)
         .selectivity_profile(SelectivityProfile::new(ReactionType::SN2, halide_desc))
+        .build(),
+    ))
+}
+
+/// N-alkylation of an amide/imide/lactam N-H by an alkyl halide. Mechanically the
+/// same SN2 as `generate_halide_amine_substitution`, but the nucleophile is a weak
+/// amide nitrogen rather than a basic amine: it must be deprotonated first, so the
+/// reaction needs a basic medium and carries a higher barrier. Reuses the AmineSite
+/// shape (N + hydrogens) via the widened `amine_site()` accessor. This is the step
+/// that methylates xanthine's ring N-H groups to caffeine — generic over any cyclic
+/// or acyclic amide N-H, with no caffeine-specific code.
+pub(crate) fn generate_amide_n_alkylation(
+    halide_site: &HalideSite<'_>,
+    amide_nitrogen_site: &AmineSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    // Reject sp2 (vinyl/aryl) halide carbons: an SN2 needs back-side attack on a
+    // tetrahedral sp3 carbon, impossible at a planar sp2 carbon.
+    let halide_structure = halide_site.participant.structure;
+    if halide_structure
+        .neighbors(halide_site.carbon)
+        .into_iter()
+        .any(|(n, order)| {
+            bond_order_matches(order, 2.0) && halide_structure.atoms[n].element == "C"
+        })
+    {
+        return Ok(None);
+    }
+    let Some(&nitrogen_hydrogen) = amide_nitrogen_site.hydrogens.first() else {
+        return Ok(None);
+    };
+    let halide_desc = SiteDescriptorBuilder::from_halide_site(halide_site);
+    let nitrogen_desc = SiteDescriptorBuilder::from_amine_site(amide_nitrogen_site);
+
+    let halide = halide_site.participant.substance;
+    let amide = amide_nitrogen_site.participant.substance;
+    let amide_structure = amide_nitrogen_site.participant.structure;
+
+    let mut halide_editor = MolecularEditor::new(halide_structure);
+    let halide_mapping = halide_editor.remove_atoms(&[halide_site.halogen])?;
+    let halide_carbon = mapped_atom(&halide_mapping, halide_site.carbon, "halide carbon")?;
+    let halide_fragment = halide_editor.finish()?;
+
+    let mut amide_editor = MolecularEditor::new(amide_structure);
+    let amide_mapping = amide_editor.remove_atoms(&[nitrogen_hydrogen])?;
+    let amide_nitrogen =
+        mapped_atom(&amide_mapping, amide_nitrogen_site.nitrogen, "amide nitrogen")?;
+    let amide_fragment = amide_editor.finish()?;
+
+    let product = resolver.resolve(MolecularEditor::join_structures(
+        &halide_fragment,
+        halide_carbon,
+        &amide_fragment,
+        amide_nitrogen,
+        1.0,
+    )?)?;
+    Ok(Some(
+        Reaction::builder(generated_pair_site_reaction_id(
+            "amide_n_alkylation",
+            &halide_site.participant,
+            &amide_nitrogen_site.participant,
+        ))
+        .reactant(halide.id.clone(), 1, 1)
+        .reactant(amide.id.clone(), 1, 1)
+        .product(product, 1)
+        .product(
+            halide_ion(
+                halide_structure,
+                halide_site.halogen,
+                "amide_n_alkylation",
+                &halide_site.participant,
+            )?,
+            1,
+        )
+        .product("destroy:proton", 1)
+        // Needs base to deprotonate the amide N-H before it can act as a nucleophile.
+        .condition(
+            ReactionCondition::new("amide N-alkylation requires a basic medium")
+                .acidity(AcidityCondition::Basic),
+        )
+        // Higher barrier than a basic-amine SN2 (base 25): amide N is a far weaker
+        // nucleophile even once deprotonated.
+        .activation_energy_kj_per_mol(45.0)
+        .selectivity_profile(
+            SelectivityProfile::new(ReactionType::NAlkylation, halide_desc)
+                .with_secondary_site(nitrogen_desc),
+        )
         .build(),
     ))
 }

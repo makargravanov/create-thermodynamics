@@ -1519,6 +1519,19 @@ const DESTROY_SUBSTANCES: &[RawSubstance] = &[
         tags: &["smelly", "smog"],
     },
     RawSubstance {
+        id: "formic_acid",
+        structure_code: Some(r#"destroy:linear:C(=O)OH"#),
+        java_structure_code: None,
+        translation_key: None,
+        boiling_point_celsius: Some(100.8),
+        boiling_point_kelvin: None,
+        density: Some(1220.0),
+        molar_heat_capacity: Some(99.0),
+        specific_heat_capacity: None,
+        color_argb: 0,
+        tags: &["smelly"],
+    },
+    RawSubstance {
         id: "acetic_acid",
         structure_code: Some(r#"destroy:linear:CC(=O)OH"#),
         java_structure_code: None,
@@ -3695,8 +3708,8 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(DESTROY_SUBSTANCE_COUNT, 166);
-        assert_eq!(registry.substance_count(), 220);
+        assert_eq!(DESTROY_SUBSTANCE_COUNT, 167);
+        assert_eq!(registry.substance_count(), 221);
     }
 
     #[test]

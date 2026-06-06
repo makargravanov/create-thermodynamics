@@ -30,6 +30,12 @@ pub enum FunctionalGroupType {
     SulfoneCarbanion,
     UnsubstitutedAmide,
     SubstitutedAmide,
+    /// A nucleophilic amide/imide/lactam N-H. Distinct from the amine variants: an
+    /// amide nitrogen is a poor nucleophile (it does not surface as a basic amine,
+    /// so it stays out of esterification/imine/Paal–Knorr), but under base it can
+    /// still be N-alkylated. Carried as its own type so ONLY the amide N-alkylation
+    /// path consumes it.
+    AmideNitrogen,
     SilylEther,
     Acetal,
     Ketal,
@@ -246,8 +252,17 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
                     ));
                 } else if nitrile_nitrogens.is_empty() && double_nitrogens.is_empty() {
                     // An amide nitrogen (N single-bonded to a C=O carbon) is not
-                    // a basic/nucleophilic amine; do not surface it as one.
+                    // a basic/nucleophilic amine; do not surface it as one. But if
+                    // it still bears an N-H it can be N-alkylated under base, so
+                    // emit a dedicated AmideNitrogen site (consumed only by that
+                    // path) and then skip the amine emission below.
                     if nitrogen_is_amide(structure, nitrogen) {
+                        for hydrogen in bonded(structure, nitrogen, "H", Some(1.0)) {
+                            groups.push(FunctionalGroup::new(
+                                FunctionalGroupType::AmideNitrogen,
+                                vec![carbon, nitrogen, hydrogen],
+                            ));
+                        }
                         continue;
                     }
                     let hydrogens = bonded(structure, nitrogen, "H", Some(1.0));

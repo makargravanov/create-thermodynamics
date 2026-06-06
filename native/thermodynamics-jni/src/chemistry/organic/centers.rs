@@ -110,6 +110,7 @@ pub(crate) struct AcylChlorideSite<'a> {
 pub(crate) struct AmideSite<'a> {
     pub(crate) participant: SiteParticipant<'a>,
     pub(crate) carbon: usize,
+    pub(crate) carbonyl_oxygen: usize,
     pub(crate) nitrogen: usize,
     pub(crate) nitrogen_hydrogens: Vec<usize>,
 }
@@ -484,6 +485,7 @@ impl<'a> SiteParticipant<'a> {
         Ok(AmideSite {
             participant: self,
             carbon,
+            carbonyl_oxygen: oxygen,
             nitrogen,
             nitrogen_hydrogens,
         })
@@ -492,7 +494,9 @@ impl<'a> SiteParticipant<'a> {
     pub(crate) fn amine_site(self) -> ChemistryResult<AmineSite<'a>> {
         if !matches!(
             self.site.kind,
-            ReactiveSiteKind::PrimaryAmine | ReactiveSiteKind::NonTertiaryAmine
+            ReactiveSiteKind::PrimaryAmine
+                | ReactiveSiteKind::NonTertiaryAmine
+                | ReactiveSiteKind::AmideNitrogen
         ) {
             return Err(self.site_error("site is not an amine center"));
         }

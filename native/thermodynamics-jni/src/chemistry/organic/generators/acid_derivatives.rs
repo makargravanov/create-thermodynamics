@@ -70,6 +70,76 @@ pub(crate) fn generate_carboxylic_acid_esterification(
     ))
 }
 
+/// Intermolecular amidation (Fischer-type): a carboxylic acid and an amine on
+/// SEPARATE molecules condense to an amide, expelling water. Mirrors
+/// `generate_carboxylic_acid_esterification` but the nucleophile is the amine
+/// nitrogen rather than an alcohol oxygen, so the new bond is acyl-C–N. The
+/// intramolecular (same-molecule) case is handled separately by
+/// `generate_lactamization`, which closes a ring instead.
+pub(crate) fn generate_amidation(
+    acid_site: &CarboxylicAcidSite<'_>,
+    amine_site: &AmineSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    // Same-molecule pairs are a lactam closure, not an intermolecular condensation.
+    if acid_site.participant.substance.id == amine_site.participant.substance.id {
+        return Ok(None);
+    }
+    let acid_desc = SiteDescriptorBuilder::from_carboxylic_acid_site(acid_site);
+    let amine_desc = SiteDescriptorBuilder::from_amine_site(amine_site);
+
+    let acid = acid_site.participant.substance;
+    let amine = amine_site.participant.substance;
+    let acid_structure = acid_site.participant.structure;
+    let amine_structure = amine_site.participant.structure;
+
+    // Acid sheds its -OH (oxygen + proton); the amine sheds one N-H. Together they
+    // leave as water, and the acyl carbon bonds to the now-freed amine nitrogen.
+    let mut acid_editor = MolecularEditor::new(acid_structure);
+    let acid_mapping =
+        acid_editor.remove_atoms(&[acid_site.hydroxyl_hydrogen, acid_site.hydroxyl_oxygen])?;
+    let acid_carbon = mapped_atom(&acid_mapping, acid_site.carbon, "acid carbon")?;
+    let acid_fragment = acid_editor.finish()?;
+
+    let mut amine_editor = MolecularEditor::new(amine_structure);
+    let amine_mapping = amine_editor.remove_atoms(&[amine_site.hydrogens[0]])?;
+    let amine_nitrogen = mapped_atom(&amine_mapping, amine_site.nitrogen, "amine nitrogen")?;
+    let amine_fragment = amine_editor.finish()?;
+
+    let product_structure = MolecularEditor::join_structures(
+        &acid_fragment,
+        acid_carbon,
+        &amine_fragment,
+        amine_nitrogen,
+        1.0,
+    )?;
+    let product = resolver.resolve(product_structure)?;
+    Ok(Some(
+        Reaction::builder(generated_pair_site_reaction_id(
+            "amidation",
+            &acid_site.participant,
+            &amine_site.participant,
+        ))
+        .reactant(acid.id.clone(), 1, 1)
+        .reactant(amine.id.clone(), 1, 0)
+        .product(product, 1)
+        .product("destroy:water", 1)
+        // Amide condensation needs heat and a dry medium (water reverses it); the
+        // Lactamization selectivity arm models exactly that pull, so reuse it
+        // rather than adding a near-duplicate ReactionType.
+        .condition(
+            ReactionCondition::new("amidation is driven by heat and a water-poor medium")
+                .max_water_activity(0.5),
+        )
+        .activation_energy_kj_per_mol(45.0)
+        .selectivity_profile(
+            SelectivityProfile::new(ReactionType::Lactamization, acid_desc)
+                .with_secondary_site(amine_desc),
+        )
+        .build(),
+    ))
+}
+
 pub(crate) fn generate_acyl_chloride_formation(
     site: &CarboxylicAcidSite<'_>,
     resolver: &mut DerivedSubstanceResolver,

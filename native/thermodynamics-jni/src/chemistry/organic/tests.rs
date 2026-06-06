@@ -2487,3 +2487,245 @@ fn intramolecular_n_alkylation_rejects_a_vinyl_halide() {
 
     dynamic.to_registry().unwrap();
 }
+
+#[test]
+fn amidation_condenses_an_acid_and_an_amine_into_an_amide() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // Acetic acid + methylamine → N-methylacetamide + water (intermolecular).
+    let acid = dynamic.resolve_frowns("CC(=O)O").unwrap();
+    let amine = dynamic.resolve_frowns("CN").unwrap();
+    dynamic
+        .generate_reactions_for_substances([acid.clone(), amine.clone()], 1)
+        .unwrap();
+
+    let amidation = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("amidation/"))
+        .expect("acid and amine on separate molecules must condense to an amide");
+    assert!(amidation
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:water"));
+    assert!(amidation.reactants.iter().any(|t| t.substance_id == acid));
+    assert!(amidation.reactants.iter().any(|t| t.substance_id == amine));
+
+    let product_id = amidation
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("amidation must have an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap().clone();
+    let structure = product.molecular_structure.as_ref().unwrap();
+    let site_kinds = try_find_reactive_sites(structure)
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(
+        site_kinds.contains(&ReactiveSiteKind::Amide),
+        "the condensation product is an amide"
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn amidine_cyclization_closes_a_benzimidazole_fused_onto_benzene() {
+    // EMERGENCE CHECK (generic imidazole closure): o-formamidoaniline is a benzene
+    // ring bearing an ortho -NH2 and an ortho -NHCHO (formamide). The free amine
+    // nitrogen attacks the formamide carbon, forming a C=N while the carbonyl
+    // oxygen leaves as water — closing a 5-membered imidazole that shares its C–C
+    // edge with the benzene ring (benzimidazole). The ring-closure core is blind to
+    // the pre-existing benzene, so the fused bicycle falls out with no benzimidazole
+    // /purine-specific code. This is the same closure that builds xanthine's imidazole.
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let aniline = dynamic.resolve_frowns("destroy:benzene:N,NC=O,,,,").unwrap();
+    dynamic.generate_reactions_for(&aniline, 1).unwrap();
+
+    let closure = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("amidine_cyclization_5/"))
+        .expect("o-formamidoaniline must close to a 5-membered imidazole (benzimidazole)");
+    assert!(closure
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:water"));
+
+    let product_id = closure
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("benzimidazole closure must have an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap().clone();
+    let structure = product.molecular_structure.as_ref().unwrap();
+
+    // The benzene ring survives (6 aromatic C–C bonds) AND the new imidazole is
+    // aromatic too: a fused benzimidazole has more aromatic bonds than benzene alone.
+    let aromatic_bonds = structure
+        .bonds
+        .iter()
+        .filter(|bond| crate::chemistry::molecule::bond_order_matches(bond.order, 1.5))
+        .count();
+    assert!(
+        aromatic_bonds > 6,
+        "the fused benzimidazole is aromatic across both rings (got {aromatic_bonds})"
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn amidine_cyclization_closes_xanthine_imidazole_onto_the_pyrimidinedione() {
+    // CAFFEINE PATH, ring-closure half: 6-amino-5-formamidouracil is the Traube
+    // intermediate — a pyrimidine-2,4-dione (uracil) bearing an ortho amino group
+    // (C6-NH2, the nucleophile) and an ortho formamido group (C5-NH-CHO, the amide).
+    // The amino nitrogen attacks the formyl carbon, closing a 5-membered imidazole
+    // that shares its C5–C6 edge with the pyrimidine ring: that fused bicycle IS
+    // xanthine's purine skeleton. The generic closure builds it with no purine code.
+    //
+    // Atom map: 0 N1(H) 1 C2(=O2) 3 N3(H) 4 C4(=O5) 6 C5 7 C6 8 N-amino(2H)
+    //           9 N-amido(H) 10 C-formyl(H) 11 O-formyl. H: 12,13,14,15,16,17.
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let precursor = dynamic
+        .resolve_frowns(
+            "destroy:graph:atoms=N.C.O.N.C.O.C.C.N.N.C.O.H.H.H.H.H.H;\
+             bonds=0-s-1,1-d-2,1-s-3,3-s-4,4-d-5,4-s-6,6-d-7,7-s-0,7-s-8,6-s-9,\
+             9-s-10,10-d-11,0-s-12,3-s-13,8-s-14,8-s-15,9-s-16,10-s-17",
+        )
+        .unwrap();
+    dynamic.generate_reactions_for(&precursor, 1).unwrap();
+
+    let closure = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("amidine_cyclization_5/"))
+        .expect("the formamido intermediate must close xanthine's 5-membered imidazole");
+    assert!(closure
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:water"));
+
+    let product_id = closure
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("xanthine closure must have an organic product")
+        .substance_id
+        .clone();
+    assert_ne!(product_id, precursor, "the product is a new (cyclized) substance");
+    let product = dynamic.substance(&product_id).unwrap().clone();
+    let structure = product.molecular_structure.as_ref().unwrap();
+
+    // The pyrimidinedione's two carbonyls survive the closure: the imidazole FUSED
+    // onto the ring, it did not consume it. (Exocyclic lactam C=O stay double bonds.)
+    let carbonyls = structure
+        .bonds
+        .iter()
+        .filter(|bond| {
+            crate::chemistry::molecule::bond_order_matches(bond.order, 2.0)
+                && ((structure.atoms[bond.from].element == "C"
+                    && structure.atoms[bond.to].element == "O")
+                    || (structure.atoms[bond.from].element == "O"
+                        && structure.atoms[bond.to].element == "C"))
+        })
+        .count();
+    assert_eq!(carbonyls, 2, "xanthine keeps both pyrimidinedione carbonyls");
+
+    dynamic.to_registry().unwrap();
+}
+
+/// Uracil: pyrimidine-2,4-dione. Ring N1 sits between C2=O and C6... (N1 is bonded
+/// to C2=O and to C6; N3 sits between C2=O and C4=O). Both ring nitrogens are imide
+/// N-H. Graph: 0 N1(H) 1 C2 2 O 3 N3(H) 4 C4 5 O 6 C5(H) 7 C6(H).
+const URACIL_FROWNS: &str = "destroy:graph:atoms=N.C.O.N.C.O.C.C.H.H.H.H;\
+     bonds=0-s-1,1-d-2,1-s-3,3-s-4,4-d-5,4-s-6,6-d-7,7-s-0,0-s-8,3-s-9,6-s-10,7-s-11";
+
+#[test]
+fn ring_amide_nitrogen_is_not_perceived_as_a_basic_amine() {
+    // CONTAINMENT CHECK: a ring imide N-H must surface as the dedicated
+    // AmideNitrogen site (alkylation-only), NOT as a basic PrimaryAmine /
+    // NonTertiaryAmine — otherwise it would wrongly feed esterification, imine
+    // formation, Paal–Knorr, etc.
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let uracil = dynamic.resolve_frowns(URACIL_FROWNS).unwrap();
+    let structure = dynamic
+        .substance(&uracil)
+        .unwrap()
+        .molecular_structure
+        .as_ref()
+        .unwrap()
+        .clone();
+    let site_kinds = try_find_reactive_sites(&structure)
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+
+    assert!(
+        site_kinds.contains(&ReactiveSiteKind::AmideNitrogen),
+        "uracil's ring N-H must surface as AmideNitrogen"
+    );
+    assert!(
+        !site_kinds.contains(&ReactiveSiteKind::PrimaryAmine)
+            && !site_kinds.contains(&ReactiveSiteKind::NonTertiaryAmine),
+        "an amide/imide nitrogen must never be perceived as a basic amine"
+    );
+}
+
+#[test]
+fn amide_n_alkylation_methylates_a_ring_amide_n_h() {
+    // Uracil + iodomethane → N-methyluracil + iodide + proton. The ring imide N-H
+    // is alkylated by the methyl halide (generic over any amide N-H).
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let uracil = dynamic.resolve_frowns(URACIL_FROWNS).unwrap();
+    let iodomethane = SubstanceId::from("destroy:iodomethane");
+    dynamic
+        .generate_reactions_for_substances([uracil.clone(), iodomethane.clone()], 1)
+        .unwrap();
+
+    let alkylation = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("amide_n_alkylation/"))
+        .expect("iodomethane must N-methylate uracil's ring amide N-H");
+    assert!(alkylation.reactants.iter().any(|t| t.substance_id == uracil));
+    assert!(alkylation
+        .reactants
+        .iter()
+        .any(|t| t.substance_id == iodomethane));
+    assert!(alkylation
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:iodide"));
+
+    let product_id = alkylation
+        .products
+        .iter()
+        .find(|term| {
+            !matches!(
+                term.substance_id.as_str(),
+                "destroy:iodide" | "destroy:proton"
+            )
+        })
+        .expect("alkylation must have an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap().clone();
+    let structure = product.molecular_structure.as_ref().unwrap();
+    // One more carbon than uracil (the added methyl).
+    let carbons = structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == "C")
+        .count();
+    assert_eq!(carbons, 5, "N-methyluracil has uracil's 4 carbons plus a methyl");
+
+    dynamic.to_registry().unwrap();
+}

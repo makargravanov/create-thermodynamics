@@ -489,6 +489,13 @@ fn generate_pair_reactions_for_seed(
                     {
                         push_unique_reaction(reactions, reaction_ids, reaction)?;
                     }
+                    // Intermolecular condensation to an open-chain amide when the
+                    // amine is on a different molecule (self-gated by substance id).
+                    if let Some(reaction) =
+                        generate_amidation(&acid_site, &amine_site, resolver)?
+                    {
+                        push_unique_reaction(reactions, reaction_ids, reaction)?;
+                    }
                 }
             }
         }
@@ -562,6 +569,17 @@ fn generate_pair_reactions_for_seed(
                     resolver,
                     context,
                 )? {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
+            // Amide/imide/lactam N-H are alkylated too (weak nucleophile, needs
+            // base). Carried as a dedicated AmideNitrogen kind so only this path
+            // sees it. This is the step that methylates xanthine to caffeine.
+            for amide_nitrogen in space.sites_of(&ReactiveSiteKind::AmideNitrogen) {
+                let amide_nitrogen_site = amide_nitrogen.amine_site()?;
+                if let Some(reaction) =
+                    generate_amide_n_alkylation(&halide_site, &amide_nitrogen_site, resolver)?
+                {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
@@ -721,6 +739,17 @@ fn generate_pair_reactions_for_seed(
                     let carbonyl_site = carbonyl.carbonyl_site()?;
                     let reaction =
                         generate_imine_formation(&carbonyl_site, &amine_site, resolver, context)?;
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
+            // Intramolecular dehydrative closure to a cyclic amidine (imidazole)
+            // when an amide is on the same molecule — self-gated by substance id
+            // and ring size. Fuses onto an existing ring (purine) for free.
+            for amide in space.sites_of(&ReactiveSiteKind::Amide) {
+                let amide_site = amide.amide_site()?;
+                if let Some(reaction) =
+                    generate_amidine_cyclization(&amine_site, &amide_site, resolver)?
+                {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }

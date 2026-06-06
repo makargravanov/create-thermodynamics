@@ -658,6 +658,17 @@ impl SiteDescriptorBuilder {
         )
     }
 
+    pub(crate) fn from_amide_site(
+        site: &crate::chemistry::organic::centers::AmideSite,
+    ) -> SiteDescriptor {
+        descriptor_from_carbon(
+            site.participant.structure,
+            ReactiveSiteKind::Amide,
+            site.carbon,
+            site.participant.structure.carbon_degree(site.carbon),
+        )
+    }
+
     pub(crate) fn from_unsaturated_bond_site(
         site: &crate::chemistry::organic::centers::UnsaturatedBondSite,
     ) -> SiteDescriptor {
