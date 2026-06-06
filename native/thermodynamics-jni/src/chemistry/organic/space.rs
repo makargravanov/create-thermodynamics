@@ -47,6 +47,7 @@ impl<'a> SiteParticipant<'a> {
 
 pub(crate) struct OrganicGenerationSpace<'a> {
     pub(crate) all_substances: Vec<&'a Substance>,
+    scope_substances: BTreeSet<SubstanceId>,
     participants_by_site: BTreeMap<ReactiveSiteKind, Vec<SiteParticipant<'a>>>,
 }
 
@@ -81,6 +82,7 @@ impl<'a> OrganicGenerationSpace<'a> {
 
         Ok(Self {
             all_substances,
+            scope_substances: scope.substances.clone(),
             participants_by_site,
         })
     }
@@ -111,5 +113,10 @@ impl<'a> OrganicGenerationSpace<'a> {
             .get(kind)
             .into_iter()
             .flat_map(|participants| participants.iter().cloned())
+    }
+
+    pub(crate) fn contains_substance(&self, substance_id: &str) -> bool {
+        self.scope_substances
+            .contains(&SubstanceId::from(substance_id))
     }
 }

@@ -25,7 +25,12 @@ pub(crate) fn generate_halide_hydroxide_substitution(
     // Delegate to the shared halide_ion mapping so every halogen the perception
     // layer can tag (incl. Br) yields its ion here — no local Cl/F/I subset that
     // silently diverges from centers.rs / common.rs.
-    let halide_ion = halide_ion(structure, halogen, "halide_hydroxide_substitution", &site.participant)?;
+    let halide_ion = halide_ion(
+        structure,
+        halogen,
+        "halide_hydroxide_substitution",
+        &site.participant,
+    )?;
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[halogen])?;
     let carbon = mapped_atom(&mapping, carbon, "halide substitution carbon")?;
@@ -304,8 +309,11 @@ pub(crate) fn generate_amide_n_alkylation(
 
     let mut amide_editor = MolecularEditor::new(amide_structure);
     let amide_mapping = amide_editor.remove_atoms(&[nitrogen_hydrogen])?;
-    let amide_nitrogen =
-        mapped_atom(&amide_mapping, amide_nitrogen_site.nitrogen, "amide nitrogen")?;
+    let amide_nitrogen = mapped_atom(
+        &amide_mapping,
+        amide_nitrogen_site.nitrogen,
+        "amide nitrogen",
+    )?;
     let amide_fragment = amide_editor.finish()?;
 
     let product = resolver.resolve(MolecularEditor::join_structures(

@@ -41,6 +41,7 @@ pub enum FunctionalGroupType {
     Ketal,
     BocCarbamate,
     CbzCarbamate,
+    Oxime,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -199,6 +200,23 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
                 );
             }
         } else {
+            if double_nitrogens.len() == 1 {
+                let nitrogen = double_nitrogens[0];
+                let hydroxyl_oxygens = bonded(structure, nitrogen, "O", Some(1.0))
+                    .into_iter()
+                    .filter(|oxygen| structure.hydrogen_count(*oxygen) == 1)
+                    .collect::<Vec<_>>();
+                if hydroxyl_oxygens.len() == 1 {
+                    let oxygen = hydroxyl_oxygens[0];
+                    let hydrogen = bonded(structure, oxygen, "H", Some(1.0))[0];
+                    groups.push(FunctionalGroup::new(
+                        FunctionalGroupType::Oxime,
+                        vec![carbon, nitrogen, oxygen, hydrogen],
+                    ));
+                    continue;
+                }
+            }
+
             for halogen in halogens {
                 if chlorines.len() < 3 && fluorines.is_empty() {
                     groups.push(

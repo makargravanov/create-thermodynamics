@@ -4,11 +4,48 @@ use super::common::*;
 use crate::chemistry::condition::{AcidityCondition, ReactionCondition};
 use crate::chemistry::error::{ChemistryError, ChemistryResult};
 use crate::chemistry::molecule::{MolecularEditor, MolecularStructure};
+use crate::chemistry::organic::space::SiteParticipant;
 use crate::chemistry::reaction::Reaction;
 use crate::chemistry::selectivity::{
     engine::SiteDescriptorBuilder,
-    types::{ReactionType, SelectivityContext, SelectivityProfile},
+    types::{
+        ReactionType, SelectivityContext, SelectivityProfile, SiteDescriptor, SubstitutionDegree,
+    },
 };
+use crate::chemistry::substance::SubstanceId;
+use std::collections::BTreeSet;
+
+#[derive(Clone, Copy)]
+enum AcylDonorKind {
+    AcylChloride,
+    AcidAnhydride,
+}
+
+struct AcylDonor<'a> {
+    participant: &'a SiteParticipant<'a>,
+    structure: &'a MolecularStructure,
+    acyl_carbon: usize,
+    leaving_atoms: Vec<usize>,
+    leaving_attachment: Option<usize>,
+    leaving_product_static: Option<&'static str>,
+    leaving_product_prefix: &'static str,
+    kind: AcylDonorKind,
+}
+
+#[derive(Clone, Copy)]
+enum AcylNucleophileKind {
+    Alcohol,
+    Amine,
+    Thiol,
+}
+
+struct AcylNucleophile<'a> {
+    participant: &'a SiteParticipant<'a>,
+    structure: &'a MolecularStructure,
+    attack_atom: usize,
+    proton: usize,
+    kind: AcylNucleophileKind,
+}
 
 pub(crate) fn generate_carboxylic_acid_esterification(
     acid_site: &CarboxylicAcidSite<'_>,
@@ -170,24 +207,7 @@ pub(crate) fn generate_acyl_chloride_hydrolysis(
     site: &AcylChlorideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let substance = site.participant.substance;
-    let structure = site.participant.structure;
-    let carbon = site.carbon;
-    let chlorine = site.chlorine;
-    let mut editor = MolecularEditor::new(structure);
-    let mapping = editor.remove_atoms(&[chlorine])?;
-    let carbon = mapped_atom(&mapping, carbon, "acyl chloride carbon")?;
-    add_hydroxyl(&mut editor, carbon)?;
-    let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_site_reaction_id(
-        "acyl_chloride_hydrolysis",
-        &site.participant,
-    ))
-    .reactant(substance.id.clone(), 1, 1)
-    .reactant("destroy:water", 1, 1)
-    .product(product, 1)
-    .product("destroy:hydrochloric_acid", 1)
-    .build())
+    generate_acyl_donor_hydrolysis(&AcylDonor::from_acyl_chloride(site), resolver)
 }
 
 pub(crate) fn generate_acyl_chloride_esterification(
@@ -195,41 +215,75 @@ pub(crate) fn generate_acyl_chloride_esterification(
     alcohol_site: &AlcoholSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
-    let acyl_chloride = acyl_chloride_site.participant.substance;
-    let acyl_chloride_structure = acyl_chloride_site.participant.structure;
-    let alcohol = alcohol_site.participant.substance;
-    let alcohol_structure = alcohol_site.participant.structure;
-    let acyl_carbon = acyl_chloride_site.carbon;
-    let chlorine = acyl_chloride_site.chlorine;
-    let alcohol_oxygen = alcohol_site.oxygen;
-    let alcohol_proton = alcohol_site.hydrogen;
-    let mut acyl_editor = MolecularEditor::new(acyl_chloride_structure);
-    let acyl_mapping = acyl_editor.remove_atoms(&[chlorine])?;
-    let acyl_carbon = mapped_atom(&acyl_mapping, acyl_carbon, "acyl chloride carbon")?;
-    let acyl_fragment = acyl_editor.finish()?;
+    generate_acyl_transfer(
+        &AcylDonor::from_acyl_chloride(acyl_chloride_site),
+        &AcylNucleophile::from_alcohol(alcohol_site),
+        resolver,
+    )
+}
 
-    let mut alcohol_editor = MolecularEditor::new(alcohol_structure);
-    let alcohol_mapping = alcohol_editor.remove_atoms(&[alcohol_proton])?;
-    let alcohol_oxygen = mapped_atom(&alcohol_mapping, alcohol_oxygen, "alcohol oxygen")?;
-    let alcohol_fragment = alcohol_editor.finish()?;
+pub(crate) fn generate_acyl_chloride_amidation(
+    acyl_chloride_site: &AcylChlorideSite<'_>,
+    amine_site: &AmineSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    generate_acyl_transfer(
+        &AcylDonor::from_acyl_chloride(acyl_chloride_site),
+        &AcylNucleophile::from_amine(amine_site),
+        resolver,
+    )
+}
 
-    let product = resolver.resolve(MolecularEditor::join_structures(
-        &acyl_fragment,
-        acyl_carbon,
-        &alcohol_fragment,
-        alcohol_oxygen,
-        1.0,
-    )?)?;
-    Ok(Reaction::builder(generated_pair_site_reaction_id(
-        "acyl_chloride_esterification",
-        &acyl_chloride_site.participant,
-        &alcohol_site.participant,
-    ))
-    .reactant(acyl_chloride.id.clone(), 1, 1)
-    .reactant(alcohol.id.clone(), 1, 1)
-    .product(product, 1)
-    .product("destroy:hydrochloric_acid", 1)
-    .build())
+pub(crate) fn generate_acyl_chloride_thioesterification(
+    acyl_chloride_site: &AcylChlorideSite<'_>,
+    thiol_site: &ThiolSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    generate_acyl_transfer(
+        &AcylDonor::from_acyl_chloride(acyl_chloride_site),
+        &AcylNucleophile::from_thiol(thiol_site),
+        resolver,
+    )
+}
+
+pub(crate) fn generate_anhydride_hydrolysis(
+    site: &AcidAnhydrideSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Vec<Reaction>> {
+    let donors = AcylDonor::from_anhydride(site);
+    let mut reactions = Vec::new();
+    let mut ids = BTreeSet::new();
+    for donor in donors {
+        let reaction = generate_acyl_donor_hydrolysis(&donor, resolver)?;
+        if ids.insert(reaction.id.to_string()) {
+            reactions.push(reaction);
+        }
+    }
+    Ok(reactions)
+}
+
+pub(crate) fn generate_anhydride_alcohol_acylation(
+    site: &AcidAnhydrideSite<'_>,
+    alcohol_site: &AlcoholSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Vec<Reaction>> {
+    generate_anhydride_acyl_transfer(site, &AcylNucleophile::from_alcohol(alcohol_site), resolver)
+}
+
+pub(crate) fn generate_anhydride_amine_acylation(
+    site: &AcidAnhydrideSite<'_>,
+    amine_site: &AmineSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Vec<Reaction>> {
+    generate_anhydride_acyl_transfer(site, &AcylNucleophile::from_amine(amine_site), resolver)
+}
+
+pub(crate) fn generate_anhydride_thiol_acylation(
+    site: &AcidAnhydrideSite<'_>,
+    thiol_site: &ThiolSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Vec<Reaction>> {
+    generate_anhydride_acyl_transfer(site, &AcylNucleophile::from_thiol(thiol_site), resolver)
 }
 
 pub(crate) fn generate_ester_hydrolysis(
@@ -354,35 +408,423 @@ pub(crate) fn generate_amide_hydrolysis(
     site: &AmideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Option<Reaction>> {
-    let substance = site.participant.substance;
-    let structure = site.participant.structure;
-    let carbon = site.carbon;
-    let nitrogen = site.nitrogen;
-    let hydrogens = &site.nitrogen_hydrogens;
-    // Only unsubstituted (primary) amides hydrolyse to ammonia here. Substituted
-    // and cyclic amides are now perceived as Amide sites too, but splitting them
-    // into an acid plus a substituted amine (or ring-opening a lactam) is a
-    // separate transform; skip rather than emit an incorrect ammonia product.
-    if hydrogens.len() != 2 {
+    if amide_leaving_branch(site.participant.structure, site.nitrogen, site.carbon)?.is_none() {
         return Ok(None);
     }
-    let mut editor = MolecularEditor::new(structure);
-    let mapping = editor.remove_atoms(&[nitrogen, hydrogens[0], hydrogens[1]])?;
-    let carbon = mapped_atom(&mapping, carbon, "amide carbon")?;
-    add_hydroxyl(&mut editor, carbon)?;
-    let product = resolver.resolve(editor.finish()?)?;
-    Ok(Some(
-        Reaction::builder(generated_site_reaction_id(
-            "amide_hydrolysis",
-            &site.participant,
-        ))
-        .reactant(substance.id.clone(), 1, 1)
-        .reactant("destroy:water", 1, 1)
-        .catalyst_order("destroy:proton", 1)
-        .product(product, 1)
-        .product("destroy:ammonia", 1)
-        .build(),
+    generate_acyl_leaving_group_hydrolysis(
+        site.participant.substance.id.as_str(),
+        &site.participant,
+        site.carbon,
+        site.nitrogen,
+        "amide_hydrolysis",
+        "amide nitrogen",
+        resolver,
+    )
+    .map(Some)
+}
+
+fn generate_anhydride_acyl_transfer(
+    site: &AcidAnhydrideSite<'_>,
+    nucleophile: &AcylNucleophile<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Vec<Reaction>> {
+    let donors = AcylDonor::from_anhydride(site);
+    let mut reactions = Vec::new();
+    let mut ids = BTreeSet::new();
+    for donor in donors {
+        let reaction = generate_acyl_transfer(&donor, nucleophile, resolver)?;
+        if ids.insert(reaction.id.to_string()) {
+            reactions.push(reaction);
+        }
+    }
+    Ok(reactions)
+}
+
+fn generate_acyl_transfer(
+    donor: &AcylDonor<'_>,
+    nucleophile: &AcylNucleophile<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let mut acyl_editor = MolecularEditor::new(donor.structure);
+    let acyl_mapping = acyl_editor.remove_atoms(&donor.leaving_atoms)?;
+    let acyl_carbon = mapped_atom(&acyl_mapping, donor.acyl_carbon, "acyl carbon")?;
+    let acyl_fragment = acyl_editor.finish()?;
+
+    let mut nucleophile_editor = MolecularEditor::new(nucleophile.structure);
+    let nucleophile_mapping = nucleophile_editor.remove_atoms(&[nucleophile.proton])?;
+    let attack_atom = mapped_atom(
+        &nucleophile_mapping,
+        nucleophile.attack_atom,
+        "nucleophile atom",
+    )?;
+    let nucleophile_fragment = nucleophile_editor.finish()?;
+
+    let acylated = resolver.resolve(MolecularEditor::join_structures(
+        &acyl_fragment,
+        acyl_carbon,
+        &nucleophile_fragment,
+        attack_atom,
+        1.0,
+    )?)?;
+
+    let byproduct = donor.leaving_product(resolver)?;
+    let mut builder = Reaction::builder(generated_pair_site_reaction_id(
+        acyl_transfer_id_prefix(donor, nucleophile),
+        donor.participant,
+        nucleophile.participant,
     ))
+    .reactant(donor.participant.substance.id.clone(), 1, 1)
+    .reactant(nucleophile.participant.substance.id.clone(), 1, 1)
+    .product(acylated, 1)
+    .product(byproduct, 1)
+    .activation_energy_kj_per_mol(acyl_transfer_activation_energy(donor, nucleophile))
+    .selectivity_profile(
+        SelectivityProfile::new(
+            ReactionType::AcylSubstitution,
+            SiteDescriptorBuilder::carboxylic_acid(),
+        )
+        .with_secondary_site(nucleophile_descriptor(nucleophile))
+        .never_suppress(),
+    );
+    if matches!(donor.kind, AcylDonorKind::AcidAnhydride) {
+        builder = builder.condition(
+            ReactionCondition::new("anhydride acyl transfer is suppressed by strongly wet media")
+                .max_water_activity(0.8),
+        );
+    }
+    Ok(builder.build())
+}
+
+fn generate_acyl_donor_hydrolysis(
+    donor: &AcylDonor<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let mut editor = MolecularEditor::new(donor.structure);
+    let mapping = editor.remove_atoms(&donor.leaving_atoms)?;
+    let carbon = mapped_atom(&mapping, donor.acyl_carbon, "acyl donor carbon")?;
+    add_hydroxyl(&mut editor, carbon)?;
+    let acid = resolver.resolve(editor.finish()?)?;
+    let byproduct = donor.leaving_product(resolver)?;
+    Ok(Reaction::builder(generated_site_reaction_id(
+        donor_hydrolysis_id_prefix(donor),
+        donor.participant,
+    ))
+    .reactant(donor.participant.substance.id.clone(), 1, 1)
+    .reactant("destroy:water", 1, 1)
+    .product(acid, 1)
+    .product(byproduct, 1)
+    .condition(
+        ReactionCondition::new("acyl derivative hydrolysis requires available water")
+            .min_water_activity(0.1),
+    )
+    .activation_energy_kj_per_mol(match donor.kind {
+        AcylDonorKind::AcylChloride => 12.0,
+        AcylDonorKind::AcidAnhydride => 18.0,
+    })
+    .selectivity_profile(
+        SelectivityProfile::new(
+            ReactionType::AcylSubstitution,
+            SiteDescriptorBuilder::carboxylic_acid(),
+        )
+        .never_suppress(),
+    )
+    .build())
+}
+
+fn generate_acyl_leaving_group_hydrolysis(
+    substance_id: &str,
+    participant: &SiteParticipant<'_>,
+    acyl_carbon: usize,
+    leaving_atom: usize,
+    id_prefix: &'static str,
+    leaving_label: &'static str,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let structure = participant.structure;
+    let leaving_branch = leaving_branch(structure, leaving_atom, acyl_carbon, id_prefix)?
+        .ok_or_else(|| ChemistryError::InvalidReaction {
+            reaction_id: generated_site_reaction_id(id_prefix, participant),
+            reason: format!("{leaving_label} is part of a ring; use ring-opening chemistry"),
+        })?;
+
+    let mut acid_editor = MolecularEditor::new(structure);
+    let acid_mapping = acid_editor.remove_atoms(&leaving_branch)?;
+    let acid_carbon = mapped_atom(&acid_mapping, acyl_carbon, "acyl carbon")?;
+    add_hydroxyl(&mut acid_editor, acid_carbon)?;
+    let acid = resolver.resolve(acid_editor.finish()?)?;
+
+    let mut leaving_editor = MolecularEditor::new(structure);
+    let keep = leaving_branch.iter().copied().collect::<BTreeSet<_>>();
+    let remove = (0..structure.atoms.len())
+        .filter(|atom| !keep.contains(atom))
+        .collect::<Vec<_>>();
+    let leaving_mapping = leaving_editor.remove_atoms(&remove)?;
+    let leaving_atom = mapped_atom(&leaving_mapping, leaving_atom, leaving_label)?;
+    leaving_editor.add_atom(leaving_atom, "H", 0.0, 1.0)?;
+    let leaving_product = resolver.resolve(leaving_editor.finish()?)?;
+
+    Ok(
+        Reaction::builder(generated_site_reaction_id(id_prefix, participant))
+            .reactant(substance_id, 1, 1)
+            .reactant("destroy:water", 1, 1)
+            .catalyst_order("destroy:proton", 1)
+            .product(acid, 1)
+            .product(leaving_product, 1)
+            .condition(
+                ReactionCondition::new(
+                    "acyl leaving-group hydrolysis requires acidic, water-rich conditions",
+                )
+                .acidity(AcidityCondition::Acidic)
+                .min_water_activity(0.35),
+            )
+            .selectivity_profile(
+                SelectivityProfile::new(
+                    ReactionType::AcylSubstitution,
+                    SiteDescriptorBuilder::carboxylic_acid(),
+                )
+                .never_suppress(),
+            )
+            .activation_energy_kj_per_mol(42.0)
+            .build(),
+    )
+}
+
+impl<'a> AcylDonor<'a> {
+    fn from_acyl_chloride(site: &'a AcylChlorideSite<'a>) -> Self {
+        Self {
+            participant: &site.participant,
+            structure: site.participant.structure,
+            acyl_carbon: site.carbon,
+            leaving_atoms: vec![site.chlorine],
+            leaving_attachment: Some(site.chlorine),
+            leaving_product_static: Some("destroy:hydrochloric_acid"),
+            leaving_product_prefix: "acyl_chloride_leaving_group",
+            kind: AcylDonorKind::AcylChloride,
+        }
+    }
+
+    fn from_anhydride(site: &'a AcidAnhydrideSite<'a>) -> [Self; 2] {
+        [
+            Self {
+                participant: &site.participant,
+                structure: site.participant.structure,
+                acyl_carbon: site.carbon_a,
+                leaving_atoms: anhydride_leaving_atoms(site, site.carbon_b, site.oxygen_b),
+                leaving_attachment: Some(site.bridge_oxygen),
+                leaving_product_static: None,
+                leaving_product_prefix: "anhydride_leaving_acid",
+                kind: AcylDonorKind::AcidAnhydride,
+            },
+            Self {
+                participant: &site.participant,
+                structure: site.participant.structure,
+                acyl_carbon: site.carbon_b,
+                leaving_atoms: anhydride_leaving_atoms(site, site.carbon_a, site.oxygen_a),
+                leaving_attachment: Some(site.bridge_oxygen),
+                leaving_product_static: None,
+                leaving_product_prefix: "anhydride_leaving_acid",
+                kind: AcylDonorKind::AcidAnhydride,
+            },
+        ]
+    }
+
+    fn leaving_product(
+        &self,
+        resolver: &mut DerivedSubstanceResolver,
+    ) -> ChemistryResult<SubstanceId> {
+        if let Some(static_id) = self.leaving_product_static {
+            return Ok(SubstanceId::from(static_id));
+        }
+        let leaving_attachment =
+            self.leaving_attachment
+                .ok_or_else(|| ChemistryError::InvalidReaction {
+                    reaction_id: generated_site_reaction_id(
+                        self.leaving_product_prefix,
+                        self.participant,
+                    ),
+                    reason: "dynamic acyl leaving group has no attachment atom".to_string(),
+                })?;
+        let mut editor = MolecularEditor::new(self.structure);
+        let keep = self.leaving_atoms.iter().copied().collect::<BTreeSet<_>>();
+        let remove = (0..self.structure.atoms.len())
+            .filter(|atom| !keep.contains(atom))
+            .collect::<Vec<_>>();
+        let mapping = editor.remove_atoms(&remove)?;
+        let attachment = mapped_atom(&mapping, leaving_attachment, "acyl leaving group atom")?;
+        editor.add_atom(attachment, "H", 0.0, 1.0)?;
+        resolver.resolve(editor.finish()?)
+    }
+}
+
+impl<'a> AcylNucleophile<'a> {
+    fn from_alcohol(site: &'a AlcoholSite<'a>) -> Self {
+        Self {
+            participant: &site.participant,
+            structure: site.participant.structure,
+            attack_atom: site.oxygen,
+            proton: site.hydrogen,
+            kind: AcylNucleophileKind::Alcohol,
+        }
+    }
+
+    fn from_amine(site: &'a AmineSite<'a>) -> Self {
+        Self {
+            participant: &site.participant,
+            structure: site.participant.structure,
+            attack_atom: site.nitrogen,
+            proton: site.hydrogens[0],
+            kind: AcylNucleophileKind::Amine,
+        }
+    }
+
+    fn from_thiol(site: &'a ThiolSite<'a>) -> Self {
+        Self {
+            participant: &site.participant,
+            structure: site.participant.structure,
+            attack_atom: site.sulfur,
+            proton: site.hydrogens[0],
+            kind: AcylNucleophileKind::Thiol,
+        }
+    }
+}
+
+fn anhydride_leaving_atoms(
+    site: &AcidAnhydrideSite<'_>,
+    leaving_carbon: usize,
+    leaving_oxygen: usize,
+) -> Vec<usize> {
+    let mut atoms =
+        acyl_substituent_branch(site.participant.structure, leaving_carbon, leaving_oxygen);
+    atoms.push(leaving_carbon);
+    atoms.push(leaving_oxygen);
+    atoms.push(site.bridge_oxygen);
+    atoms.sort_unstable();
+    atoms.dedup();
+    atoms
+}
+
+fn acyl_substituent_branch(
+    structure: &MolecularStructure,
+    acyl_carbon: usize,
+    carbonyl_oxygen: usize,
+) -> Vec<usize> {
+    let mut branch = Vec::new();
+    for (neighbor, order) in structure.neighbors(acyl_carbon) {
+        if neighbor == carbonyl_oxygen
+            || structure.atoms[neighbor].element == "O"
+            || !crate::chemistry::molecule::bond_order_matches(order, 1.0)
+        {
+            continue;
+        }
+        let mut stack = vec![neighbor];
+        let mut visited = vec![false; structure.atoms.len()];
+        visited[acyl_carbon] = true;
+        while let Some(atom) = stack.pop() {
+            if visited[atom] {
+                continue;
+            }
+            visited[atom] = true;
+            branch.push(atom);
+            for (next, _) in structure.neighbors(atom) {
+                if !visited[next] {
+                    stack.push(next);
+                }
+            }
+        }
+    }
+    branch
+}
+
+fn acyl_transfer_id_prefix(
+    donor: &AcylDonor<'_>,
+    nucleophile: &AcylNucleophile<'_>,
+) -> &'static str {
+    match (donor.kind, nucleophile.kind) {
+        (AcylDonorKind::AcylChloride, AcylNucleophileKind::Alcohol) => {
+            "acyl_chloride_esterification"
+        }
+        (AcylDonorKind::AcylChloride, AcylNucleophileKind::Amine) => "acyl_chloride_amidation",
+        (AcylDonorKind::AcylChloride, AcylNucleophileKind::Thiol) => {
+            "acyl_chloride_thioesterification"
+        }
+        (AcylDonorKind::AcidAnhydride, AcylNucleophileKind::Alcohol) => {
+            "anhydride_alcohol_acylation"
+        }
+        (AcylDonorKind::AcidAnhydride, AcylNucleophileKind::Amine) => "anhydride_amine_acylation",
+        (AcylDonorKind::AcidAnhydride, AcylNucleophileKind::Thiol) => "anhydride_thiol_acylation",
+    }
+}
+
+fn donor_hydrolysis_id_prefix(donor: &AcylDonor<'_>) -> &'static str {
+    match donor.kind {
+        AcylDonorKind::AcylChloride => "acyl_chloride_hydrolysis",
+        AcylDonorKind::AcidAnhydride => "anhydride_hydrolysis",
+    }
+}
+
+fn acyl_transfer_activation_energy(
+    donor: &AcylDonor<'_>,
+    nucleophile: &AcylNucleophile<'_>,
+) -> f64 {
+    let donor_term = match donor.kind {
+        AcylDonorKind::AcylChloride => 10.0,
+        AcylDonorKind::AcidAnhydride => 18.0,
+    };
+    let nucleophile_term = match nucleophile.kind {
+        AcylNucleophileKind::Amine => -2.0,
+        AcylNucleophileKind::Alcohol => 4.0,
+        AcylNucleophileKind::Thiol => 2.0,
+    };
+    donor_term + nucleophile_term
+}
+
+fn nucleophile_descriptor(nucleophile: &AcylNucleophile<'_>) -> SiteDescriptor {
+    match nucleophile.kind {
+        AcylNucleophileKind::Alcohol => SiteDescriptorBuilder::build(
+            crate::chemistry::reactive_site::ReactiveSiteKind::Alcohol,
+            degree_from_usize(
+                nucleophile
+                    .participant
+                    .site
+                    .substitution_degree
+                    .unwrap_or(1),
+            ),
+            0,
+            0,
+            0,
+            true,
+            false,
+            false,
+        ),
+        AcylNucleophileKind::Amine => SiteDescriptorBuilder::build(
+            crate::chemistry::reactive_site::ReactiveSiteKind::NonTertiaryAmine,
+            SubstitutionDegree::Primary,
+            1,
+            0,
+            0,
+            false,
+            false,
+            false,
+        ),
+        AcylNucleophileKind::Thiol => SiteDescriptorBuilder::build(
+            crate::chemistry::reactive_site::ReactiveSiteKind::Thiol,
+            SubstitutionDegree::Primary,
+            0,
+            0,
+            0,
+            false,
+            false,
+            false,
+        ),
+    }
+}
+
+fn degree_from_usize(degree: usize) -> SubstitutionDegree {
+    match degree {
+        0 | 1 => SubstitutionDegree::Primary,
+        2 => SubstitutionDegree::Secondary,
+        _ => SubstitutionDegree::Tertiary,
+    }
 }
 
 fn ester_alkoxy_branch(
@@ -390,13 +832,40 @@ fn ester_alkoxy_branch(
     alkoxy_oxygen: usize,
     carbonyl_carbon: usize,
 ) -> ChemistryResult<Vec<usize>> {
-    if alkoxy_oxygen >= structure.atoms.len() || carbonyl_carbon >= structure.atoms.len() {
+    leaving_branch(
+        structure,
+        alkoxy_oxygen,
+        carbonyl_carbon,
+        "ester_hydrolysis",
+    )?
+    .ok_or_else(|| ChemistryError::InvalidReaction {
+        reaction_id: "ester_hydrolysis".to_string(),
+        reason: "ester alkoxy oxygen is part of a ring; use lactone ring-opening chemistry"
+            .to_string(),
+    })
+}
+
+fn amide_leaving_branch(
+    structure: &MolecularStructure,
+    nitrogen: usize,
+    carbonyl_carbon: usize,
+) -> ChemistryResult<Option<Vec<usize>>> {
+    leaving_branch(structure, nitrogen, carbonyl_carbon, "amide_hydrolysis")
+}
+
+fn leaving_branch(
+    structure: &MolecularStructure,
+    leaving_atom: usize,
+    carbonyl_carbon: usize,
+    reaction_id: &str,
+) -> ChemistryResult<Option<Vec<usize>>> {
+    if leaving_atom >= structure.atoms.len() || carbonyl_carbon >= structure.atoms.len() {
         return Err(ChemistryError::InvalidReaction {
-            reaction_id: "ester_hydrolysis".to_string(),
-            reason: "ester site references an atom outside the structure".to_string(),
+            reaction_id: reaction_id.to_string(),
+            reason: "acyl leaving group references an atom outside the structure".to_string(),
         });
     }
-    let mut stack = vec![alkoxy_oxygen];
+    let mut stack = vec![leaving_atom];
     let mut visited = vec![false; structure.atoms.len()];
     visited[carbonyl_carbon] = true;
     while let Some(atom) = stack.pop() {
@@ -415,11 +884,18 @@ fn ester_alkoxy_branch(
         .enumerate()
         .filter_map(|(atom, seen)| (seen && atom != carbonyl_carbon).then_some(atom))
         .collect::<Vec<_>>();
-    if !branch.contains(&alkoxy_oxygen) {
+    if !branch.contains(&leaving_atom) {
         return Err(ChemistryError::InvalidReaction {
-            reaction_id: "ester_hydrolysis".to_string(),
-            reason: "ester alkoxy branch does not contain the alkoxy oxygen".to_string(),
+            reaction_id: reaction_id.to_string(),
+            reason: "acyl leaving branch does not contain the leaving atom".to_string(),
         });
     }
-    Ok(branch)
+    if structure
+        .neighbors(carbonyl_carbon)
+        .into_iter()
+        .any(|(neighbor, _)| neighbor != leaving_atom && branch.contains(&neighbor))
+    {
+        return Ok(None);
+    }
+    Ok(Some(branch))
 }

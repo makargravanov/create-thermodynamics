@@ -704,6 +704,61 @@ impl MolecularEditor {
         Ok(())
     }
 
+    pub fn move_bond_attachment(
+        &mut self,
+        old_parent: usize,
+        substituent: usize,
+        new_parent: usize,
+        order: f64,
+    ) -> ChemistryResult<()> {
+        if old_parent >= self.atoms.len()
+            || substituent >= self.atoms.len()
+            || new_parent >= self.atoms.len()
+            || old_parent == substituent
+            || new_parent == substituent
+        {
+            return Err(invalid_structure(
+                &self.source_code,
+                "migrating bond atom does not exist",
+            ));
+        }
+        if !order.is_finite() || order <= 0.0 {
+            return Err(invalid_structure(
+                &self.source_code,
+                "migrating bond order must be positive and finite",
+            ));
+        }
+        if self.bonds.iter().any(|bond| {
+            (bond.from == new_parent && bond.to == substituent)
+                || (bond.from == substituent && bond.to == new_parent)
+        }) {
+            return Err(invalid_structure(
+                &self.source_code,
+                "migrating bond target already exists",
+            ));
+        }
+        let bond = self
+            .bonds
+            .iter_mut()
+            .find(|bond| {
+                (bond.from == old_parent && bond.to == substituent)
+                    || (bond.from == substituent && bond.to == old_parent)
+            })
+            .ok_or_else(|| invalid_structure(&self.source_code, "migrating bond does not exist"))?;
+        if bond.from == old_parent {
+            bond.from = new_parent;
+        } else {
+            bond.to = new_parent;
+        }
+        bond.order = order;
+        self.clear_stereo_at_atom(old_parent);
+        self.clear_stereo_at_atom(substituent);
+        self.clear_stereo_at_atom(new_parent);
+        self.modified = true;
+        self.structure().validate()?;
+        Ok(())
+    }
+
     pub fn insert_bridging_atom(
         &mut self,
         first: usize,

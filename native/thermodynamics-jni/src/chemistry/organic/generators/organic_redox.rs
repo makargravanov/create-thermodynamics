@@ -54,8 +54,9 @@ pub(crate) fn generate_alcohol_oxidations(
         false,
     ));
     if site.degree == 1 {
-        let acid_product = oxidize_primary_alcohol_to_acid(site, resolver)?;
-        reactions.push(alcohol_peroxide_oxidation(site, acid_product, true));
+        if let Some(acid_product) = oxidize_primary_alcohol_to_acid(site, resolver)? {
+            reactions.push(alcohol_peroxide_oxidation(site, acid_product, true));
+        }
     }
     Ok(reactions)
 }
@@ -130,29 +131,14 @@ fn oxidize_alcohol_to_carbonyl(
 fn oxidize_primary_alcohol_to_acid(
     site: &AlcoholSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
-) -> ChemistryResult<crate::chemistry::substance::SubstanceId> {
+) -> ChemistryResult<Option<crate::chemistry::substance::SubstanceId>> {
     let structure = site.participant.structure;
     let carbon_hydrogens = bonded_hydrogens(structure, site.carbon);
     if carbon_hydrogens.len() < 2 {
-        return Err(crate::chemistry::error::ChemistryError::InvalidReaction {
-            reaction_id: generated_site_reaction_id(
-                "alcohol_peroxide_overoxidation",
-                &site.participant,
-            ),
-            reason: "primary alcohol needs two explicit carbon hydrogens for oxidation to acid"
-                .to_string(),
-        });
+        return Ok(None);
     }
     let second_carbon_hydrogen = carbon_hydrogens[1];
-    let first_carbon_hydrogen = first_bonded_hydrogen(structure, site.carbon).ok_or_else(|| {
-        crate::chemistry::error::ChemistryError::InvalidReaction {
-            reaction_id: generated_site_reaction_id(
-                "alcohol_peroxide_overoxidation",
-                &site.participant,
-            ),
-            reason: "primary alcohol has no explicit carbon hydrogen".to_string(),
-        }
-    })?;
+    let first_carbon_hydrogen = carbon_hydrogens[0];
     let mut editor = MolecularEditor::new(structure);
     let mapping =
         editor.remove_atoms(&[first_carbon_hydrogen, second_carbon_hydrogen, site.hydrogen])?;
@@ -160,7 +146,7 @@ fn oxidize_primary_alcohol_to_acid(
     let oxygen = mapped_atom(&mapping, site.oxygen, "alcohol oxygen")?;
     editor.set_bond_order(carbon, oxygen, 2.0)?;
     add_hydroxyl(&mut editor, carbon)?;
-    Ok(resolver.resolve(editor.finish()?)?)
+    Ok(Some(resolver.resolve(editor.finish()?)?))
 }
 
 fn oxidize_aldehyde_to_acid(

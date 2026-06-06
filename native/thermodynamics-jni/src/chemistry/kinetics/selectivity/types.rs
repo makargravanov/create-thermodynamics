@@ -577,6 +577,8 @@ pub enum ReactionType {
     EsterProtection,
     /// Hydrolysis or cleavage of an ester protecting group
     EsterHydrolysis,
+    /// Nucleophilic acyl substitution of acid chlorides, anhydrides, esters and amides
+    AcylSubstitution,
     /// Intramolecular esterification closing a lactone ring
     Lactonization,
     /// Intramolecular amide formation closing a lactam ring
@@ -586,8 +588,16 @@ pub enum ReactionType {
     HeterocycleCondensation,
     /// [4+2] cycloaddition of a conjugated diene and a dienophile
     DielsAlder,
+    /// Thermal cycloreversion of a cyclohexene-like Diels-Alder adduct
+    RetroDielsAlder,
+    /// Light-driven double-bond geometric isomerization
+    PhotochemicalIsomerization,
     /// Alkylation of an amine or amide nitrogen by an alkyl halide
     NAlkylation,
+    /// Radical-chain substitution of an abstractable C-H bond
+    RadicalHalogenation,
+    /// Intramolecular migration with sigma-bond reorganization.
+    SkeletalRearrangement,
 }
 
 /// Nucleophile strength classification for selectivity models.

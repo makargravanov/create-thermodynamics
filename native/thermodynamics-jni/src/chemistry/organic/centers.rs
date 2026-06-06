@@ -107,12 +107,21 @@ pub(crate) struct AcylChlorideSite<'a> {
 }
 
 #[derive(Clone)]
+pub(crate) struct AcidAnhydrideSite<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) carbon_a: usize,
+    pub(crate) oxygen_a: usize,
+    pub(crate) carbon_b: usize,
+    pub(crate) oxygen_b: usize,
+    pub(crate) bridge_oxygen: usize,
+}
+
+#[derive(Clone)]
 pub(crate) struct AmideSite<'a> {
     pub(crate) participant: SiteParticipant<'a>,
     pub(crate) carbon: usize,
     pub(crate) carbonyl_oxygen: usize,
     pub(crate) nitrogen: usize,
-    pub(crate) nitrogen_hydrogens: Vec<usize>,
 }
 
 #[derive(Clone)]
@@ -177,6 +186,15 @@ pub(crate) struct NitroSite<'a> {
     pub(crate) participant: SiteParticipant<'a>,
     pub(crate) nitrogen: usize,
     pub(crate) oxygens: [usize; 2],
+}
+
+#[derive(Clone)]
+pub(crate) struct OximeSite<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) carbon: usize,
+    pub(crate) nitrogen: usize,
+    pub(crate) oxygen: usize,
+    pub(crate) hydrogen: usize,
 }
 
 #[derive(Clone)]
@@ -467,6 +485,49 @@ impl<'a> SiteParticipant<'a> {
         })
     }
 
+    pub(crate) fn acid_anhydride_site(self) -> ChemistryResult<AcidAnhydrideSite<'a>> {
+        self.require_kind(ReactiveSiteKind::AcidAnhydride)?;
+        let carbons = self
+            .site
+            .atoms
+            .iter()
+            .copied()
+            .filter(|atom| self.structure.atoms[*atom].element == "C")
+            .collect::<Vec<_>>();
+        if carbons.len() != 2 {
+            return Err(self.site_error("acid anhydride must contain two carbonyl carbons"));
+        }
+        let bridge_oxygen = self
+            .site
+            .atoms
+            .iter()
+            .copied()
+            .find(|atom| {
+                self.structure.atoms[*atom].element == "O"
+                    && self
+                        .structure
+                        .neighbors(*atom)
+                        .into_iter()
+                        .filter(|(neighbor, order)| {
+                            self.structure.atoms[*neighbor].element == "C"
+                                && crate::chemistry::molecule::bond_order_matches(*order, 1.0)
+                        })
+                        .count()
+                        == 2
+            })
+            .ok_or_else(|| self.site_error("acid anhydride has no bridge oxygen"))?;
+        let oxygen_a = self.bonded_site_atom(carbons[0], "O", 2.0, "first carbonyl oxygen")?;
+        let oxygen_b = self.bonded_site_atom(carbons[1], "O", 2.0, "second carbonyl oxygen")?;
+        Ok(AcidAnhydrideSite {
+            participant: self,
+            carbon_a: carbons[0],
+            oxygen_a,
+            carbon_b: carbons[1],
+            oxygen_b,
+            bridge_oxygen,
+        })
+    }
+
     pub(crate) fn amide_site(self) -> ChemistryResult<AmideSite<'a>> {
         self.require_kind(ReactiveSiteKind::Amide)?;
         let (carbon, oxygen) = carbonyl_atoms_from_site(self.structure, &self.site, "amide")?;
@@ -481,13 +542,11 @@ impl<'a> SiteParticipant<'a> {
                 .then_some(neighbor)
             })
             .ok_or_else(|| self.site_error("amide has no nitrogen atom"))?;
-        let nitrogen_hydrogens = bonded_hydrogens(self.structure, nitrogen);
         Ok(AmideSite {
             participant: self,
             carbon,
             carbonyl_oxygen: oxygen,
             nitrogen,
-            nitrogen_hydrogens,
         })
     }
 
@@ -711,6 +770,22 @@ impl<'a> SiteParticipant<'a> {
             participant: self,
             nitrogen,
             oxygens,
+        })
+    }
+
+    pub(crate) fn oxime_site(self) -> ChemistryResult<OximeSite<'a>> {
+        self.require_kind(ReactiveSiteKind::Oxime)?;
+        let carbon = self.site_atom_by_element("C", "oxime carbon")?;
+        let nitrogen = self.bonded_site_atom(carbon, "N", 2.0, "oxime nitrogen")?;
+        let oxygen = self.bonded_site_atom(nitrogen, "O", 1.0, "oxime hydroxyl oxygen")?;
+        let hydrogen = first_bonded_hydrogen(self.structure, oxygen)
+            .ok_or_else(|| self.site_error("oxime oxygen has no explicit hydrogen"))?;
+        Ok(OximeSite {
+            participant: self,
+            carbon,
+            nitrogen,
+            oxygen,
+            hydrogen,
         })
     }
 

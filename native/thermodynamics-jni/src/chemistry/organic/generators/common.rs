@@ -267,6 +267,7 @@ pub(crate) fn site_kind_suffix(kind: &ReactiveSiteKind) -> &'static str {
         ReactiveSiteKind::AcylChloride => "acyl_chloride",
         ReactiveSiteKind::Alcohol => "alcohol",
         ReactiveSiteKind::Alkene => "alkene",
+        ReactiveSiteKind::AlkylHydrogen => "alkyl_hydrogen",
         ReactiveSiteKind::Alkoxide => "alkoxide",
         ReactiveSiteKind::Alkyne => "alkyne",
         ReactiveSiteKind::Aldehyde => "aldehyde",
@@ -297,6 +298,7 @@ pub(crate) fn site_kind_suffix(kind: &ReactiveSiteKind) -> &'static str {
         ReactiveSiteKind::Organocopper => "organocopper",
         ReactiveSiteKind::Organolithium => "organolithium",
         ReactiveSiteKind::Organomagnesium => "organomagnesium",
+        ReactiveSiteKind::Oxime => "oxime",
         ReactiveSiteKind::Phenol => "phenol",
         ReactiveSiteKind::PrimaryAmine => "primary_amine",
         ReactiveSiteKind::Phosphine => "phosphine",
@@ -345,4 +347,3 @@ pub(crate) fn ring_closure_activation_penalty_kj_per_mol(ring_size: usize) -> f6
         n => 14.0 + 4.0 * (n.saturating_sub(8) as f64),
     }
 }
-

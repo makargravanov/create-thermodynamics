@@ -3,10 +3,12 @@ use super::super::resolver::DerivedSubstanceResolver;
 use super::common::*;
 use crate::chemistry::condition::{AcidityCondition, ReactionCondition};
 use crate::chemistry::error::ChemistryResult;
+use crate::chemistry::kinetics::{ChannelConditionEffect, LightBand, ReactionChannel, ReactionChannelMode};
 use crate::chemistry::molecule::{
-    bond_order_matches, would_form_ring_of_size, MolecularEditor, MolecularStructure,
+    bond_order_matches, would_form_ring_of_size, MolecularBond, MolecularEditor,
+    MolecularStructure, StereoDescriptor,
 };
-use crate::chemistry::reaction::Reaction;
+use crate::chemistry::reaction::{Reaction, StoichiometricTerm};
 use crate::chemistry::selectivity::{
     engine::SiteDescriptorBuilder,
     types::{ReactionType, SelectivityProfile},
@@ -79,8 +81,7 @@ fn close_intramolecular_ring(
     {
         return Ok(None);
     }
-    let Some(ring_size) =
-        would_form_ring_of_size(structure, spec.nucleophile, spec.electrophile)
+    let Some(ring_size) = would_form_ring_of_size(structure, spec.nucleophile, spec.electrophile)
     else {
         return Ok(None);
     };
@@ -117,7 +118,6 @@ fn close_intramolecular_ring(
     Ok(Some(builder.build()))
 }
 
-
 pub(crate) fn generate_lactonization(
     acid_site: &CarboxylicAcidSite<'_>,
     alcohol_site: &AlcoholSite<'_>,
@@ -150,11 +150,8 @@ pub(crate) fn generate_lactonization(
             byproducts: vec!["destroy:water"],
             catalysts: vec!["destroy:sulfuric_acid"],
             base_activation_energy_kj_per_mol: 25.0,
-            selectivity_profile: SelectivityProfile::new(
-                ReactionType::Lactonization,
-                acid_desc,
-            )
-            .with_secondary_site(alcohol_desc),
+            selectivity_profile: SelectivityProfile::new(ReactionType::Lactonization, acid_desc)
+                .with_secondary_site(alcohol_desc),
         },
         resolver,
     )
@@ -198,11 +195,8 @@ pub(crate) fn generate_lactamization(
             byproducts: vec!["destroy:water"],
             catalysts: vec![],
             base_activation_energy_kj_per_mol: 40.0,
-            selectivity_profile: SelectivityProfile::new(
-                ReactionType::Lactamization,
-                acid_desc,
-            )
-            .with_secondary_site(amine_desc),
+            selectivity_profile: SelectivityProfile::new(ReactionType::Lactamization, acid_desc)
+                .with_secondary_site(amine_desc),
         },
         resolver,
     )
@@ -269,11 +263,8 @@ pub(crate) fn generate_intramolecular_n_alkylation(
             byproducts: vec![leaving_halide, "destroy:proton"],
             catalysts: vec![],
             base_activation_energy_kj_per_mol: 18.0,
-            selectivity_profile: SelectivityProfile::new(
-                ReactionType::NAlkylation,
-                amine_desc,
-            )
-            .with_secondary_site(halide_desc),
+            selectivity_profile: SelectivityProfile::new(ReactionType::NAlkylation, amine_desc)
+                .with_secondary_site(halide_desc),
         },
         resolver,
     )
@@ -534,9 +525,11 @@ pub(crate) fn generate_paal_knorr_pyrrole(
         .product(product, 1)
         .product("destroy:water", 2)
         .condition(
-            ReactionCondition::new("Paal–Knorr pyrrole closure needs acidic, water-poor conditions")
-                .acidity(AcidityCondition::Acidic)
-                .max_water_activity(0.35),
+            ReactionCondition::new(
+                "Paal–Knorr pyrrole closure needs acidic, water-poor conditions",
+            )
+            .acidity(AcidityCondition::Acidic)
+            .max_water_activity(0.35),
         )
         .activation_energy_kj_per_mol(50.0)
         .selectivity_profile(
@@ -706,8 +699,7 @@ pub(crate) fn generate_diels_alder(
     if dienophile.is_alkyne {
         return Ok(None);
     }
-    let Some((c1, _c2, _c3, c4)) =
-        conjugated_diene_carbons(diene.participant.structure, diene)
+    let Some((c1, _c2, _c3, c4)) = conjugated_diene_carbons(diene.participant.structure, diene)
     else {
         return Ok(None);
     };
@@ -752,26 +744,321 @@ pub(crate) fn generate_diels_alder(
         // two duplicate terms (which would corrupt the stoichiometry).
         builder.reactant(diene_substance.id.clone(), 2, 2)
     } else {
-        builder
-            .reactant(diene_substance.id.clone(), 1, 1)
-            .reactant(dienophile_substance.id.clone(), 1, 1)
+        builder.reactant(diene_substance.id.clone(), 1, 1).reactant(
+            dienophile_substance.id.clone(),
+            1,
+            1,
+        )
     };
 
     Ok(Some(
         builder
-        .product(product, 1)
-        // No hard temperature gate: a Diels–Alder is thermally promoted, but there
-        // is no distinct physical cutoff below which it stops — low temperature just
-        // makes it slow. The Arrhenius dependence on this barrier already suppresses
-        // the rate in the cold, so a binary min-temperature ban would be wrong.
-        // Flat, substituent-independent barrier sized for an unactivated pair
-        // (butadiene + ethylene computes ~100 kJ/mol); electron-poor dienophiles
-        // react faster but that demand-lowering is not modelled per-substituent.
-        .activation_energy_kj_per_mol(95.0)
-        .selectivity_profile(
-            SelectivityProfile::new(ReactionType::DielsAlder, diene_desc)
-                .with_secondary_site(dienophile_desc),
-        )
-        .build(),
+            .product(product, 1)
+            // No hard temperature gate: a Diels–Alder is thermally promoted, but there
+            // is no distinct physical cutoff below which it stops — low temperature just
+            // makes it slow. The Arrhenius dependence on this barrier already suppresses
+            // the rate in the cold, so a binary min-temperature ban would be wrong.
+            // Flat, substituent-independent barrier sized for an unactivated pair
+            // (butadiene + ethylene computes ~100 kJ/mol); electron-poor dienophiles
+            // react faster but that demand-lowering is not modelled per-substituent.
+            .activation_energy_kj_per_mol(95.0)
+            .selectivity_profile(
+                SelectivityProfile::new(ReactionType::DielsAlder, diene_desc)
+                    .with_secondary_site(dienophile_desc),
+            )
+            .build(),
     ))
+}
+
+pub(crate) fn generate_retro_diels_alder(
+    alkene: &UnsaturatedBondSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Vec<Reaction>> {
+    if alkene.is_alkyne {
+        return Ok(Vec::new());
+    }
+    let structure = alkene.participant.structure;
+    let c2 = alkene.high_degree_carbon;
+    let c3 = alkene.low_degree_carbon;
+    let mut reactions = Vec::new();
+    for (c1, c2_c1_order) in structure.neighbors(c2) {
+        if c1 == c3
+            || structure.atoms[c1].element != "C"
+            || !bond_order_matches(c2_c1_order, 1.0)
+        {
+            continue;
+        }
+        for (c4, c3_c4_order) in structure.neighbors(c3) {
+            if c4 == c2
+                || c4 == c1
+                || structure.atoms[c4].element != "C"
+                || !bond_order_matches(c3_c4_order, 1.0)
+            {
+                continue;
+            }
+            for (ca, c1_ca_order) in structure.neighbors(c1) {
+                if [c1, c2, c3, c4].contains(&ca)
+                    || structure.atoms[ca].element != "C"
+                    || !bond_order_matches(c1_ca_order, 1.0)
+                {
+                    continue;
+                }
+                for (cb, ca_cb_order) in structure.neighbors(ca) {
+                    if [c1, c2, c3, c4, ca].contains(&cb)
+                        || structure.atoms[cb].element != "C"
+                        || !bond_order_matches(ca_cb_order, 1.0)
+                    {
+                        continue;
+                    }
+                    if !structure.neighbors(cb).iter().any(|(n, order)| {
+                        *n == c4 && bond_order_matches(*order, 1.0)
+                    }) {
+                        continue;
+                    }
+                    let Some((diene, dienophile)) =
+                        retro_diels_alder_fragments(structure, [c1, c2, c3, c4], [ca, cb])
+                    else {
+                        continue;
+                    };
+                    let diene_id = resolver.resolve(diene)?;
+                    let dienophile_id = resolver.resolve(dienophile)?;
+                    let alkene_desc = SiteDescriptorBuilder::from_unsaturated_bond_site(alkene);
+                    reactions.push(
+                        Reaction::builder(format!(
+                            "retro_diels_alder/{}/{c1}_{c2}_{c3}_{c4}_{ca}_{cb}",
+                            sanitize_id(alkene.participant.substance.id.as_str())
+                        ))
+                        .reactant(alkene.participant.substance.id.clone(), 1, 1)
+                        .product(diene_id, 1)
+                        .product(dienophile_id, 1)
+                        .activation_energy_kj_per_mol(125.0)
+                        .selectivity_profile(
+                            SelectivityProfile::new(ReactionType::RetroDielsAlder, alkene_desc)
+                                .never_suppress(),
+                        )
+                        .build(),
+                    );
+                }
+            }
+        }
+    }
+    Ok(reactions)
+}
+
+pub(crate) fn generate_alkene_photoisomerization(
+    alkene: &UnsaturatedBondSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    if alkene.is_alkyne {
+        return Ok(None);
+    }
+    let structure = alkene.participant.structure;
+    let first = alkene.high_degree_carbon;
+    let second = alkene.low_degree_carbon;
+    let Some(first_substituent) = stereo_substituent(structure, first, second) else {
+        return Ok(None);
+    };
+    let Some(second_substituent) = stereo_substituent(structure, second, first) else {
+        return Ok(None);
+    };
+    if stereo_side_is_symmetric(structure, first, second)
+        || stereo_side_is_symmetric(structure, second, first)
+    {
+        return Ok(None);
+    }
+
+    let mut variants = Vec::new();
+    for (descriptor, suffix, activation_delta) in [
+        (StereoDescriptor::E, "e", 0.0),
+        (StereoDescriptor::Z, "z", 4.0),
+    ] {
+        let mut editor = MolecularEditor::new(structure);
+        editor.set_double_bond_stereo(first, second, first_substituent, second_substituent, descriptor)?;
+        let product = resolver.resolve(editor.finish()?)?;
+        variants.push((suffix, product, activation_delta));
+    }
+    if variants[0].1 == variants[1].1 {
+        return Ok(None);
+    }
+
+    let alkene_desc = SiteDescriptorBuilder::from_unsaturated_bond_site(alkene);
+    let mut builder = Reaction::builder(generated_site_reaction_id(
+        "alkene_photoisomerization",
+        &alkene.participant,
+    ))
+    .reactant(alkene.participant.substance.id.clone(), 1, 1)
+    .activation_energy_kj_per_mol(65.0)
+    .selectivity_profile(
+        SelectivityProfile::new(ReactionType::PhotochemicalIsomerization, alkene_desc.clone())
+            .never_suppress(),
+    );
+    for (suffix, product, activation_delta) in variants {
+        builder = builder.channel(
+            ReactionChannel::new(
+                format!("photo_{suffix}"),
+                [StoichiometricTerm::new(product, 1)],
+                activation_delta,
+            )
+            .with_mode(ReactionChannelMode::Photochemical)
+            .with_condition_effect(ChannelConditionEffect::Light {
+                band: LightBand::Ultraviolet,
+                minimum_power: 1.0e-9,
+                multiplier: 1.0,
+            })
+            .with_selectivity_profile(
+                SelectivityProfile::new(ReactionType::PhotochemicalIsomerization, alkene_desc.clone())
+                    .never_suppress(),
+            ),
+        );
+    }
+    Ok(Some(builder.build()))
+}
+
+fn retro_diels_alder_fragments(
+    structure: &MolecularStructure,
+    diene_atoms: [usize; 4],
+    dienophile_atoms: [usize; 2],
+) -> Option<(MolecularStructure, MolecularStructure)> {
+    let mut edited = structure.clone();
+    set_bond_order_in_structure(&mut edited, diene_atoms[0], diene_atoms[1], 2.0)?;
+    set_bond_order_in_structure(&mut edited, diene_atoms[1], diene_atoms[2], 1.0)?;
+    set_bond_order_in_structure(&mut edited, diene_atoms[2], diene_atoms[3], 2.0)?;
+    set_bond_order_in_structure(&mut edited, dienophile_atoms[0], dienophile_atoms[1], 2.0)?;
+    remove_bond_in_structure(&mut edited, diene_atoms[0], dienophile_atoms[0])?;
+    remove_bond_in_structure(&mut edited, diene_atoms[3], dienophile_atoms[1])?;
+    let components = connected_components(&edited);
+    if components.len() != 2 {
+        return None;
+    }
+    let first = substructure_for_atoms(&edited, &components[0])?;
+    let second = substructure_for_atoms(&edited, &components[1])?;
+    Some((first, second))
+}
+
+fn set_bond_order_in_structure(
+    structure: &mut MolecularStructure,
+    first: usize,
+    second: usize,
+    order: f64,
+) -> Option<()> {
+    structure.bonds.iter_mut().find(|bond| {
+        (bond.from == first && bond.to == second) || (bond.from == second && bond.to == first)
+    })?.order = order;
+    structure.stereochemistry.clear();
+    Some(())
+}
+
+fn remove_bond_in_structure(
+    structure: &mut MolecularStructure,
+    first: usize,
+    second: usize,
+) -> Option<()> {
+    let position = structure.bonds.iter().position(|bond| {
+        (bond.from == first && bond.to == second) || (bond.from == second && bond.to == first)
+    })?;
+    structure.bonds.remove(position);
+    structure.stereochemistry.clear();
+    Some(())
+}
+
+fn connected_components(structure: &MolecularStructure) -> Vec<Vec<usize>> {
+    let mut seen = vec![false; structure.atoms.len()];
+    let mut components = Vec::new();
+    for start in 0..structure.atoms.len() {
+        if seen[start] {
+            continue;
+        }
+        let mut stack = vec![start];
+        seen[start] = true;
+        let mut component = Vec::new();
+        while let Some(atom) = stack.pop() {
+            component.push(atom);
+            for (neighbor, _) in structure.neighbors(atom) {
+                if !seen[neighbor] {
+                    seen[neighbor] = true;
+                    stack.push(neighbor);
+                }
+            }
+        }
+        component.sort_unstable();
+        components.push(component);
+    }
+    components
+}
+
+fn substructure_for_atoms(
+    structure: &MolecularStructure,
+    atoms: &[usize],
+) -> Option<MolecularStructure> {
+    let mut mapping = vec![None; structure.atoms.len()];
+    for (new_index, old_index) in atoms.iter().copied().enumerate() {
+        mapping[old_index] = Some(new_index);
+    }
+    let bonds = structure
+        .bonds
+        .iter()
+        .filter_map(|bond| {
+            Some(MolecularBond {
+                from: mapping[bond.from]?,
+                to: mapping[bond.to]?,
+                order: bond.order,
+            })
+        })
+        .collect::<Vec<_>>();
+    let fragment = MolecularStructure {
+        source_code: "generated".to_string(),
+        atoms: atoms.iter().map(|atom| structure.atoms[*atom].clone()).collect(),
+        bonds,
+        stereochemistry: Vec::new(),
+    };
+    fragment.validate().ok()?;
+    Some(fragment)
+}
+
+fn stereo_substituent(
+    structure: &MolecularStructure,
+    atom: usize,
+    other_double_bond_atom: usize,
+) -> Option<usize> {
+    structure
+        .neighbors(atom)
+        .into_iter()
+        .filter_map(|(neighbor, order)| {
+            (neighbor != other_double_bond_atom && bond_order_matches(order, 1.0))
+                .then_some(neighbor)
+        })
+        .max_by_key(|neighbor| stereo_priority(structure.atoms[*neighbor].element.as_str()))
+}
+
+fn stereo_side_is_symmetric(
+    structure: &MolecularStructure,
+    atom: usize,
+    other_double_bond_atom: usize,
+) -> bool {
+    let substituents = structure
+        .neighbors(atom)
+        .into_iter()
+        .filter_map(|(neighbor, order)| {
+            (neighbor != other_double_bond_atom && bond_order_matches(order, 1.0))
+                .then_some(neighbor)
+        })
+        .collect::<Vec<_>>();
+    substituents.len() < 2
+        || substituents
+            .iter()
+            .all(|atom| structure.atoms[*atom].element == structure.atoms[substituents[0]].element)
+}
+
+fn stereo_priority(element: &str) -> u8 {
+    match element {
+        "H" => 1,
+        "C" => 6,
+        "N" => 7,
+        "O" => 8,
+        "F" => 9,
+        "Cl" => 17,
+        "Br" => 35,
+        "I" => 53,
+        _ => 0,
+    }
 }

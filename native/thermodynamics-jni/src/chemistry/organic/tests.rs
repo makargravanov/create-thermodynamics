@@ -211,6 +211,58 @@ fn alkene_epoxidation_creates_epoxide_center_from_double_bond() {
 }
 
 #[test]
+fn rearrangement_generators_use_graph_migration_rules() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let acetone = SubstanceId::from("destroy:acetone");
+    let acetone_oxime = dynamic.resolve_frowns("CC(=NO)C").unwrap();
+    dynamic
+        .generate_reactions_for_substances([acetone.clone(), acetone_oxime.clone()], 1)
+        .unwrap();
+
+    let baeyer_villiger = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("baeyer_villiger_rearrangement/")
+        })
+        .expect("ketone should generate Baeyer-Villiger oxygen insertion");
+    assert!(baeyer_villiger
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:hydrogen_peroxide"));
+    let ester_product = baeyer_villiger
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("Baeyer-Villiger must create an organic ester")
+        .substance_id
+        .clone();
+    let ester = dynamic.substance(&ester_product).unwrap();
+    let ester_sites = try_find_reactive_sites(ester.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(ester_sites.contains(&ReactiveSiteKind::Ester));
+
+    let beckmann = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("beckmann_rearrangement/"))
+        .expect("oxime should generate Beckmann migration");
+    let amide_product = beckmann.products[0].substance_id.clone();
+    let amide = dynamic.substance(&amide_product).unwrap();
+    let amide_sites = try_find_reactive_sites(amide.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(amide_sites.contains(&ReactiveSiteKind::Amide));
+}
+
+#[test]
 fn organometallic_and_aldol_generators_create_carbon_carbon_bonds() {
     let mut dynamic =
         super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
@@ -246,6 +298,64 @@ fn organometallic_and_aldol_generators_create_carbon_carbon_bonds() {
     assert!(dynamic
         .reactions()
         .any(|reaction| reaction.id.as_str().starts_with("aldol_addition/")));
+}
+
+#[test]
+fn organometallic_formation_creates_dynamic_reagent_from_halide() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    dynamic
+        .generate_reactions_for_substances([SubstanceId::from("destroy:iodomethane")], 1)
+        .unwrap();
+
+    let organomagnesium = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("organomagnesium_formation/"))
+        .expect("alkyl iodide should form an organomagnesium reagent");
+    let product_id = organomagnesium.products[0].substance_id.clone();
+    let product = dynamic.substance(&product_id).unwrap();
+    let site_kinds = try_find_reactive_sites(product.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(site_kinds.contains(&ReactiveSiteKind::Organomagnesium));
+
+    let organolithium = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("organolithium_formation/"))
+        .expect("alkyl iodide should form an organolithium reagent");
+    assert!(organolithium.external_products.iter().any(|external| {
+        external.description.as_str() == "external:lithium_I_salt"
+            && external.molar_mass_grams.is_some()
+    }));
+}
+
+#[test]
+fn organometallic_reagent_adds_to_nitrile_and_opens_epoxide() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let methyl_magnesium_chloride = dynamic.resolve_frowns("CMgCl").unwrap();
+    let acetonitrile = dynamic.resolve_frowns("CC#N").unwrap();
+    let ethylene_oxide = dynamic
+        .resolve_frowns(
+            "destroy:graph:atoms=C.C.O.H.H.H.H;bonds=0-s-1,0-s-2,1-s-2,0-s-3,0-s-4,1-s-5,1-s-6",
+        )
+        .unwrap();
+
+    dynamic
+        .generate_reactions_for_substances(
+            [methyl_magnesium_chloride, acetonitrile, ethylene_oxide],
+            1,
+        )
+        .unwrap();
+
+    assert!(dynamic
+        .reactions()
+        .any(|reaction| reaction.id.as_str().starts_with("organometallic_nitrile_addition/")));
+    assert!(dynamic
+        .reactions()
+        .any(|reaction| reaction.id.as_str().starts_with("organometallic_epoxide_opening/")));
 }
 
 #[test]
@@ -1937,7 +2047,10 @@ fn paal_knorr_closes_a_furan_from_a_1_4_diketone() {
         .iter()
         .find(|term| term.substance_id.as_str() == "destroy:water")
         .expect("furan closure must expel water");
-    assert_eq!(water_term.coefficient, 1, "one carbonyl oxygen leaves as water");
+    assert_eq!(
+        water_term.coefficient, 1,
+        "one carbonyl oxygen leaves as water"
+    );
 
     let product_id = paal_knorr
         .products
@@ -1998,7 +2111,10 @@ fn paal_knorr_closes_a_pyrrole_from_a_1_4_diketone_and_amine() {
         .iter()
         .find(|term| term.substance_id.as_str() == "destroy:water")
         .expect("pyrrole closure must expel water");
-    assert_eq!(water_term.coefficient, 2, "two carbonyl oxygens leave as water");
+    assert_eq!(
+        water_term.coefficient, 2,
+        "two carbonyl oxygens leave as water"
+    );
     // Both the diketone and the amine are consumed.
     assert!(pyrrole
         .reactants
@@ -2076,7 +2192,10 @@ fn paal_knorr_closes_a_thiophene_from_a_1_4_diketone_and_hydrogen_sulfide() {
         .iter()
         .find(|term| term.substance_id.as_str() == "destroy:water")
         .expect("thiophene closure must expel water");
-    assert_eq!(water_term.coefficient, 2, "two carbonyl oxygens leave as water");
+    assert_eq!(
+        water_term.coefficient, 2,
+        "two carbonyl oxygens leave as water"
+    );
     assert!(thiophene
         .reactants
         .iter()
@@ -2164,7 +2283,10 @@ fn diels_alder_closes_a_cyclohexene_from_butadiene_and_ethylene() {
         .reactions()
         .find(|reaction| {
             reaction.id.as_str().starts_with("diels_alder/")
-                && reaction.reactants.iter().any(|term| term.substance_id == ethylene)
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == ethylene)
         })
         .expect("butadiene and ethylene must cycloadd to a cyclohexene");
     // Both partners are consumed; the cycloaddition is atom-economical (no byproduct).
@@ -2197,7 +2319,10 @@ fn diels_alder_closes_a_cyclohexene_from_butadiene_and_ethylene() {
         .iter()
         .filter(|bond| crate::chemistry::molecule::bond_order_matches(bond.order, 2.0))
         .count();
-    assert_eq!(double_bonds, 1, "cyclohexene retains exactly one C=C double bond");
+    assert_eq!(
+        double_bonds, 1,
+        "cyclohexene retains exactly one C=C double bond"
+    );
     // The product is a ring: a six-membered carbocycle has 6 C–C ring bonds.
     let carbon_carbon_bonds = structure
         .bonds
@@ -2319,6 +2444,82 @@ fn diels_alder_homodimerizes_butadiene() {
 }
 
 #[test]
+fn retro_diels_alder_splits_a_cyclohexene_adduct_back_to_diene_and_dienophile() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let butadiene = dynamic.resolve_frowns("C=CC=C").unwrap();
+    let ethylene = dynamic.resolve_frowns("C=C").unwrap();
+    dynamic
+        .generate_reactions_for_substances([butadiene.clone(), ethylene.clone()], 1)
+        .unwrap();
+    let adduct = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("diels_alder/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == ethylene)
+        })
+        .unwrap()
+        .products[0]
+        .substance_id
+        .clone();
+
+    dynamic.generate_reactions_for(&adduct, 1).unwrap();
+
+    let retro = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("retro_diels_alder/")
+                && reaction.reactants.iter().any(|term| term.substance_id == adduct)
+        })
+        .expect("a Diels-Alder adduct must have a thermal cycloreversion path");
+    assert!(retro
+        .products
+        .iter()
+        .any(|term| term.substance_id == butadiene));
+    assert!(retro
+        .products
+        .iter()
+        .any(|term| term.substance_id == ethylene));
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn alkene_photoisomerization_creates_separate_e_and_z_channels() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let butene = dynamic.resolve_frowns("CC=CC").unwrap();
+    dynamic.generate_reactions_for(&butene, 1).unwrap();
+
+    let photo = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("alkene_photoisomerization/"))
+        .expect("an unsymmetrical alkene must have light-driven E/Z isomerization channels");
+    assert_eq!(photo.channels.len(), 2);
+
+    let mut has_e = false;
+    let mut has_z = false;
+    for channel in &photo.channels {
+        let product_id = &channel.products[0].substance_id;
+        let product = dynamic.substance(product_id).unwrap();
+        let structure = product.molecular_structure.as_ref().unwrap();
+        has_e |= structure.stereochemistry.iter().any(|stereo| {
+            matches!(stereo, Stereochemistry::DoubleBond(double) if double.descriptor == StereoDescriptor::E)
+        });
+        has_z |= structure.stereochemistry.iter().any(|stereo| {
+            matches!(stereo, Stereochemistry::DoubleBond(double) if double.descriptor == StereoDescriptor::Z)
+        });
+    }
+    assert!(has_e, "one channel must produce the E isomer");
+    assert!(has_z, "one channel must produce the Z isomer");
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
 fn intramolecular_n_alkylation_closes_a_pyrrolidine() {
     let mut dynamic =
         super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
@@ -2428,9 +2629,10 @@ fn intramolecular_n_alkylation_rejects_a_strained_three_membered_ring() {
     dynamic.generate_reactions_for(&amino_halide, 1).unwrap();
 
     assert!(
-        dynamic
-            .reactions()
-            .all(|reaction| !reaction.id.as_str().starts_with("intramolecular_n_alkylation_")),
+        dynamic.reactions().all(|reaction| !reaction
+            .id
+            .as_str()
+            .starts_with("intramolecular_n_alkylation_")),
         "a strained three-membered aziridine closure must be rejected"
     );
 
@@ -2479,9 +2681,10 @@ fn intramolecular_n_alkylation_rejects_a_vinyl_halide() {
     dynamic.generate_reactions_for(&vinyl_halide, 1).unwrap();
 
     assert!(
-        dynamic
-            .reactions()
-            .all(|reaction| !reaction.id.as_str().starts_with("intramolecular_n_alkylation_")),
+        dynamic.reactions().all(|reaction| !reaction
+            .id
+            .as_str()
+            .starts_with("intramolecular_n_alkylation_")),
         "an internal SN2 on an sp2 vinyl-halide carbon must be rejected"
     );
 
@@ -2543,7 +2746,9 @@ fn amidine_cyclization_closes_a_benzimidazole_fused_onto_benzene() {
     // /purine-specific code. This is the same closure that builds xanthine's imidazole.
     let mut dynamic =
         super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
-    let aniline = dynamic.resolve_frowns("destroy:benzene:N,NC=O,,,,").unwrap();
+    let aniline = dynamic
+        .resolve_frowns("destroy:benzene:N,NC=O,,,,")
+        .unwrap();
     dynamic.generate_reactions_for(&aniline, 1).unwrap();
 
     let closure = dynamic
@@ -2618,7 +2823,10 @@ fn amidine_cyclization_closes_xanthine_imidazole_onto_the_pyrimidinedione() {
         .expect("xanthine closure must have an organic product")
         .substance_id
         .clone();
-    assert_ne!(product_id, precursor, "the product is a new (cyclized) substance");
+    assert_ne!(
+        product_id, precursor,
+        "the product is a new (cyclized) substance"
+    );
     let product = dynamic.substance(&product_id).unwrap().clone();
     let structure = product.molecular_structure.as_ref().unwrap();
 
@@ -2635,7 +2843,10 @@ fn amidine_cyclization_closes_xanthine_imidazole_onto_the_pyrimidinedione() {
                         && structure.atoms[bond.to].element == "C"))
         })
         .count();
-    assert_eq!(carbonyls, 2, "xanthine keeps both pyrimidinedione carbonyls");
+    assert_eq!(
+        carbonyls, 2,
+        "xanthine keeps both pyrimidinedione carbonyls"
+    );
 
     dynamic.to_registry().unwrap();
 }
@@ -2695,7 +2906,10 @@ fn amide_n_alkylation_methylates_a_ring_amide_n_h() {
         .reactions()
         .find(|reaction| reaction.id.as_str().starts_with("amide_n_alkylation/"))
         .expect("iodomethane must N-methylate uracil's ring amide N-H");
-    assert!(alkylation.reactants.iter().any(|t| t.substance_id == uracil));
+    assert!(alkylation
+        .reactants
+        .iter()
+        .any(|t| t.substance_id == uracil));
     assert!(alkylation
         .reactants
         .iter()
@@ -2725,7 +2939,10 @@ fn amide_n_alkylation_methylates_a_ring_amide_n_h() {
         .iter()
         .filter(|atom| atom.element == "C")
         .count();
-    assert_eq!(carbons, 5, "N-methyluracil has uracil's 4 carbons plus a methyl");
+    assert_eq!(
+        carbons, 5,
+        "N-methyluracil has uracil's 4 carbons plus a methyl"
+    );
 
     dynamic.to_registry().unwrap();
 }
