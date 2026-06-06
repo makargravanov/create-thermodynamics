@@ -310,6 +310,9 @@ pub fn try_find_reactive_sites(
             FunctionalGroupType::UnsubstitutedAmide => {
                 (ReactiveSiteKind::Amide, vec![ReactiveRole::Electrophile])
             }
+            FunctionalGroupType::SubstitutedAmide => {
+                (ReactiveSiteKind::Amide, vec![ReactiveRole::Electrophile])
+            }
             FunctionalGroupType::SilylEther => (ReactiveSiteKind::SilylEther, vec![]),
             FunctionalGroupType::Acetal => (ReactiveSiteKind::Acetal, vec![]),
             FunctionalGroupType::Ketal => (ReactiveSiteKind::Ketal, vec![]),

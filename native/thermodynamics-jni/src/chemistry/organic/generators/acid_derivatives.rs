@@ -283,34 +283,36 @@ pub(crate) fn generate_lah_ester_reduction(
 pub(crate) fn generate_amide_hydrolysis(
     site: &AmideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
-) -> ChemistryResult<Reaction> {
+) -> ChemistryResult<Option<Reaction>> {
     let substance = site.participant.substance;
     let structure = site.participant.structure;
     let carbon = site.carbon;
     let nitrogen = site.nitrogen;
     let hydrogens = &site.nitrogen_hydrogens;
+    // Only unsubstituted (primary) amides hydrolyse to ammonia here. Substituted
+    // and cyclic amides are now perceived as Amide sites too, but splitting them
+    // into an acid plus a substituted amine (or ring-opening a lactam) is a
+    // separate transform; skip rather than emit an incorrect ammonia product.
     if hydrogens.len() != 2 {
-        return Err(ChemistryError::InvalidReaction {
-            reaction_id: generated_site_reaction_id("amide_hydrolysis", &site.participant),
-            reason: "unsubstituted amide must have exactly two explicit nitrogen hydrogens"
-                .to_string(),
-        });
+        return Ok(None);
     }
     let mut editor = MolecularEditor::new(structure);
     let mapping = editor.remove_atoms(&[nitrogen, hydrogens[0], hydrogens[1]])?;
     let carbon = mapped_atom(&mapping, carbon, "amide carbon")?;
     add_hydroxyl(&mut editor, carbon)?;
     let product = resolver.resolve(editor.finish()?)?;
-    Ok(Reaction::builder(generated_site_reaction_id(
-        "amide_hydrolysis",
-        &site.participant,
+    Ok(Some(
+        Reaction::builder(generated_site_reaction_id(
+            "amide_hydrolysis",
+            &site.participant,
+        ))
+        .reactant(substance.id.clone(), 1, 1)
+        .reactant("destroy:water", 1, 1)
+        .catalyst_order("destroy:proton", 1)
+        .product(product, 1)
+        .product("destroy:ammonia", 1)
+        .build(),
     ))
-    .reactant(substance.id.clone(), 1, 1)
-    .reactant("destroy:water", 1, 1)
-    .catalyst_order("destroy:proton", 1)
-    .product(product, 1)
-    .product("destroy:ammonia", 1)
-    .build())
 }
 
 fn ester_alkoxy_branch(

@@ -1745,3 +1745,109 @@ fn cbz_protection_blocks_free_amine_and_hydrogenolysis_restores_it() {
 
     dynamic.to_registry().unwrap();
 }
+
+#[test]
+fn lactonization_closes_a_five_membered_lactone_from_a_hydroxy_acid() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // 4-hydroxybutanoic acid: HOOC-CH2-CH2-CH2-OH. The acyl carbon and the
+    // alcohol oxygen are separated by a 4-edge path, so closure forms a
+    // 5-membered ring (gamma-butyrolactone).
+    let hydroxy_acid = dynamic.resolve_frowns("OC(=O)CCCO").unwrap();
+    dynamic.generate_reactions_for(&hydroxy_acid, 1).unwrap();
+
+    let lactonization = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("lactonization_5/"))
+        .expect("hydroxy acid must close to a 5-membered lactone");
+    assert!(lactonization
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:water"));
+
+    let product_id = lactonization
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("lactonization must have an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap().clone();
+    let site_kinds = try_find_reactive_sites(product.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    // A lactone is a cyclic ester.
+    assert!(site_kinds.contains(&ReactiveSiteKind::Ester));
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn lactamization_closes_a_five_membered_lactam_from_an_amino_acid() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // 4-aminobutanoic acid (GABA): HOOC-CH2-CH2-CH2-NH2 closes to a 5-membered
+    // lactam (2-pyrrolidinone).
+    let amino_acid = dynamic.resolve_frowns("OC(=O)CCCN").unwrap();
+    dynamic.generate_reactions_for(&amino_acid, 1).unwrap();
+
+    let lactamization = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("lactamization_5/"))
+        .expect("amino acid must close to a 5-membered lactam");
+    assert!(lactamization
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:water"));
+
+    let product_id = lactamization
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("lactamization must have an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap().clone();
+    let site_kinds = try_find_reactive_sites(product.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    // The closure consumed the free acid into the ring.
+    assert!(!site_kinds.contains(&ReactiveSiteKind::CarboxylicAcid));
+    // The cyclic secondary amide is correctly perceived as an amide, and its
+    // delocalised nitrogen is NOT surfaced as a basic/nucleophilic amine.
+    assert!(site_kinds.contains(&ReactiveSiteKind::Amide));
+    assert!(!site_kinds.contains(&ReactiveSiteKind::PrimaryAmine));
+    assert!(!site_kinds.contains(&ReactiveSiteKind::NonTertiaryAmine));
+    // The product keeps its single nitrogen, now in the lactam ring.
+    let structure = product.molecular_structure.as_ref().unwrap();
+    let nitrogen_count = structure
+        .atoms
+        .iter()
+        .filter(|atom| atom.element == "N")
+        .count();
+    assert_eq!(nitrogen_count, 1, "lactam keeps its single nitrogen");
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn lactonization_is_rejected_for_a_strained_three_membered_ring() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    // 2-hydroxyacetic acid (glycolic acid): HOOC-CH2-OH. Closure would form a
+    // strained 3-membered alpha-lactone, which the ring-size gate rejects.
+    let glycolic_acid = dynamic.resolve_frowns("OC(=O)CO").unwrap();
+    dynamic.generate_reactions_for(&glycolic_acid, 1).unwrap();
+    assert!(
+        dynamic
+            .reactions()
+            .all(|reaction| !reaction.id.as_str().starts_with("lactonization_")),
+        "alpha-lactone closure must be rejected as too strained"
+    );
+
+    dynamic.to_registry().unwrap();
+}

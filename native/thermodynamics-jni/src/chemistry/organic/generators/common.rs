@@ -204,24 +204,40 @@ pub(crate) fn generated_pair_site_reaction_id(
     format!(
         "{}/{}/{}/{}",
         generated_pair_reaction_id(prefix, first.substance, second.substance),
-        first
-            .site
-            .atoms
-            .iter()
-            .map(usize::to_string)
-            .collect::<Vec<_>>()
-            .join("_"),
-        second
-            .site
-            .atoms
-            .iter()
-            .map(usize::to_string)
-            .collect::<Vec<_>>()
-            .join("_"),
+        atoms_token(first),
+        atoms_token(second),
         site_kind_suffix(&first.site.kind)
     )
 }
 
+/// Reaction id for an INTRAMOLECULAR closure between two sites on one molecule.
+/// Unlike `generated_pair_site_reaction_id`, both site atom sets are folded into
+/// the id so that distinct second centers (e.g. several alcohols able to close a
+/// ring of the same size) yield distinct ids and are not silently deduplicated.
+pub(crate) fn generated_intramolecular_pair_site_reaction_id(
+    prefix: &str,
+    first: &SiteParticipant<'_>,
+    second: &SiteParticipant<'_>,
+) -> String {
+    format!(
+        "{}/{}/{}/{}/{}",
+        prefix,
+        sanitize_id(first.substance.id.as_str()),
+        atoms_token(first),
+        atoms_token(second),
+        site_kind_suffix(&second.site.kind)
+    )
+}
+
+fn atoms_token(participant: &SiteParticipant<'_>) -> String {
+    participant
+        .site
+        .atoms
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join("_")
+}
 pub(crate) fn site_kind_suffix(kind: &ReactiveSiteKind) -> &'static str {
     match kind {
         ReactiveSiteKind::AcidAnhydride => "acid_anhydride",
@@ -281,3 +297,28 @@ pub(crate) fn sanitize_id(value: &str) -> String {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect()
 }
+
+/// Activation-energy penalty (kJ/mol) for closing a ring of the given atom
+/// count, expressing Baldwin's-rules / ring-strain reality as a general law
+/// rather than a per-molecule table.
+///
+/// - 3- and 4-membered rings carry large angle strain.
+/// - 5- and 6-membered rings are the kinetic and thermodynamic optimum (~0).
+/// - 7- and 8-membered rings pay a moderate transannular/entropic penalty.
+/// - Larger rings pay a growing entropic penalty, so intermolecular pathways
+///   out-compete macrocyclization. This keeps a general ring-closure generator
+///   from silently inventing impossible or wildly improbable rings.
+pub(crate) fn ring_closure_activation_penalty_kj_per_mol(ring_size: usize) -> f64 {
+    match ring_size {
+        0 | 1 | 2 => f64::INFINITY, // not a ring; caller must reject
+        3 => 45.0,
+        4 => 28.0,
+        5 => 0.0,
+        6 => 0.0,
+        7 => 8.0,
+        8 => 14.0,
+        // Medium and large rings: entropic cost climbs roughly linearly.
+        n => 14.0 + 4.0 * (n.saturating_sub(8) as f64),
+    }
+}
+

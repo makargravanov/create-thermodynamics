@@ -148,6 +148,33 @@ impl SelectivityEngine {
             | ReactionType::PhosphoniumYlideFormation => {
                 evaluate_alpha_carbon_profile(profile, context)
             }
+            ReactionType::Lactonization
+            | ReactionType::Lactamization
+            | ReactionType::HeterocycleCondensation => {
+                evaluate_cyclization_profile(profile, context)
+            }
+            ReactionType::DielsAlder => {
+                let mut score = ReactivityScore::new(1.0, "Diels-Alder [4+2] cycloaddition");
+                score.value *= profile.primary_site.steric_accessibility().max(0.2);
+                if let Some(dienophile) = profile.secondary_site.as_ref() {
+                    // Electron-poor dienophiles accelerate the normal-demand cycloaddition.
+                    if dienophile.electronics.electron_withdrawing_groups >= 1 {
+                        score.value *= 1.0
+                            + 0.4 * dienophile.electronics.electron_withdrawing_groups as f64;
+                        score.activation_delta -= 3.0
+                            * dienophile.electronics.electron_withdrawing_groups.min(3) as f64;
+                        score.reason =
+                            "electron-poor dienophile accelerates Diels-Alder".to_string();
+                    }
+                    score.value *= dienophile.steric_accessibility().max(0.2);
+                }
+                if context.is_high_temperature() {
+                    score.value *= 1.2;
+                    score.activation_delta -= 2.0;
+                }
+                score
+            }
+            ReactionType::NAlkylation => evaluate_sn2(&profile.primary_site, context).primary,
         };
         let recommendation = if matches!(profile.mechanism, ReactionType::SN2) {
             evaluate_sn2(&profile.primary_site, context).recommendation
@@ -970,6 +997,78 @@ fn evaluate_protecting_group_profile(
                 value *= 0.25;
                 activation_delta += 8.0;
                 reasons.push("dry medium suppresses ester hydrolysis");
+            }
+        }
+        _ => {}
+    }
+
+    ReactivityScore::with_activation_delta(activation_delta, reasons.join("; "))
+        .with_pre_exp_multiplier(value.max(0.01))
+}
+
+/// Medium/condition selectivity for ring-closing condensations. The ring-size
+/// strain term (Baldwin's rules) is applied separately by the generator via
+/// `ring_closure_activation_penalty_kj_per_mol`, because it depends on the
+/// concrete atoms being bonded rather than on the reaction medium.
+fn evaluate_cyclization_profile(
+    profile: &SelectivityProfile,
+    context: &SelectivityContext,
+) -> ReactivityScore {
+    let mut value: f64 = 1.0;
+    let mut activation_delta = 0.0;
+    let mut reasons = Vec::new();
+
+    match profile.mechanism {
+        ReactionType::Lactonization => {
+            if context.is_acidic() {
+                value *= 1.6;
+                activation_delta -= 3.0;
+                reasons.push("acid catalyzes lactonization");
+            }
+            if context.is_water_poor() {
+                value *= 1.8;
+                activation_delta -= 3.5;
+                reasons.push("dry medium drives the dehydrative ring closure");
+            } else {
+                value *= 0.3;
+                activation_delta += 9.0;
+                reasons.push("water reverses lactonization");
+            }
+        }
+        ReactionType::Lactamization => {
+            if context.is_high_temperature() {
+                value *= 1.5;
+                activation_delta -= 3.0;
+                reasons.push("heat drives amide ring closure");
+            }
+            if context.is_water_poor() {
+                value *= 1.6;
+                activation_delta -= 3.0;
+                reasons.push("dry medium favors lactam formation");
+            } else {
+                value *= 0.4;
+                activation_delta += 7.0;
+                reasons.push("water competes with lactam formation");
+            }
+        }
+        ReactionType::HeterocycleCondensation => {
+            if context.is_acidic() {
+                value *= 2.0;
+                activation_delta -= 4.0;
+                reasons.push("acid catalyzes the heterocyclic condensation");
+            } else {
+                value *= 0.2;
+                activation_delta += 12.0;
+                reasons.push("heterocyclic condensation lacks acid catalysis");
+            }
+            if context.is_water_poor() {
+                value *= 1.8;
+                activation_delta -= 3.5;
+                reasons.push("dry medium drives the dehydrative aromatization");
+            } else {
+                value *= 0.4;
+                activation_delta += 6.0;
+                reasons.push("water suppresses the dehydrative aromatization");
             }
         }
         _ => {}

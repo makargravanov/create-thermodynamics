@@ -577,6 +577,17 @@ pub enum ReactionType {
     EsterProtection,
     /// Hydrolysis or cleavage of an ester protecting group
     EsterHydrolysis,
+    /// Intramolecular esterification closing a lactone ring
+    Lactonization,
+    /// Intramolecular amide formation closing a lactam ring
+    Lactamization,
+    /// Dehydrative condensation closing an aromatic heterocycle
+    /// (Paal–Knorr family: 1,4-dicarbonyl + heteroatom donor → pyrrole/furan/thiophene)
+    HeterocycleCondensation,
+    /// [4+2] cycloaddition of a conjugated diene and a dienophile
+    DielsAlder,
+    /// Alkylation of an amine or amide nitrogen by an alkyl halide
+    NAlkylation,
 }
 
 /// Nucleophile strength classification for selectivity models.

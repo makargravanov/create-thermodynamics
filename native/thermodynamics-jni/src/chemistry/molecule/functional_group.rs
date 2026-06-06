@@ -29,6 +29,7 @@ pub enum FunctionalGroupType {
     PhosphorusYlide,
     SulfoneCarbanion,
     UnsubstitutedAmide,
+    SubstitutedAmide,
     SilylEther,
     Acetal,
     Ketal,
@@ -151,6 +152,22 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
                         ],
                     ));
                     continue;
+                } else {
+                    // Secondary/tertiary amide (including cyclic lactams): the
+                    // nitrogen carries 0 or 1 hydrogens and at least one further
+                    // carbon substituent. Recognising these as amides keeps the
+                    // amide nitrogen out of amine perception and lets amide
+                    // chemistry (e.g. hydrolysis) apply.
+                    let nitrogen_carbons = bonded(structure, nitrogen, "C", Some(1.0));
+                    if nitrogen_carbons.len() >= 2 {
+                        let mut atoms = vec![carbon, carbonyl_oxygen, nitrogen];
+                        atoms.extend(hydrogens);
+                        groups.push(FunctionalGroup::new(
+                            FunctionalGroupType::SubstitutedAmide,
+                            atoms,
+                        ));
+                        continue;
+                    }
                 }
             } else if chlorines.len() == 1 {
                 groups.push(FunctionalGroup::new(
@@ -228,6 +245,11 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
                         vec![carbon, nitrogen, aromatic_oxygens[0], aromatic_oxygens[1]],
                     ));
                 } else if nitrile_nitrogens.is_empty() && double_nitrogens.is_empty() {
+                    // An amide nitrogen (N single-bonded to a C=O carbon) is not
+                    // a basic/nucleophilic amine; do not surface it as one.
+                    if nitrogen_is_amide(structure, nitrogen) {
+                        continue;
+                    }
                     let hydrogens = bonded(structure, nitrogen, "H", Some(1.0));
                     for hydrogen in &hydrogens {
                         groups.push(FunctionalGroup::new(
@@ -570,6 +592,16 @@ fn add_protecting_groups(structure: &MolecularStructure, groups: &mut Vec<Functi
             vec![carbon, ether_oxygens[0], ether_oxygens[1]],
         ));
     }
+}
+
+/// True when `nitrogen` is an amide nitrogen: single-bonded to a carbon that
+/// itself bears a carbonyl (C=O). Such a nitrogen is delocalised into the
+/// carbonyl and is neither basic nor nucleophilic, so it must not be perceived
+/// as an amine.
+fn nitrogen_is_amide(structure: &MolecularStructure, nitrogen: usize) -> bool {
+    bonded(structure, nitrogen, "C", Some(1.0))
+        .into_iter()
+        .any(|carbon| bonded(structure, carbon, "O", Some(2.0)).len() == 1)
 }
 
 fn bonded(

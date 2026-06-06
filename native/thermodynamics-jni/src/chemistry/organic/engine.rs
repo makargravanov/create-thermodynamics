@@ -146,8 +146,9 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
             }
             ReactiveSiteKind::Amide => {
                 let site = participant.clone().amide_site()?;
-                let reaction = generate_amide_hydrolysis(&site, &mut resolver)?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                if let Some(reaction) = generate_amide_hydrolysis(&site, &mut resolver)? {
+                    push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                }
             }
             ReactiveSiteKind::Ester => {
                 let site = participant.clone().ester_site()?;
@@ -457,6 +458,27 @@ fn generate_pair_reactions_for_seed(
                     context,
                 )? {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+                // Intramolecular closure to a lactone when the alcohol is on the
+                // same molecule (self-gated by substance id and ring size).
+                if let Some(reaction) =
+                    generate_lactonization(&acid_site, &alcohol_site, resolver)?
+                {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
+            // Intramolecular closure to a lactam when an amine is on the same molecule.
+            for amine_kind in [
+                ReactiveSiteKind::PrimaryAmine,
+                ReactiveSiteKind::NonTertiaryAmine,
+            ] {
+                for amine in space.sites_of(&amine_kind) {
+                    let amine_site = amine.amine_site()?;
+                    if let Some(reaction) =
+                        generate_lactamization(&acid_site, &amine_site, resolver)?
+                    {
+                        push_unique_reaction(reactions, reaction_ids, reaction)?;
+                    }
                 }
             }
         }
