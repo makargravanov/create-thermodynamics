@@ -125,6 +125,12 @@ pub enum SubstanceRepresentation {
         formula_units: Vec<MaterialFormulaUnit>,
         water_count: u32,
     },
+    Polymer {
+        repeat_unit_id: SubstanceId,
+        number_average_degree: f64,
+        weight_average_degree: f64,
+        architecture: String,
+    },
     SurfaceMaterial {
         active_site: Option<String>,
     },
@@ -253,6 +259,38 @@ impl SubstanceRepresentation {
                 }
                 validate_formula_units(substance, formula_units)
             }
+            SubstanceRepresentation::Polymer {
+                repeat_unit_id,
+                number_average_degree,
+                weight_average_degree,
+                architecture,
+            } => {
+                if substance.charge != 0 {
+                    return invalid_representation(substance, "polymers must be neutral");
+                }
+                validate_non_empty_text(substance, repeat_unit_id.as_str(), "polymer repeat unit id")?;
+                validate_positive_representation_number(
+                    substance,
+                    *number_average_degree,
+                    "polymer number-average degree",
+                )?;
+                validate_positive_representation_number(
+                    substance,
+                    *weight_average_degree,
+                    "polymer weight-average degree",
+                )?;
+                if weight_average_degree < number_average_degree {
+                    return invalid_representation(
+                        substance,
+                        "polymer weight-average degree must not be below number-average degree",
+                    );
+                }
+                validate_non_empty_text(substance, architecture, "polymer architecture")?;
+                if substance.phase_properties.solvent_role != SolventRole::NotSolvent {
+                    return invalid_representation(substance, "polymers must not be solvents");
+                }
+                Ok(())
+            }
             SubstanceRepresentation::SurfaceMaterial { active_site } => {
                 if substance.charge != 0 {
                     return invalid_representation(substance, "surface materials must be neutral");
@@ -281,6 +319,7 @@ impl SubstanceRepresentation {
                 | SubstanceRepresentation::MetallurgicalSolute { .. }
                 | SubstanceRepresentation::Oxide { .. }
                 | SubstanceRepresentation::Hydrate { .. }
+                | SubstanceRepresentation::Polymer { .. }
                 | SubstanceRepresentation::SurfaceMaterial { .. }
         ) && substance.boiling_point_kelvin.is_finite()
             && substance.boiling_point_kelvin < substance.melting_point_kelvin
@@ -887,8 +926,9 @@ impl Substance {
                     ),
                 });
             }
-            if (summary.molar_mass_grams - self.molar_mass_grams).abs()
-                > MOLECULAR_MASS_TOLERANCE_GRAMS_PER_MOL
+            if !matches!(self.representation, SubstanceRepresentation::Polymer { .. })
+                && (summary.molar_mass_grams - self.molar_mass_grams).abs()
+                    > MOLECULAR_MASS_TOLERANCE_GRAMS_PER_MOL
             {
                 return Err(ChemistryError::InvalidSubstance {
                     substance_id: self.id.to_string(),
@@ -945,6 +985,17 @@ fn validate_formula_units(
 fn validate_non_empty_text(substance: &Substance, value: &str, name: &str) -> ChemistryResult<()> {
     if value.trim().is_empty() {
         return invalid_representation(substance, &format!("{name} must not be empty"));
+    }
+    Ok(())
+}
+
+fn validate_positive_representation_number(
+    substance: &Substance,
+    value: f64,
+    name: &str,
+) -> ChemistryResult<()> {
+    if !value.is_finite() || value <= 0.0 {
+        return invalid_representation(substance, &format!("{name} must be positive and finite"));
     }
     Ok(())
 }

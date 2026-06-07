@@ -8,7 +8,12 @@ use crate::chemistry::molecule::{
     TetrahedralStereo,
 };
 use crate::chemistry::reaction::{Reaction, StoichiometricTerm};
+use crate::chemistry::selectivity::{
+    engine::SiteDescriptorBuilder,
+    types::{ReactionType, SelectivityProfile},
+};
 use std::collections::BTreeSet;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ElectrophilicAdditionSpec {
     prefix: &'static str,
@@ -244,6 +249,45 @@ pub(crate) fn generate_electrophilic_addition(
         builder = builder.display_as_reversible();
     }
     Ok(builder.build())
+}
+
+pub(crate) fn generate_chain_growth_polymerization(
+    site: &UnsaturatedBondSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    // Addition polymerization opens the C=C and links monomers into a chain. The
+    // product is a polymer material carrying its repeat unit and representative
+    // chain length, not the repeat unit pretending to be a standalone molecule.
+    // Alkynes and dienes are out of scope (the perception returns None for >1 C=C).
+    if site.is_alkyne {
+        return Ok(None);
+    }
+    let substance = site.participant.substance;
+    let Some((polymer, monomer_count)) = crate::chemistry::polymer::chain_growth_polymer_substance(
+        substance.id.clone(),
+        site.participant.structure,
+    )?
+    else {
+        return Ok(None);
+    };
+    let product = resolver.resolve_substance(polymer)?;
+    Ok(Some(
+        Reaction::builder(generated_site_reaction_id(
+            "chain_growth_polymerization",
+            &site.participant,
+        ))
+        .reactant(substance.id.clone(), monomer_count, 1)
+        .product(product, 1)
+        // Initiated radical/ionic chain growth is thermally promoted but has no
+        // sharp cutoff, so the Arrhenius barrier alone gates it (no binary
+        // temperature ban). Sized for a typical vinyl propagation.
+        .activation_energy_kj_per_mol(40.0)
+        .selectivity_profile(SelectivityProfile::new(
+            ReactionType::ChainGrowthPolymerization,
+            SiteDescriptorBuilder::from_unsaturated_bond_site(site),
+        ))
+        .build(),
+    ))
 }
 
 pub(crate) fn apply_alkyne_stereo_rule(

@@ -129,6 +129,45 @@ impl SelectivityEngine {
                 1.0,
                 "electrophilic addition has no specialized selectivity profile yet",
             ),
+            ReactionType::ChainGrowthPolymerization => {
+                // Addition polymerization runs faster as the monomer feed concentrates
+                // and as temperature rises (initiator decomposition). Sterically open
+                // (less substituted) alkenes propagate more readily; the structural
+                // detail is left to the per-site barrier, so the profile only carries
+                // the gentle accessibility bias here.
+                let mut score =
+                    ReactivityScore::new(1.0, "chain-growth addition polymerization");
+                score.value *= profile.primary_site.steric_accessibility().max(0.2);
+                if context.is_high_temperature() {
+                    score.value *= 1.3;
+                    score.activation_delta -= 2.0;
+                }
+                score
+            }
+            ReactionType::HydrocarbonCracking => {
+                let mut score = ReactivityScore::new(1.0, "hydrocarbon C-C bond scission");
+                score.value *= (1.0 + profile.primary_site.steric_score).clamp(1.0, 1.8);
+                if profile.primary_site.electronics.resonance_stabilization {
+                    score.value *= 1.4;
+                    score.activation_delta -= 4.0;
+                }
+                if context.is_high_temperature() {
+                    score.value *= 1.5;
+                    score.activation_delta -= 3.0;
+                }
+                if context.is_very_high_temperature() {
+                    score.value *= 3.0;
+                    score.activation_delta -= 8.0;
+                }
+                if context.medium.is_supercritical() {
+                    score.value *= 1.2;
+                    score.activation_delta -= 1.0;
+                }
+                if context.medium.has_gas_liquid_interface() {
+                    score.value *= 1.1;
+                }
+                score
+            }
             ReactionType::SilylEtherFormation
             | ReactionType::SilylEtherCleavage
             | ReactionType::AcetalFormation

@@ -270,6 +270,11 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 if let Some(reaction) = generate_alkene_photoisomerization(&site, &mut resolver)? {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
+                if let Some(reaction) =
+                    generate_chain_growth_polymerization(&site, &mut resolver)?
+                {
+                    push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                }
                 for reaction in generate_retro_diels_alder(&site, &mut resolver)? {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
@@ -395,6 +400,19 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
                 generate_radical_halogenations(substance, &mut resolver, &radical_halogens)?
             {
                 push_unique_reaction(&mut generated.reactions, &mut reaction_ids, reaction)?;
+            }
+            for reaction in generate_cracking(substance, &mut resolver)? {
+                push_unique_reaction(&mut generated.reactions, &mut reaction_ids, reaction)?;
+            }
+            // Step-growth polycondensation pairs this diacid with every other
+            // difunctional comonomer (diol/diamine). The generator self-gates to
+            // clean difunctional pairs, so most pairings return None cheaply.
+            for comonomer in &space.all_substances {
+                if let Some(reaction) =
+                    generate_polycondensation(substance, comonomer, &mut resolver)?
+                {
+                    push_unique_reaction(&mut generated.reactions, &mut reaction_ids, reaction)?;
+                }
             }
         }
     }

@@ -593,15 +593,16 @@ impl DynamicChemistryRegistry {
                     continue;
                 }
                 let generated_id = substance.id.clone();
-                let canonical = substance
-                    .molecular_structure
-                    .as_ref()
-                    .map(write_frowns)
-                    .transpose()?
-                    .ok_or_else(|| ChemistryError::InvalidSubstance {
+                let canonical = if let Some(structure) = substance.molecular_structure.as_ref() {
+                    write_frowns(structure)?
+                } else if matches!(substance.representation, SubstanceRepresentation::Polymer { .. }) {
+                    format!("material:{}", substance.id.as_str())
+                } else {
+                    return Err(ChemistryError::InvalidSubstance {
                         substance_id: substance.id.to_string(),
-                        reason: "generated dynamic substance has no structure".to_string(),
-                    })?;
+                        reason: "generated molecular substance has no structure".to_string(),
+                    });
+                };
                 if let Some(existing) = staged.canonical_to_id.get(&canonical) {
                     generated_id_remap.insert(generated_id, existing.clone());
                     skipped_duplicates += 1;

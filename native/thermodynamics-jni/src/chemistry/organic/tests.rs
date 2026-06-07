@@ -7,7 +7,7 @@ use crate::chemistry::reaction::Reaction;
 use crate::chemistry::reactive_site::{try_find_reactive_sites, ReactiveSiteKind};
 use crate::chemistry::registry::ChemistryRegistry;
 use crate::chemistry::simulation::reaction_rate_mol_per_bucket_per_tick;
-use crate::chemistry::substance::SubstanceId;
+use crate::chemistry::substance::{SubstanceId, SubstanceRepresentation};
 use crate::chemistry::DESTROY_REGISTERED_REACTION_COUNT;
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
@@ -793,6 +793,33 @@ fn electrophilic_addition_generators_are_registered() {
     }
     let hydrogenation = reaction_with_prefix(&registry, "alkene_hydrogenation/destroy_ethene/");
     assert!(!hydrogenation.external_catalysts.is_empty());
+}
+
+#[test]
+fn chain_growth_polymerization_registers_a_polymer_material_from_an_alkene() {
+    let registry = generated_registry();
+    let reaction =
+        reaction_with_prefix(&registry, "chain_growth_polymerization/destroy_ethene/");
+    assert_eq!(reaction.reactants.len(), 1);
+    assert_eq!(reaction.products.len(), 1);
+    let monomer = registry.substance(&"destroy:ethene".into()).unwrap();
+    let product = registry.substance(&reaction.products[0].substance_id).unwrap();
+    assert!(matches!(
+        product.representation,
+        SubstanceRepresentation::Polymer { .. }
+    ));
+    assert!(product.molecular_structure.is_none());
+    assert!(
+        (product.molar_mass_grams
+            - monomer.molar_mass_grams * f64::from(reaction.reactants[0].coefficient))
+            .abs()
+            < 1.0e-6,
+        "the polymer material mass must match the consumed monomer count"
+    );
+    assert_ne!(
+        reaction.products[0].substance_id, monomer.id,
+        "the polymer material is a distinct substance from the monomer"
+    );
 }
 
 #[test]

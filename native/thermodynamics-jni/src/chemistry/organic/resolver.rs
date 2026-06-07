@@ -61,4 +61,32 @@ impl DerivedSubstanceResolver {
         self.substances.push(substance);
         Ok(id)
     }
+
+    pub(crate) fn resolve_substance(
+        &mut self,
+        substance: Substance,
+    ) -> ChemistryResult<SubstanceId> {
+        substance.validate()?;
+        let id = substance.id.clone();
+        let canonical = format!("material:{}", id.as_str());
+        if let Some(existing) = self.canonical_to_id.get(&canonical) {
+            return Ok(existing.clone());
+        }
+        if let Some(existing) = self.generated_id_to_canonical.get(&id) {
+            if existing != &canonical {
+                return Err(ChemistryError::InvalidSubstance {
+                    substance_id: id.to_string(),
+                    reason: "derived material id collision".to_string(),
+                });
+            }
+            return Ok(id);
+        }
+        if self.canonical_to_id.values().any(|existing| existing == &id) {
+            return Ok(id);
+        }
+        self.canonical_to_id.insert(canonical.clone(), id.clone());
+        self.generated_id_to_canonical.insert(id.clone(), canonical);
+        self.substances.push(substance);
+        Ok(id)
+    }
 }

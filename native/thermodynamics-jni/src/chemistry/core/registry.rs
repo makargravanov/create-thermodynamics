@@ -784,6 +784,7 @@ impl ChemistryRegistry {
                 | SubstanceRepresentation::Ion { .. }
                 | SubstanceRepresentation::Metal { .. }
                 | SubstanceRepresentation::MetallurgicalSolute { .. }
+                | SubstanceRepresentation::Polymer { .. }
                 | SubstanceRepresentation::SurfaceMaterial { .. }
                 | SubstanceRepresentation::UnspecifiedMaterial { .. } => {}
             }

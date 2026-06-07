@@ -596,8 +596,12 @@ pub enum ReactionType {
     NAlkylation,
     /// Radical-chain substitution of an abstractable C-H bond
     RadicalHalogenation,
+    /// Thermal or catalytic C-C bond scission in hydrocarbons.
+    HydrocarbonCracking,
     /// Intramolecular migration with sigma-bond reorganization.
     SkeletalRearrangement,
+    /// Chain-growth (addition) polymerization of an alkene into a repeat unit.
+    ChainGrowthPolymerization,
 }
 
 /// Nucleophile strength classification for selectivity models.
