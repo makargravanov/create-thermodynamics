@@ -595,7 +595,10 @@ impl DynamicChemistryRegistry {
                 let generated_id = substance.id.clone();
                 let canonical = if let Some(structure) = substance.molecular_structure.as_ref() {
                     write_frowns(structure)?
-                } else if matches!(substance.representation, SubstanceRepresentation::Polymer { .. }) {
+                } else if matches!(
+                    substance.representation,
+                    SubstanceRepresentation::Polymer { .. }
+                ) {
                     format!("material:{}", substance.id.as_str())
                 } else {
                     return Err(ChemistryError::InvalidSubstance {

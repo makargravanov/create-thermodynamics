@@ -49,7 +49,9 @@ pub(crate) fn generate_organometallic_formation(
     if site.degree >= 3 {
         return Ok(None);
     }
-    let halogen_element = site.participant.structure.atoms[site.halogen].element.as_str();
+    let halogen_element = site.participant.structure.atoms[site.halogen]
+        .element
+        .as_str();
     if !matches!(halogen_element, "Cl" | "Br" | "I") {
         return Ok(None);
     }
@@ -153,8 +155,10 @@ pub(crate) fn generate_organometallic_nitrile_addition(
         residue.charge,
     )
     .condition(
-        ReactionCondition::new("organometallic nitrile addition requires dry inert addition and wet workup")
-            .atmosphere(AtmosphereCondition::Inert),
+        ReactionCondition::new(
+            "organometallic nitrile addition requires dry inert addition and wet workup",
+        )
+        .atmosphere(AtmosphereCondition::Inert),
     )
     .activation_energy_kj_per_mol(20.0)
     .selectivity_profile(

@@ -34,11 +34,18 @@ pub(crate) fn generate_baeyer_villiger_rearrangements(
             .product(product, 1)
             .product("destroy:water", 1)
             .condition(
-                ReactionCondition::new("Baeyer-Villiger oxygen insertion requires acidic oxidizing medium")
-                    .acidity(AcidityCondition::Acidic),
+                ReactionCondition::new(
+                    "Baeyer-Villiger oxygen insertion requires acidic oxidizing medium",
+                )
+                .acidity(AcidityCondition::Acidic),
             )
-            .reactant_phase_access(site.participant.substance.id.clone(), [MixturePhase::Organic])
-            .activation_energy_kj_per_mol(31.0 + migration_penalty(site.participant.structure, migratory_carbon))
+            .reactant_phase_access(
+                site.participant.substance.id.clone(),
+                [MixturePhase::Organic],
+            )
+            .activation_energy_kj_per_mol(
+                31.0 + migration_penalty(site.participant.structure, migratory_carbon),
+            )
             .selectivity_profile(SelectivityProfile::new(
                 ReactionType::SkeletalRearrangement,
                 SiteDescriptorBuilder::from_carbonyl_site(site),
@@ -74,11 +81,18 @@ pub(crate) fn generate_beckmann_rearrangements(
             .reactant(site.participant.substance.id.clone(), 1, 1)
             .product(product, 1)
             .condition(
-                ReactionCondition::new("Beckmann rearrangement requires acid activation of the oxime")
-                    .acidity(AcidityCondition::Acidic),
+                ReactionCondition::new(
+                    "Beckmann rearrangement requires acid activation of the oxime",
+                )
+                .acidity(AcidityCondition::Acidic),
             )
-            .reactant_phase_access(site.participant.substance.id.clone(), [MixturePhase::Organic])
-            .activation_energy_kj_per_mol(34.0 + migration_penalty(site.participant.structure, migratory_carbon))
+            .reactant_phase_access(
+                site.participant.substance.id.clone(),
+                [MixturePhase::Organic],
+            )
+            .activation_energy_kj_per_mol(
+                34.0 + migration_penalty(site.participant.structure, migratory_carbon),
+            )
             .selectivity_profile(SelectivityProfile::new(
                 ReactionType::SkeletalRearrangement,
                 SiteDescriptorBuilder::build(

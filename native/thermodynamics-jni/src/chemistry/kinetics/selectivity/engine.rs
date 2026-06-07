@@ -135,8 +135,7 @@ impl SelectivityEngine {
                 // (less substituted) alkenes propagate more readily; the structural
                 // detail is left to the per-site barrier, so the profile only carries
                 // the gentle accessibility bias here.
-                let mut score =
-                    ReactivityScore::new(1.0, "chain-growth addition polymerization");
+                let mut score = ReactivityScore::new(1.0, "chain-growth addition polymerization");
                 score.value *= profile.primary_site.steric_accessibility().max(0.2);
                 if context.is_high_temperature() {
                     score.value *= 1.3;
@@ -165,6 +164,27 @@ impl SelectivityEngine {
                 }
                 if context.medium.has_gas_liquid_interface() {
                     score.value *= 1.1;
+                }
+                score
+            }
+            ReactionType::HydrocarbonPyrolysis => {
+                let mut score = ReactivityScore::new(0.6, "hydrocarbon thermal dehydrogenation");
+                score.value *= profile.primary_site.steric_accessibility().max(0.25);
+                if profile.primary_site.electronics.resonance_stabilization {
+                    score.value *= 1.6;
+                    score.activation_delta -= 5.0;
+                }
+                if context.is_high_temperature() {
+                    score.value *= 2.0;
+                    score.activation_delta -= 5.0;
+                }
+                if context.is_very_high_temperature() {
+                    score.value *= 4.0;
+                    score.activation_delta -= 12.0;
+                }
+                if context.medium.is_supercritical() {
+                    score.value *= 1.15;
+                    score.activation_delta -= 1.0;
                 }
                 score
             }
@@ -227,18 +247,23 @@ impl SelectivityEngine {
                 score
             }
             ReactionType::PhotochemicalIsomerization => {
-                let mut score = ReactivityScore::new(0.0, "double-bond photoisomerization needs light");
-                if context.total_light_power > TRACE_CONCENTRATION_MOL_PER_BUCKET || context.has_uv()
+                let mut score =
+                    ReactivityScore::new(0.0, "double-bond photoisomerization needs light");
+                if context.total_light_power > TRACE_CONCENTRATION_MOL_PER_BUCKET
+                    || context.has_uv()
                 {
                     score.value = 1.0 + context.total_light_power.max(context.uv_power).min(5.0);
-                    score.activation_delta = -3.0 * context.total_light_power.max(context.uv_power).min(3.0);
+                    score.activation_delta =
+                        -3.0 * context.total_light_power.max(context.uv_power).min(3.0);
                     score.reason = "light drives double-bond isomerization".to_string();
                 }
                 score
             }
             ReactionType::NAlkylation => evaluate_sn2(&profile.primary_site, context).primary,
             ReactionType::RadicalHalogenation => evaluate_radical_halogenation(profile, context),
-            ReactionType::SkeletalRearrangement => evaluate_skeletal_rearrangement(profile, context),
+            ReactionType::SkeletalRearrangement => {
+                evaluate_skeletal_rearrangement(profile, context)
+            }
         };
         let recommendation = if matches!(profile.mechanism, ReactionType::SN2) {
             evaluate_sn2(&profile.primary_site, context).recommendation

@@ -1,15 +1,15 @@
 use std::collections::BTreeMap;
 
-use super::common::sanitize_id;
 use super::super::resolver::DerivedSubstanceResolver;
+use super::common::sanitize_id;
 use crate::chemistry::error::ChemistryResult;
-use crate::chemistry::selectivity::types::{
-    ElectronicEnvironment, ReactionType, SelectivityProfile, SiteDescriptor, SubstitutionDegree,
-};
 use crate::chemistry::mixture::MixturePhase;
 use crate::chemistry::molecule::{bond_order_matches, MolecularEditor, MolecularStructure};
 use crate::chemistry::reaction::Reaction;
 use crate::chemistry::reactive_site::ReactiveSiteKind;
+use crate::chemistry::selectivity::types::{
+    ElectronicEnvironment, ReactionType, SelectivityProfile, SiteDescriptor, SubstitutionDegree,
+};
 use crate::chemistry::substance::{Substance, SubstanceId, SubstanceTagId};
 
 const CHLORINE_ID: &str = "destroy:chlorine";
@@ -76,8 +76,7 @@ pub(crate) fn generate_radical_halogenations(
             best_by_product
                 .entry(product_id)
                 .and_modify(|current| {
-                    if candidate.activation_energy_kj_per_mol
-                        < current.activation_energy_kj_per_mol
+                    if candidate.activation_energy_kj_per_mol < current.activation_energy_kj_per_mol
                     {
                         *current = candidate.clone();
                     }
@@ -126,17 +125,19 @@ fn radical_halogenation_reaction(
 fn radical_abstraction_sites(structure: &MolecularStructure) -> Vec<RadicalSite> {
     let mut sites = Vec::new();
     for carbon in 0..structure.atoms.len() {
-        if structure.atoms[carbon].element != "C" || !is_radical_substitution_carbon(structure, carbon)
+        if structure.atoms[carbon].element != "C"
+            || !is_radical_substitution_carbon(structure, carbon)
         {
             continue;
         }
-        let Some(hydrogen) = structure
-            .neighbors(carbon)
-            .into_iter()
-            .find_map(|(neighbor, order)| {
-                (bond_order_matches(order, 1.0) && structure.atoms[neighbor].element == "H")
-                    .then_some(neighbor)
-            })
+        let Some(hydrogen) =
+            structure
+                .neighbors(carbon)
+                .into_iter()
+                .find_map(|(neighbor, order)| {
+                    (bond_order_matches(order, 1.0) && structure.atoms[neighbor].element == "H")
+                        .then_some(neighbor)
+                })
         else {
             continue;
         };
@@ -154,9 +155,12 @@ fn is_radical_substitution_carbon(structure: &MolecularStructure, carbon: usize)
     if is_aromatic_carbon(structure, carbon) {
         return false;
     }
-    structure.neighbors(carbon).into_iter().all(|(neighbor, order)| {
-        structure.atoms[neighbor].element == "H" || bond_order_matches(order, 1.0)
-    })
+    structure
+        .neighbors(carbon)
+        .into_iter()
+        .all(|(neighbor, order)| {
+            structure.atoms[neighbor].element == "H" || bond_order_matches(order, 1.0)
+        })
 }
 
 fn radical_site_descriptor(
@@ -224,7 +228,9 @@ fn bulky_substituent_count(structure: &MolecularStructure, carbon: usize) -> u32
                 && structure
                     .neighbors(*neighbor)
                     .into_iter()
-                    .filter(|(second, _)| *second != carbon && structure.atoms[*second].element != "H")
+                    .filter(|(second, _)| {
+                        *second != carbon && structure.atoms[*second].element != "H"
+                    })
                     .count()
                     >= 2
         })
@@ -232,27 +238,36 @@ fn bulky_substituent_count(structure: &MolecularStructure, carbon: usize) -> u32
 }
 
 fn is_benzylic(structure: &MolecularStructure, atom: usize) -> bool {
-    structure.neighbors(atom).into_iter().any(|(neighbor, order)| {
-        bond_order_matches(order, 1.0) && is_aromatic_carbon(structure, neighbor)
-    })
+    structure
+        .neighbors(atom)
+        .into_iter()
+        .any(|(neighbor, order)| {
+            bond_order_matches(order, 1.0) && is_aromatic_carbon(structure, neighbor)
+        })
 }
 
 fn is_allylic(structure: &MolecularStructure, atom: usize) -> bool {
-    structure.neighbors(atom).into_iter().any(|(neighbor, order)| {
-        bond_order_matches(order, 1.0)
-            && structure
-                .neighbors(neighbor)
-                .into_iter()
-                .any(|(other, other_order)| {
-                    other != atom
-                        && structure.atoms[other].element == "C"
-                        && bond_order_matches(other_order, 2.0)
-                })
-    })
+    structure
+        .neighbors(atom)
+        .into_iter()
+        .any(|(neighbor, order)| {
+            bond_order_matches(order, 1.0)
+                && structure
+                    .neighbors(neighbor)
+                    .into_iter()
+                    .any(|(other, other_order)| {
+                        other != atom
+                            && structure.atoms[other].element == "C"
+                            && bond_order_matches(other_order, 2.0)
+                    })
+        })
 }
 
 fn is_aromatic_carbon(structure: &MolecularStructure, atom: usize) -> bool {
-    structure.atoms.get(atom).is_some_and(|atom| atom.element == "C")
+    structure
+        .atoms
+        .get(atom)
+        .is_some_and(|atom| atom.element == "C")
         && structure
             .neighbors(atom)
             .iter()
@@ -345,18 +360,19 @@ mod tests {
 
         assert_eq!(reactions.len(), 2);
         assert!(reactions.iter().any(|reaction| {
-            reaction.reactants.iter().any(|term| term.substance_id.as_str() == CHLORINE_ID)
+            reaction
+                .reactants
+                .iter()
+                .any(|term| term.substance_id.as_str() == CHLORINE_ID)
                 && reaction
                     .products
                     .iter()
                     .any(|term| term.substance_id.as_str() == HYDROCHLORIC_ACID_ID)
         }));
-        assert!(resolver
-            .substances
-            .iter()
-            .any(|substance| substance.molecular_structure.as_ref().is_some_and(|structure| {
-                structure.atoms.iter().any(|atom| atom.element == "Cl")
-            })));
+        assert!(resolver.substances.iter().any(|substance| substance
+            .molecular_structure
+            .as_ref()
+            .is_some_and(|structure| { structure.atoms.iter().any(|atom| atom.element == "Cl") })));
     }
 
     #[test]

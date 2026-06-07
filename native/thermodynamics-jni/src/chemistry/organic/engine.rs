@@ -270,8 +270,7 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 if let Some(reaction) = generate_alkene_photoisomerization(&site, &mut resolver)? {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
-                if let Some(reaction) =
-                    generate_chain_growth_polymerization(&site, &mut resolver)?
+                if let Some(reaction) = generate_chain_growth_polymerization(&site, &mut resolver)?
                 {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
@@ -402,6 +401,9 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
                 push_unique_reaction(&mut generated.reactions, &mut reaction_ids, reaction)?;
             }
             for reaction in generate_cracking(substance, &mut resolver)? {
+                push_unique_reaction(&mut generated.reactions, &mut reaction_ids, reaction)?;
+            }
+            for reaction in generate_pyrolysis(substance, &mut resolver)? {
                 push_unique_reaction(&mut generated.reactions, &mut reaction_ids, reaction)?;
             }
             // Step-growth polycondensation pairs this diacid with every other

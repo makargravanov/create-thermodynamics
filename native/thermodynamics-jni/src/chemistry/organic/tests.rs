@@ -310,7 +310,12 @@ fn organometallic_formation_creates_dynamic_reagent_from_halide() {
 
     let organomagnesium = dynamic
         .reactions()
-        .find(|reaction| reaction.id.as_str().starts_with("organomagnesium_formation/"))
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("organomagnesium_formation/")
+        })
         .expect("alkyl iodide should form an organomagnesium reagent");
     let product_id = organomagnesium.products[0].substance_id.clone();
     let product = dynamic.substance(&product_id).unwrap();
@@ -350,12 +355,14 @@ fn organometallic_reagent_adds_to_nitrile_and_opens_epoxide() {
         )
         .unwrap();
 
-    assert!(dynamic
-        .reactions()
-        .any(|reaction| reaction.id.as_str().starts_with("organometallic_nitrile_addition/")));
-    assert!(dynamic
-        .reactions()
-        .any(|reaction| reaction.id.as_str().starts_with("organometallic_epoxide_opening/")));
+    assert!(dynamic.reactions().any(|reaction| reaction
+        .id
+        .as_str()
+        .starts_with("organometallic_nitrile_addition/")));
+    assert!(dynamic.reactions().any(|reaction| reaction
+        .id
+        .as_str()
+        .starts_with("organometallic_epoxide_opening/")));
 }
 
 #[test]
@@ -798,12 +805,13 @@ fn electrophilic_addition_generators_are_registered() {
 #[test]
 fn chain_growth_polymerization_registers_a_polymer_material_from_an_alkene() {
     let registry = generated_registry();
-    let reaction =
-        reaction_with_prefix(&registry, "chain_growth_polymerization/destroy_ethene/");
+    let reaction = reaction_with_prefix(&registry, "chain_growth_polymerization/destroy_ethene/");
     assert_eq!(reaction.reactants.len(), 1);
     assert_eq!(reaction.products.len(), 1);
     let monomer = registry.substance(&"destroy:ethene".into()).unwrap();
-    let product = registry.substance(&reaction.products[0].substance_id).unwrap();
+    let product = registry
+        .substance(&reaction.products[0].substance_id)
+        .unwrap();
     assert!(matches!(
         product.representation,
         SubstanceRepresentation::Polymer { .. }
@@ -812,7 +820,7 @@ fn chain_growth_polymerization_registers_a_polymer_material_from_an_alkene() {
     assert!(
         (product.molar_mass_grams
             - monomer.molar_mass_grams * f64::from(reaction.reactants[0].coefficient))
-            .abs()
+        .abs()
             < 1.0e-6,
         "the polymer material mass must match the consumed monomer count"
     );
@@ -2499,7 +2507,10 @@ fn retro_diels_alder_splits_a_cyclohexene_adduct_back_to_diene_and_dienophile() 
         .reactions()
         .find(|reaction| {
             reaction.id.as_str().starts_with("retro_diels_alder/")
-                && reaction.reactants.iter().any(|term| term.substance_id == adduct)
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == adduct)
         })
         .expect("a Diels-Alder adduct must have a thermal cycloreversion path");
     assert!(retro
@@ -2523,7 +2534,12 @@ fn alkene_photoisomerization_creates_separate_e_and_z_channels() {
 
     let photo = dynamic
         .reactions()
-        .find(|reaction| reaction.id.as_str().starts_with("alkene_photoisomerization/"))
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("alkene_photoisomerization/")
+        })
         .expect("an unsymmetrical alkene must have light-driven E/Z isomerization channels");
     assert_eq!(photo.channels.len(), 2);
 

@@ -81,7 +81,11 @@ impl DerivedSubstanceResolver {
             }
             return Ok(id);
         }
-        if self.canonical_to_id.values().any(|existing| existing == &id) {
+        if self
+            .canonical_to_id
+            .values()
+            .any(|existing| existing == &id)
+        {
             return Ok(id);
         }
         self.canonical_to_id.insert(canonical.clone(), id.clone());

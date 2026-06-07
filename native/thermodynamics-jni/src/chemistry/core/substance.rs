@@ -268,7 +268,11 @@ impl SubstanceRepresentation {
                 if substance.charge != 0 {
                     return invalid_representation(substance, "polymers must be neutral");
                 }
-                validate_non_empty_text(substance, repeat_unit_id.as_str(), "polymer repeat unit id")?;
+                validate_non_empty_text(
+                    substance,
+                    repeat_unit_id.as_str(),
+                    "polymer repeat unit id",
+                )?;
                 validate_positive_representation_number(
                     substance,
                     *number_average_degree,

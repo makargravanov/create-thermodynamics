@@ -598,6 +598,8 @@ pub enum ReactionType {
     RadicalHalogenation,
     /// Thermal or catalytic C-C bond scission in hydrocarbons.
     HydrocarbonCracking,
+    /// Thermal dehydrogenation of hydrocarbons into more unsaturated products.
+    HydrocarbonPyrolysis,
     /// Intramolecular migration with sigma-bond reorganization.
     SkeletalRearrangement,
     /// Chain-growth (addition) polymerization of an alkene into a repeat unit.

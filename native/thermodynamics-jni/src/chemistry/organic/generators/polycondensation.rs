@@ -1,5 +1,5 @@
-use super::common::generated_pair_reaction_id;
 use super::super::resolver::DerivedSubstanceResolver;
+use super::common::generated_pair_reaction_id;
 use crate::chemistry::error::ChemistryResult;
 use crate::chemistry::polymer::{step_growth_polymer_substance, StepGrowthLinkage};
 use crate::chemistry::reaction::Reaction;
@@ -36,8 +36,12 @@ pub(crate) fn generate_polycondensation(
     ) else {
         return Ok(None);
     };
-    let Some((polymer, linkage, repeat_count)) =
-        step_growth_polymer_substance(&diacid.id, acid_structure, &comonomer.id, comonomer_structure)?
+    let Some((polymer, linkage, repeat_count)) = step_growth_polymer_substance(
+        &diacid.id,
+        acid_structure,
+        &comonomer.id,
+        comonomer_structure,
+    )?
     else {
         return Ok(None);
     };

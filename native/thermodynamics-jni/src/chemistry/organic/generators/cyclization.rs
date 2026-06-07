@@ -1,9 +1,12 @@
 use super::super::centers::*;
 use super::super::resolver::DerivedSubstanceResolver;
+use super::super::space::SiteParticipant;
 use super::common::*;
 use crate::chemistry::condition::{AcidityCondition, ReactionCondition};
 use crate::chemistry::error::ChemistryResult;
-use crate::chemistry::kinetics::{ChannelConditionEffect, LightBand, ReactionChannel, ReactionChannelMode};
+use crate::chemistry::kinetics::{
+    ChannelConditionEffect, LightBand, ReactionChannel, ReactionChannelMode,
+};
 use crate::chemistry::molecule::{
     bond_order_matches, would_form_ring_of_size, MolecularBond, MolecularEditor,
     MolecularStructure, StereoDescriptor,
@@ -447,30 +450,35 @@ pub(crate) fn generate_paal_knorr_furan(
 /// carbonyl oxygens leave as water, each pulling a hydrogen — two from the amine
 /// N-H pair and one from each bridging carbon. Unlike furan closure this is
 /// intermolecular, so the carbonyl and amine may be different substances.
-pub(crate) fn generate_paal_knorr_pyrrole(
+fn generate_paal_knorr_external_heteroatom(
     first: &CarbonylSite<'_>,
     second: &CarbonylSite<'_>,
-    amine: &AmineSite<'_>,
+    donor_participant: &SiteParticipant<'_>,
+    donor_atom: usize,
+    donor_hydrogens: &[usize],
+    donor_element: &'static str,
+    donor_label: &'static str,
+    reaction_prefix: &'static str,
+    activation_energy_kj_per_mol: f64,
+    donor_desc: crate::chemistry::selectivity::types::SiteDescriptor,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Option<Reaction>> {
-    // The two carbonyls must share one molecule; the amine is a separate donor.
     if first.participant.substance.id != second.participant.substance.id {
         return Ok(None);
     }
     if first.carbon >= second.carbon {
         return Ok(None);
     }
-    if amine.hydrogens.len() < 2 {
+    if donor_hydrogens.len() < 2 {
         return Ok(None);
     }
-    // The amine must be a separate molecule: this generator models the
-    // intermolecular condensation and registers two reactant terms. An
-    // amino-diketone closing on its own nitrogen would be a different
-    // (intramolecular) mechanism and would also corrupt the stoichiometry by
-    // listing one substance twice.
-    if amine.participant.substance.id == first.participant.substance.id {
+    if donor_participant.substance.id == first.participant.substance.id {
         return Ok(None);
     }
+    if donor_participant.structure.atoms[donor_atom].element != donor_element {
+        return Ok(None);
+    }
+
     let structure = first.participant.structure;
     let Some((c_beta, c_gamma)) =
         one_four_dicarbonyl_bridge(structure, first.carbon, second.carbon)
@@ -485,59 +493,74 @@ pub(crate) fn generate_paal_knorr_pyrrole(
     };
 
     let first_desc = SiteDescriptorBuilder::from_carbonyl_site(first);
-    let amine_desc = SiteDescriptorBuilder::from_amine_site(amine);
     let carbonyl_substance = first.participant.substance;
-    let amine_substance = amine.participant.substance;
+    let donor_substance = donor_participant.substance;
 
-    // Build the bridging-nitrogen fragment: strip two N-H so the nitrogen has the
-    // open valences to bond to both ring carbons. Left unvalidated (under-valenced)
-    // on purpose — the combined `finish()` validates the assembled pyrrole.
-    let mut amine_editor = MolecularEditor::new(amine.participant.structure);
-    let amine_mapping = amine_editor.remove_atoms(&[amine.hydrogens[0], amine.hydrogens[1]])?;
-    let amine_nitrogen = mapped_atom(&amine_mapping, amine.nitrogen, "pyrrole nitrogen")?;
-    let amine_fragment = amine_editor.structure();
+    let mut donor_editor = MolecularEditor::new(donor_participant.structure);
+    let donor_mapping = donor_editor.remove_atoms(&[donor_hydrogens[0], donor_hydrogens[1]])?;
+    let donor_atom = mapped_atom(&donor_mapping, donor_atom, donor_label)?;
+    let donor_fragment = donor_editor.structure();
 
-    // Strip both carbonyl oxygens and one H from each bridge carbon, splice in the
-    // nitrogen, then lay down the Kekulé pyrrole N-Ca=Cb-Cc=Cd-N.
     let mut editor = MolecularEditor::new(structure);
     let mapping =
         editor.remove_atoms(&[first.oxygen, second.oxygen, beta_hydrogen, gamma_hydrogen])?;
-    let carbon_a = mapped_atom(&mapping, first.carbon, "pyrrole carbon a")?;
-    let carbon_b = mapped_atom(&mapping, c_beta, "pyrrole carbon b")?;
-    let carbon_c = mapped_atom(&mapping, c_gamma, "pyrrole carbon c")?;
-    let carbon_d = mapped_atom(&mapping, second.carbon, "pyrrole carbon d")?;
-    let ring_nitrogen = editor.add_group(carbon_a, &amine_fragment, amine_nitrogen, 1.0)?;
-    editor.add_bond(ring_nitrogen, carbon_d, 1.0)?;
+    let carbon_a = mapped_atom(&mapping, first.carbon, "Paal-Knorr carbon a")?;
+    let carbon_b = mapped_atom(&mapping, c_beta, "Paal-Knorr carbon b")?;
+    let carbon_c = mapped_atom(&mapping, c_gamma, "Paal-Knorr carbon c")?;
+    let carbon_d = mapped_atom(&mapping, second.carbon, "Paal-Knorr carbon d")?;
+    let ring_heteroatom = editor.add_group(carbon_a, &donor_fragment, donor_atom, 1.0)?;
+    editor.add_bond(ring_heteroatom, carbon_d, 1.0)?;
     editor.set_bond_order(carbon_a, carbon_b, 2.0)?;
     editor.set_bond_order(carbon_c, carbon_d, 2.0)?;
     let product = resolver.resolve(editor.finish()?)?;
 
     Ok(Some(
         Reaction::builder(generated_triple_site_reaction_id(
-            "paal_knorr_pyrrole",
+            reaction_prefix,
             &first.participant,
             &second.participant,
-            &amine.participant,
+            donor_participant,
         ))
         .reactant(carbonyl_substance.id.clone(), 1, 1)
-        .reactant(amine_substance.id.clone(), 1, 1)
+        .reactant(donor_substance.id.clone(), 1, 1)
         .catalyst_order("destroy:proton", 1)
         .product(product, 1)
         .product("destroy:water", 2)
         .condition(
             ReactionCondition::new(
-                "Paal–Knorr pyrrole closure needs acidic, water-poor conditions",
+                "Paal-Knorr heterocycle closure needs acidic, water-poor conditions",
             )
             .acidity(AcidityCondition::Acidic)
             .max_water_activity(0.35),
         )
-        .activation_energy_kj_per_mol(50.0)
+        .activation_energy_kj_per_mol(activation_energy_kj_per_mol)
         .selectivity_profile(
             SelectivityProfile::new(ReactionType::HeterocycleCondensation, first_desc)
-                .with_secondary_site(amine_desc),
+                .with_secondary_site(donor_desc),
         )
         .build(),
     ))
+}
+
+pub(crate) fn generate_paal_knorr_pyrrole(
+    first: &CarbonylSite<'_>,
+    second: &CarbonylSite<'_>,
+    amine: &AmineSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    generate_paal_knorr_external_heteroatom(
+        first,
+        second,
+        &amine.participant,
+        amine.nitrogen,
+        &amine.hydrogens,
+        "N",
+        "Paal-Knorr donor nitrogen",
+        "paal_knorr_pyrrole",
+        50.0,
+        SiteDescriptorBuilder::from_amine_site(amine),
+        resolver,
+    )
 }
 
 /// Paal–Knorr thiophene synthesis: a 1,4-dicarbonyl condenses with a sulfur
@@ -551,86 +574,19 @@ pub(crate) fn generate_paal_knorr_thiophene(
     thiol: &ThiolSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Option<Reaction>> {
-    if first.participant.substance.id != second.participant.substance.id {
-        return Ok(None);
-    }
-    if first.carbon >= second.carbon {
-        return Ok(None);
-    }
-    // The donor must give up two S–H to bridge both ring carbons (H2S, or a
-    // dithiol-like center with two sulfur hydrogens).
-    if thiol.hydrogens.len() < 2 {
-        return Ok(None);
-    }
-    // The sulfur donor must be a separate molecule (see the pyrrole note): this is
-    // the intermolecular condensation and lists two reactant terms.
-    if thiol.participant.substance.id == first.participant.substance.id {
-        return Ok(None);
-    }
-    let structure = first.participant.structure;
-    let Some((c_beta, c_gamma)) =
-        one_four_dicarbonyl_bridge(structure, first.carbon, second.carbon)
-    else {
-        return Ok(None);
-    };
-    let Some(beta_hydrogen) = first_bonded_hydrogen(structure, c_beta) else {
-        return Ok(None);
-    };
-    let Some(gamma_hydrogen) = first_bonded_hydrogen(structure, c_gamma) else {
-        return Ok(None);
-    };
-
-    let first_desc = SiteDescriptorBuilder::from_carbonyl_site(first);
-    let thiol_desc = SiteDescriptorBuilder::from_thiol_site(thiol);
-    let carbonyl_substance = first.participant.substance;
-    let thiol_substance = thiol.participant.substance;
-
-    // Under-valenced sulfur fragment: strip two S–H so sulfur can bond to both
-    // ring carbons. The combined `finish()` validates the assembled thiophene.
-    let mut thiol_editor = MolecularEditor::new(thiol.participant.structure);
-    let thiol_mapping = thiol_editor.remove_atoms(&[thiol.hydrogens[0], thiol.hydrogens[1]])?;
-    let donor_sulfur = mapped_atom(&thiol_mapping, thiol.sulfur, "thiophene sulfur")?;
-    let sulfur_fragment = thiol_editor.structure();
-
-    let mut editor = MolecularEditor::new(structure);
-    let mapping =
-        editor.remove_atoms(&[first.oxygen, second.oxygen, beta_hydrogen, gamma_hydrogen])?;
-    let carbon_a = mapped_atom(&mapping, first.carbon, "thiophene carbon a")?;
-    let carbon_b = mapped_atom(&mapping, c_beta, "thiophene carbon b")?;
-    let carbon_c = mapped_atom(&mapping, c_gamma, "thiophene carbon c")?;
-    let carbon_d = mapped_atom(&mapping, second.carbon, "thiophene carbon d")?;
-    let ring_sulfur = editor.add_group(carbon_a, &sulfur_fragment, donor_sulfur, 1.0)?;
-    editor.add_bond(ring_sulfur, carbon_d, 1.0)?;
-    editor.set_bond_order(carbon_a, carbon_b, 2.0)?;
-    editor.set_bond_order(carbon_c, carbon_d, 2.0)?;
-    let product = resolver.resolve(editor.finish()?)?;
-
-    Ok(Some(
-        Reaction::builder(generated_triple_site_reaction_id(
-            "paal_knorr_thiophene",
-            &first.participant,
-            &second.participant,
-            &thiol.participant,
-        ))
-        .reactant(carbonyl_substance.id.clone(), 1, 1)
-        .reactant(thiol_substance.id.clone(), 1, 1)
-        .catalyst_order("destroy:proton", 1)
-        .product(product, 1)
-        .product("destroy:water", 2)
-        .condition(
-            ReactionCondition::new(
-                "Paal–Knorr thiophene closure needs acidic, water-poor conditions",
-            )
-            .acidity(AcidityCondition::Acidic)
-            .max_water_activity(0.35),
-        )
-        .activation_energy_kj_per_mol(55.0)
-        .selectivity_profile(
-            SelectivityProfile::new(ReactionType::HeterocycleCondensation, first_desc)
-                .with_secondary_site(thiol_desc),
-        )
-        .build(),
-    ))
+    generate_paal_knorr_external_heteroatom(
+        first,
+        second,
+        &thiol.participant,
+        thiol.sulfur,
+        &thiol.hydrogens,
+        "S",
+        "Paal-Knorr donor sulfur",
+        "paal_knorr_thiophene",
+        55.0,
+        SiteDescriptorBuilder::from_thiol_site(thiol),
+        resolver,
+    )
 }
 
 /// The four carbons of a conjugated diene C1=C2–C3=C4, seeded from one of its two
@@ -782,10 +738,7 @@ pub(crate) fn generate_retro_diels_alder(
     let c3 = alkene.low_degree_carbon;
     let mut reactions = Vec::new();
     for (c1, c2_c1_order) in structure.neighbors(c2) {
-        if c1 == c3
-            || structure.atoms[c1].element != "C"
-            || !bond_order_matches(c2_c1_order, 1.0)
-        {
+        if c1 == c3 || structure.atoms[c1].element != "C" || !bond_order_matches(c2_c1_order, 1.0) {
             continue;
         }
         for (c4, c3_c4_order) in structure.neighbors(c3) {
@@ -810,9 +763,11 @@ pub(crate) fn generate_retro_diels_alder(
                     {
                         continue;
                     }
-                    if !structure.neighbors(cb).iter().any(|(n, order)| {
-                        *n == c4 && bond_order_matches(*order, 1.0)
-                    }) {
+                    if !structure
+                        .neighbors(cb)
+                        .iter()
+                        .any(|(n, order)| *n == c4 && bond_order_matches(*order, 1.0))
+                    {
                         continue;
                     }
                     let Some((diene, dienophile)) =
@@ -873,7 +828,13 @@ pub(crate) fn generate_alkene_photoisomerization(
         (StereoDescriptor::Z, "z", 4.0),
     ] {
         let mut editor = MolecularEditor::new(structure);
-        editor.set_double_bond_stereo(first, second, first_substituent, second_substituent, descriptor)?;
+        editor.set_double_bond_stereo(
+            first,
+            second,
+            first_substituent,
+            second_substituent,
+            descriptor,
+        )?;
         let product = resolver.resolve(editor.finish()?)?;
         variants.push((suffix, product, activation_delta));
     }
@@ -889,8 +850,11 @@ pub(crate) fn generate_alkene_photoisomerization(
     .reactant(alkene.participant.substance.id.clone(), 1, 1)
     .activation_energy_kj_per_mol(65.0)
     .selectivity_profile(
-        SelectivityProfile::new(ReactionType::PhotochemicalIsomerization, alkene_desc.clone())
-            .never_suppress(),
+        SelectivityProfile::new(
+            ReactionType::PhotochemicalIsomerization,
+            alkene_desc.clone(),
+        )
+        .never_suppress(),
     );
     for (suffix, product, activation_delta) in variants {
         builder = builder.channel(
@@ -906,8 +870,11 @@ pub(crate) fn generate_alkene_photoisomerization(
                 multiplier: 1.0,
             })
             .with_selectivity_profile(
-                SelectivityProfile::new(ReactionType::PhotochemicalIsomerization, alkene_desc.clone())
-                    .never_suppress(),
+                SelectivityProfile::new(
+                    ReactionType::PhotochemicalIsomerization,
+                    alkene_desc.clone(),
+                )
+                .never_suppress(),
             ),
         );
     }
@@ -941,9 +908,13 @@ fn set_bond_order_in_structure(
     second: usize,
     order: f64,
 ) -> Option<()> {
-    structure.bonds.iter_mut().find(|bond| {
-        (bond.from == first && bond.to == second) || (bond.from == second && bond.to == first)
-    })?.order = order;
+    structure
+        .bonds
+        .iter_mut()
+        .find(|bond| {
+            (bond.from == first && bond.to == second) || (bond.from == second && bond.to == first)
+        })?
+        .order = order;
     structure.stereochemistry.clear();
     Some(())
 }
@@ -1007,7 +978,10 @@ fn substructure_for_atoms(
         .collect::<Vec<_>>();
     let fragment = MolecularStructure {
         source_code: "generated".to_string(),
-        atoms: atoms.iter().map(|atom| structure.atoms[*atom].clone()).collect(),
+        atoms: atoms
+            .iter()
+            .map(|atom| structure.atoms[*atom].clone())
+            .collect(),
         bonds,
         stereochemistry: Vec::new(),
     };

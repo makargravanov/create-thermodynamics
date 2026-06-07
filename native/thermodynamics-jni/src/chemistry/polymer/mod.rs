@@ -160,8 +160,14 @@ pub struct ChainLengthDistribution {
 
 impl ChainLengthDistribution {
     pub fn new(number_average_degree: f64, weight_average_degree: f64) -> ChemistryResult<Self> {
-        validate_positive_finite(number_average_degree, "number-average polymerization degree")?;
-        validate_positive_finite(weight_average_degree, "weight-average polymerization degree")?;
+        validate_positive_finite(
+            number_average_degree,
+            "number-average polymerization degree",
+        )?;
+        validate_positive_finite(
+            weight_average_degree,
+            "weight-average polymerization degree",
+        )?;
         if weight_average_degree < number_average_degree {
             return Err(polymer_error(
                 "weight-average polymerization degree must not be below number-average degree",
@@ -170,7 +176,9 @@ impl ChainLengthDistribution {
         let dispersity = weight_average_degree / number_average_degree;
         validate_positive_finite(dispersity, "polymer dispersity")?;
         if dispersity > MAX_REASONABLE_DISPERSITY {
-            return Err(polymer_error("polymer dispersity is outside supported range"));
+            return Err(polymer_error(
+                "polymer dispersity is outside supported range",
+            ));
         }
         Ok(Self {
             number_average_degree,
@@ -195,7 +203,10 @@ impl PolymerMaterial {
         if self.id.as_str().trim().is_empty() {
             return Err(polymer_error("polymer id must not be empty"));
         }
-        validate_repeat_unit_structure(&self.repeat_unit.structure, self.repeat_unit.connection_atoms)?;
+        validate_repeat_unit_structure(
+            &self.repeat_unit.structure,
+            self.repeat_unit.connection_atoms,
+        )?;
         ChainLengthDistribution::new(
             self.distribution.number_average_degree,
             self.distribution.weight_average_degree,
@@ -306,7 +317,9 @@ impl ChainGrowthInput {
     }
 }
 
-pub fn derive_chain_growth_polymer(input: ChainGrowthInput) -> ChemistryResult<Option<PolymerMaterial>> {
+pub fn derive_chain_growth_polymer(
+    input: ChainGrowthInput,
+) -> ChemistryResult<Option<PolymerMaterial>> {
     validate_fraction(input.conversion_fraction, "polymerization conversion")?;
     validate_fraction(
         input.initiator_to_monomer_mol_fraction,
@@ -454,7 +467,8 @@ pub fn step_growth_repeat_unit_structure(
     let Some((linkage, nucleophile_ends)) = difunctional_nucleophile_ends(comonomer) else {
         return Ok(None);
     };
-    let structure = assemble_polycondensation_unit(diacid, &acid_ends, comonomer, &nucleophile_ends)?;
+    let structure =
+        assemble_polycondensation_unit(diacid, &acid_ends, comonomer, &nucleophile_ends)?;
     Ok(Some((structure, linkage)))
 }
 
@@ -497,7 +511,11 @@ pub fn step_growth_polymer_substance(
         architecture: PolymerArchitecture::Linear,
         end_groups: Vec::new(),
     };
-    Ok(Some((polymer_material_to_substance(&material)?, linkage, degree)))
+    Ok(Some((
+        polymer_material_to_substance(&material)?,
+        linkage,
+        degree,
+    )))
 }
 
 fn open_connection_atoms(structure: &MolecularStructure) -> ChemistryResult<[usize; 2]> {
@@ -511,7 +529,9 @@ fn open_connection_atoms(structure: &MolecularStructure) -> ChemistryResult<[usi
         .collect::<Vec<_>>();
     match atoms.as_slice() {
         [first, second] => Ok([*first, *second]),
-        _ => Err(polymer_error("polymer repeat unit must have exactly two open connection atoms")),
+        _ => Err(polymer_error(
+            "polymer repeat unit must have exactly two open connection atoms",
+        )),
     }
 }
 
@@ -624,12 +644,17 @@ pub struct StepGrowthInput {
     pub architecture: PolymerArchitecture,
 }
 
-pub fn derive_step_growth_polymer(input: StepGrowthInput) -> ChemistryResult<Option<PolymerMaterial>> {
+pub fn derive_step_growth_polymer(
+    input: StepGrowthInput,
+) -> ChemistryResult<Option<PolymerMaterial>> {
     validate_fraction(
         input.functional_group_conversion,
         "step-growth functional group conversion",
     )?;
-    validate_positive_finite(input.stoichiometric_balance, "step-growth stoichiometric balance")?;
+    validate_positive_finite(
+        input.stoichiometric_balance,
+        "step-growth stoichiometric balance",
+    )?;
     if input.stoichiometric_balance > 1.0 {
         return Err(polymer_error(
             "step-growth stoichiometric balance must be normalized to <= 1",
@@ -687,7 +712,9 @@ fn mark_repeat_connection(atom: &mut MolecularAtom) {
     atom.valence_saturation = ValenceSaturation::UnsaturatedAllowed;
 }
 
-fn polymerizable_carbon_carbon_double_bond(structure: &MolecularStructure) -> Option<(usize, usize)> {
+fn polymerizable_carbon_carbon_double_bond(
+    structure: &MolecularStructure,
+) -> Option<(usize, usize)> {
     let mut result = None;
     for MolecularBond { from, to, order } in &structure.bonds {
         if !bond_order_matches(*order, 2.0) {
@@ -708,13 +735,10 @@ fn polymerizable_carbon_carbon_double_bond(structure: &MolecularStructure) -> Op
 }
 
 fn is_aromatic_bond(structure: &MolecularStructure, first: usize, second: usize) -> bool {
-    structure
-        .bonds
-        .iter()
-        .any(|bond| {
-            ((bond.from == first && bond.to == second) || (bond.from == second && bond.to == first))
-                && bond_order_matches(bond.order, 1.5)
-        })
+    structure.bonds.iter().any(|bond| {
+        ((bond.from == first && bond.to == second) || (bond.from == second && bond.to == first))
+            && bond_order_matches(bond.order, 1.5)
+    })
 }
 
 fn validate_repeat_unit_structure(
@@ -723,14 +747,18 @@ fn validate_repeat_unit_structure(
 ) -> ChemistryResult<()> {
     structure.validate()?;
     if connection_atoms[0] == connection_atoms[1] {
-        return Err(polymer_error("repeat unit connection atoms must be distinct"));
+        return Err(polymer_error(
+            "repeat unit connection atoms must be distinct",
+        ));
     }
     for atom in connection_atoms {
         let Some(connection) = structure.atoms.get(atom) else {
             return Err(polymer_error("repeat unit connection atom does not exist"));
         };
         if connection.element == "H" {
-            return Err(polymer_error("hydrogen cannot be a polymer repeat connection atom"));
+            return Err(polymer_error(
+                "hydrogen cannot be a polymer repeat connection atom",
+            ));
         }
     }
     if structure.atoms.iter().any(|atom| atom.element == "R") {
@@ -750,7 +778,9 @@ fn validate_fraction(value: f64, name: &str) -> ChemistryResult<()> {
 
 fn validate_positive_finite(value: f64, name: &str) -> ChemistryResult<()> {
     if !value.is_finite() || value <= 0.0 {
-        return Err(polymer_error(&format!("{name} must be positive and finite")));
+        return Err(polymer_error(&format!(
+            "{name} must be positive and finite"
+        )));
     }
     Ok(())
 }
@@ -830,7 +860,10 @@ mod tests {
         .unwrap()
         .expect("ethene should produce a chain-growth polymer");
 
-        assert_eq!(polymer.repeat_unit.structure.atom_count(), ethene.atom_count());
+        assert_eq!(
+            polymer.repeat_unit.structure.atom_count(),
+            ethene.atom_count()
+        );
         assert_eq!(polymer.repeat_unit.connection_atoms, [0, 1]);
         assert!(polymer.distribution.number_average_degree > 70.0);
         assert!(polymer.number_average_molar_mass_grams() > 1_900.0);
@@ -853,12 +886,8 @@ mod tests {
 
     #[test]
     fn step_growth_uses_carothers_distribution() {
-        let repeat = PolymerRepeatUnit::new(
-            "test:repeat",
-            parse_frowns("CCO").unwrap(),
-            [0, 2],
-        )
-        .unwrap();
+        let repeat =
+            PolymerRepeatUnit::new("test:repeat", parse_frowns("CCO").unwrap(), [0, 2]).unwrap();
         let polymer = derive_step_growth_polymer(StepGrowthInput {
             repeat_unit: repeat,
             functional_group_conversion: 0.95,
@@ -903,7 +932,10 @@ mod tests {
             .iter()
             .filter(|atom| atom.valence_saturation == ValenceSaturation::UnsaturatedAllowed)
             .count();
-        assert_eq!(open, 2, "a linear repeat unit has two open connection atoms");
+        assert_eq!(
+            open, 2,
+            "a linear repeat unit has two open connection atoms"
+        );
     }
 
     #[test]
@@ -915,5 +947,4 @@ mod tests {
             .unwrap()
             .is_none());
     }
-
 }
