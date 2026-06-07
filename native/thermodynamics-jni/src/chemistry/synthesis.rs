@@ -1116,4 +1116,51 @@ mod tests {
             .as_str()
             .starts_with("silyl_ether_deprotection/")));
     }
+
+    #[test]
+    fn debug_methane_to_acetylene_without_prefixes() {
+        // Реестр = полный каталог (он задаёт ПРОСТРАНСТВО реакций),
+        // но "на складе" только метан. Цель — ацетилен. Без префиксов.
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let routes = SynthesisPlanner::new()
+            .with_max_steps(4)
+            .with_max_routes(5)
+            .find_routes(
+                &mut registry,
+                [SubstanceId::from("destroy:methane")],
+                parse_frowns("C#C").unwrap(),
+            )
+            .unwrap();
+
+        eprintln!("=== routes found: {} ===", routes.len());
+        for (i, route) in routes.iter().enumerate() {
+            eprintln!(
+                "--- route #{i}: {} step(s), yield={:.3}, score={:.3}",
+                route.steps.len(),
+                route.estimated_yield,
+                route.score
+            );
+            eprintln!("    explanation: {}", route.explanation);
+            for (s, step) in route.steps.iter().enumerate() {
+                eprintln!(
+                    "    step {s}: {}  [{}] -> [{}]",
+                    step.reaction_id.as_str(),
+                    step.reactants.iter().map(|r| r.as_str()).collect::<Vec<_>>().join(" + "),
+                    step.products.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(" + "),
+                );
+                if !step.missing_reactants.is_empty() {
+                    eprintln!(
+                        "        missing: {}",
+                        step.missing_reactants.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")
+                    );
+                }
+            }
+            if !route.required_additions.is_empty() {
+                eprintln!("    required additions:");
+                for req in &route.required_additions {
+                    eprintln!("        {} ({})", req.substance_id.as_str(), req.reason);
+                }
+            }
+        }
+    }
 }

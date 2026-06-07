@@ -8,7 +8,7 @@ use crate::chemistry::reactive_site::ReactiveSiteKind;
 use crate::chemistry::selectivity::types::{
     ElectronicEnvironment, ReactionType, SelectivityProfile, SiteDescriptor, SubstitutionDegree,
 };
-use crate::chemistry::substance::{Substance, SubstanceTagId};
+use crate::chemistry::substance::{Substance, SubstanceId, SubstanceTagId};
 
 const HYDROGEN_ID: &str = "destroy:hydrogen";
 /// Thermal cracking is endothermic and only runs hot — gate it at a typical
@@ -23,6 +23,10 @@ const PYROLYSIS_PRE_EXPONENTIAL_FACTOR: f64 = 5.0e11;
 /// An alkane needs at least three carbons to split into a smaller alkane plus an
 /// alkene (ethane would have to make a carbene, which this mechanism cannot).
 const MIN_CRACKABLE_CARBONS: usize = 3;
+/// Coupling forms one C-C sigma bond and expels H2 — close to cracking in
+/// severity, so it shares the hot, slow Arrhenius regime.
+const COUPLING_ACTIVATION_ENERGY_KJ_PER_MOL: f64 = 250.0;
+const COUPLING_PRE_EXPONENTIAL_FACTOR: f64 = 1.0e12;
 
 /// Generates thermal cracking reactions for a saturated hydrocarbon: every
 /// acyclic C-C single bond, in both orientations, undergoes beta-scission into a
@@ -107,6 +111,185 @@ pub(crate) fn generate_pyrolysis(
         best_by_product.entry(product_id).or_insert(reaction);
     }
     Ok(best_by_product.into_values().collect())
+}
+
+/// Bimolecular dehydrogenative coupling: two light hydrocarbons join through a
+/// new C-C single bond, each donating one hydrogen from the coupled carbon, so a
+/// single H2 leaves overall (`R-H + R'-H -> R-R' + H2`). This is the missing
+/// bimolecular complement to unimolecular [`generate_pyrolysis`]: it is what lets
+/// methane reach C2+ products at all (`2 CH4 -> C2H6 + H2`), after which ordinary
+/// pyrolysis dehydrogenates the chain up to the alkene/alkyne.
+///
+/// Both partners are gated to at most [`MAX_COUPLING_CARBONS`] carbons. That keeps
+/// the dynamic fixed point finite: every product has 3-4 carbons, which exceeds
+/// the gate and so can never couple again. Mass is conserved exactly (one C-C
+/// bond formed, one H2 expelled), so the edge balances to registry tolerance.
+pub(crate) fn generate_dehydrogenative_coupling(
+    first: &Substance,
+    second: &Substance,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Vec<Reaction>> {
+    let (Some(first_structure), Some(second_structure)) =
+        (first.molecular_structure.as_ref(), second.molecular_structure.as_ref())
+    else {
+        return Ok(Vec::new());
+    };
+    if !is_couplable_hydrocarbon(first) || !is_couplable_hydrocarbon(second) {
+        return Ok(Vec::new());
+    }
+
+    let self_coupling = first.id == second.id;
+    let mut best_by_product = std::collections::BTreeMap::new();
+    for first_carbon in carbons_with_hydrogen(first_structure) {
+        for second_carbon in carbons_with_hydrogen(second_structure) {
+            let Some((product_id, descriptor)) = couple_carbons(
+                first_structure,
+                first_carbon,
+                second_structure,
+                second_carbon,
+                resolver,
+            )?
+            else {
+                continue;
+            };
+            if product_id == first.id || product_id == second.id {
+                continue;
+            }
+            best_by_product
+                .entry(product_id)
+                .or_insert((descriptor, first_carbon, second_carbon));
+        }
+    }
+
+    let mut reactions = Vec::new();
+    for (product_id, (descriptor, _, _)) in best_by_product {
+        reactions.push(build_coupling_reaction(
+            first,
+            second,
+            self_coupling,
+            product_id,
+            descriptor,
+        ));
+    }
+    Ok(reactions)
+}
+
+/// A neutral, non-hypothetical, fully saturated alkane: a valid feed for sp3 C-H
+/// dehydrogenative coupling. Saturated-only is a *mechanistic* scope, not a
+/// termination device — joining unsaturated partners would be a different reaction
+/// (alkene addition / Diels-Alder), and it also avoids breeding E/Z stereoisomers.
+/// Termination of the growth cascade is handled by the caller: coupling is only
+/// dispatched in bounded generation (the planner's step-limited search), never in
+/// the unbounded fixed-point enumeration that assumes non-growing reactions.
+fn is_couplable_hydrocarbon(substance: &Substance) -> bool {
+    if substance.charge != 0 || is_hypothetical(substance) {
+        return false;
+    }
+    let Some(structure) = substance.molecular_structure.as_ref() else {
+        return false;
+    };
+    if !is_concrete_hydrocarbon(structure) {
+        return false;
+    }
+    // Saturated only: every bond a single bond (no alkene/alkyne/aromatic feeds).
+    if !structure
+        .bonds
+        .iter()
+        .all(|bond| bond_order_matches(bond.order, 1.0))
+    {
+        return false;
+    }
+    structure.atoms.iter().any(|atom| atom.element == "C")
+}
+
+/// Carbon atoms carrying at least one explicit hydrogen — the only carbons that
+/// can shed an H to form the coupling bond.
+fn carbons_with_hydrogen(structure: &MolecularStructure) -> Vec<usize> {
+    (0..structure.atoms.len())
+        .filter(|&index| structure.atoms[index].element == "C")
+        .filter(|&index| first_bonded_hydrogen(structure, index).is_some())
+        .collect()
+}
+
+// COUPLE_CARBONS_PLACEHOLDER
+
+/// Joins `first_carbon` to `second_carbon` with a new C-C single bond, then drops
+/// one hydrogen from each (the expelled H2). Returns the resolved product id and a
+/// selectivity descriptor for the coupled site, or `None` if a coupled carbon has
+/// no hydrogen to give.
+fn couple_carbons(
+    first: &MolecularStructure,
+    first_carbon: usize,
+    second: &MolecularStructure,
+    second_carbon: usize,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<(SubstanceId, SiteDescriptor)>> {
+    let offset = first.atoms.len();
+    let mut editor = MolecularEditor::new(first);
+    // Bond first; both carbons are transiently over-valent until they shed an H.
+    editor.add_group(first_carbon, second, second_carbon, 1.0)?;
+    let joined_second_carbon = second_carbon + offset;
+    let joined = editor.structure();
+    let descriptor = cracking_site_descriptor(&joined, first_carbon, joined_second_carbon);
+    let (Some(first_hydrogen), Some(second_hydrogen)) = (
+        first_bonded_hydrogen(&joined, first_carbon),
+        first_bonded_hydrogen(&joined, joined_second_carbon),
+    ) else {
+        return Ok(None);
+    };
+    editor.remove_atoms(&[first_hydrogen, second_hydrogen])?;
+    let product_id = resolver.resolve(editor.finish()?)?;
+    Ok(Some((product_id, descriptor)))
+}
+
+/// Builds the coupling reaction edge. Self-coupling (`2 CH4 -> C2H6 + H2`) uses a
+/// single reactant term with coefficient 2; coupling two distinct hydrocarbons
+/// uses one term each. The reaction id is order-independent (sorted reactant ids)
+/// so the same pair seeded from either side dedupes in `push_unique_reaction`.
+fn build_coupling_reaction(
+    first: &Substance,
+    second: &Substance,
+    self_coupling: bool,
+    product_id: SubstanceId,
+    descriptor: SiteDescriptor,
+) -> Reaction {
+    let (low, high) = if first.id.as_str() <= second.id.as_str() {
+        (first.id.as_str(), second.id.as_str())
+    } else {
+        (second.id.as_str(), first.id.as_str())
+    };
+    let mut builder = Reaction::builder(format!(
+        "dehydrogenative_coupling/{}/{}",
+        sanitize_id(low),
+        sanitize_id(high)
+    ));
+    builder = if self_coupling {
+        builder.reactant(first.id.clone(), 2, 2)
+    } else {
+        builder
+            .reactant(first.id.clone(), 1, 1)
+            .reactant(second.id.clone(), 1, 1)
+    };
+    builder
+        .product(product_id.clone(), 1)
+        .product(HYDROGEN_ID, 1)
+        .reactant_phase_access(
+            first.id.clone(),
+            [
+                MixturePhase::Organic,
+                MixturePhase::Gas,
+                MixturePhase::SupercriticalFluid,
+            ],
+        )
+        .product_phase(product_id, MixturePhase::Organic)
+        .product_phase(HYDROGEN_ID, MixturePhase::Gas)
+        .pre_exponential_factor(COUPLING_PRE_EXPONENTIAL_FACTOR)
+        .activation_energy_kj_per_mol(COUPLING_ACTIVATION_ENERGY_KJ_PER_MOL)
+        .selectivity_profile(
+            SelectivityProfile::new(ReactionType::HydrocarbonPyrolysis, descriptor)
+                .never_suppress(),
+        )
+        .build()
 }
 
 /// Beta-scission of the `alkane_carbon`-`alkene_carbon` bond: the alkane fragment

@@ -423,16 +423,7 @@ impl DynamicChemistryRegistry {
     ) -> ChemistryResult<DynamicGenerationReport> {
         self.substance(substance_id)?;
         let seeds = vec![self.known_substance_index_or_error(substance_id)?];
-        self.generate_reactions_from_scope(seeds, Some(max_iterations))
-    }
-
-    pub fn generate_reactions_for_to_fixed_point(
-        &mut self,
-        substance_id: &SubstanceId,
-    ) -> ChemistryResult<DynamicGenerationReport> {
-        self.substance(substance_id)?;
-        let seeds = vec![self.known_substance_index_or_error(substance_id)?];
-        self.generate_reactions_from_scope(seeds, None)
+        self.generate_reactions_from_scope(seeds, max_iterations)
     }
 
     pub fn generate_reactions_for_substances(
@@ -441,34 +432,22 @@ impl DynamicChemistryRegistry {
         max_iterations: usize,
     ) -> ChemistryResult<DynamicGenerationReport> {
         let seeds = self.validated_substance_indices(substance_ids)?;
-        self.generate_reactions_from_scope(seeds, Some(max_iterations))
-    }
-
-    pub fn generate_reactions_for_substances_to_fixed_point(
-        &mut self,
-        substance_ids: impl IntoIterator<Item = SubstanceId>,
-    ) -> ChemistryResult<DynamicGenerationReport> {
-        let seeds = self.validated_substance_indices(substance_ids)?;
-        self.generate_reactions_from_scope(seeds, None)
+        self.generate_reactions_from_scope(seeds, max_iterations)
     }
 
     pub fn generate_reactions(
         &mut self,
         max_iterations: usize,
     ) -> ChemistryResult<DynamicGenerationReport> {
-        self.generate_reactions_from_scope(self.all_known_substance_indices(), Some(max_iterations))
-    }
-
-    pub fn generate_to_fixed_point(&mut self) -> ChemistryResult<DynamicGenerationReport> {
-        self.generate_reactions_from_scope(self.all_known_substance_indices(), None)
+        self.generate_reactions_from_scope(self.all_known_substance_indices(), max_iterations)
     }
 
     fn generate_reactions_from_scope(
         &mut self,
         seeds: Vec<KnownSubstanceIndex>,
-        max_iterations: Option<usize>,
+        max_iterations: usize,
     ) -> ChemistryResult<DynamicGenerationReport> {
-        if max_iterations == Some(0) {
+        if max_iterations == 0 {
             return Err(ChemistryError::InvalidReaction {
                 reaction_id: "<dynamic-generation>".to_string(),
                 reason: "max_iterations must be greater than zero".to_string(),
@@ -493,7 +472,7 @@ impl DynamicChemistryRegistry {
         }
         let mut iteration = 0usize;
         loop {
-            if max_iterations.is_some_and(|max| iteration >= max) {
+            if iteration >= max_iterations {
                 return Ok(DynamicGenerationReport {
                     iterations: iteration,
                     added_substances,
@@ -3049,18 +3028,19 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_generation_can_run_to_fixed_point_without_iteration_limit() {
+    fn bounded_generation_terminates_and_seed_pass_is_idempotent() {
+        // Generation is always bounded by a step limit; there is no unbounded
+        // fixed-point mode. Growth reactions (e.g. dehydrogenative coupling) mean
+        // the reachable set from a hydrocarbon never converges, so a finite limit
+        // stops cleanly mid-expansion. Re-running from the same seed is idempotent:
+        // every generator already fired for the seed (its generation mask is
+        // saturated), so the second pass processes nothing and adds nothing.
+        const DEPTH: usize = 2;
         let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
         let methane = registry.resolve_frowns("C").unwrap();
-        let first = registry
-            .generate_reactions_for_to_fixed_point(&methane)
-            .unwrap();
-        let second = registry
-            .generate_reactions_for_to_fixed_point(&methane)
-            .unwrap();
+        let first = registry.generate_reactions_for(&methane, DEPTH).unwrap();
+        let second = registry.generate_reactions_for(&methane, DEPTH).unwrap();
 
-        assert!(first.reached_fixed_point);
-        assert_eq!(first.remaining_queue, 0);
         assert!(first.generator_errors.is_empty());
         assert!(first.added_reactions > 0);
         assert!(registry

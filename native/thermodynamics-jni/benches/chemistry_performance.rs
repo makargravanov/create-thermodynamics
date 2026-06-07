@@ -118,14 +118,10 @@ fn main() {
         black_box(registry.generate_reactions_for(&alkene, 1).unwrap());
     }));
 
-    cases.push(run("dynamic generate methane fixed point", 50, || {
+    cases.push(run("dynamic generate methane bounded depth 2", 50, || {
         let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
         let methane = registry.resolve_frowns("C").unwrap();
-        black_box(
-            registry
-                .generate_reactions_for_to_fixed_point(&methane)
-                .unwrap(),
-        );
+        black_box(registry.generate_reactions_for(&methane, 2).unwrap());
     }));
 
     print_cases(&cases);

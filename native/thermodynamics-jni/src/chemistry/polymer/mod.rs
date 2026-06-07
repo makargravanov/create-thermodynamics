@@ -695,13 +695,13 @@ fn alkene_repeat_unit(
     first: usize,
     second: usize,
 ) -> ChemistryResult<PolymerRepeatUnit> {
-    let mut structure = monomer.clone();
-    for bond in &mut structure.bonds {
-        if (bond.from == first && bond.to == second) || (bond.from == second && bond.to == first) {
-            bond.order = 1.0;
-            break;
-        }
-    }
+    // Saturate the C=C to the backbone single bond through the editor, which also
+    // drops any E/Z stereo descriptor that referenced that double bond — leaving a
+    // dangling descriptor would fail structure validation. `structure()` snapshots
+    // without adding hydrogens, so the two carbons stay open connection points.
+    let mut editor = MolecularEditor::new(monomer);
+    editor.set_bond_order(first, second, 1.0)?;
+    let mut structure = editor.structure();
     structure.source_code = "polymer-repeat-unit".to_string();
     mark_repeat_connection(&mut structure.atoms[first]);
     mark_repeat_connection(&mut structure.atoms[second]);

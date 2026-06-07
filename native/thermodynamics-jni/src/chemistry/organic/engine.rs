@@ -406,6 +406,19 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
             for reaction in generate_pyrolysis(substance, &mut resolver)? {
                 push_unique_reaction(&mut generated.reactions, &mut reaction_ids, reaction)?;
             }
+            // Bimolecular dehydrogenative coupling joins this light hydrocarbon to
+            // every other (including itself: 2 CH4 -> C2H6 + H2). It is a GROWTH
+            // reaction — its alkane product is itself a valid coupling substrate — but
+            // generation is always bounded by a step limit (max_iterations), so the
+            // growth cascade terminates at the requested depth. There is no unbounded
+            // enumeration mode for it to diverge in.
+            for partner in &space.all_substances {
+                for reaction in
+                    generate_dehydrogenative_coupling(substance, partner, &mut resolver)?
+                {
+                    push_unique_reaction(&mut generated.reactions, &mut reaction_ids, reaction)?;
+                }
+            }
             // Step-growth polycondensation pairs this diacid with every other
             // difunctional comonomer (diol/diamine). The generator self-gates to
             // clean difunctional pairs, so most pairings return None cheaply.
