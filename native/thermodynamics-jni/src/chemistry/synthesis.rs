@@ -4,7 +4,7 @@ use super::dynamic::DynamicChemistryRegistry;
 use super::error::{ChemistryError, ChemistryResult};
 use super::frowns::write_frowns;
 use super::molecule::MolecularStructure;
-use super::reaction::{Reaction, ReactionId, StoichiometricTerm};
+use super::reaction::{ExternalRequirement, Reaction, ReactionId, StoichiometricTerm};
 use super::substance::SubstanceId;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -13,6 +13,7 @@ pub struct SynthesisPlanner {
     pub max_routes: usize,
     pub allowed_reaction_prefixes: BTreeSet<String>,
     pub safety_policy: SynthesisSafetyPolicy,
+    pub include_routes_with_missing_inputs: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -22,11 +23,29 @@ pub struct SynthesisSafetyPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SynthesisRequest {
+    pub target: SynthesisTarget,
+    pub available_substances: BTreeSet<SubstanceId>,
+    pub max_steps: Option<usize>,
+    pub max_routes: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SynthesisTarget {
+    Substance(SubstanceId),
+    Structure(MolecularStructure),
+    Frowns(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SynthesisRoute {
     pub target: SubstanceId,
     pub steps: Vec<SynthesisStep>,
     pub estimated_yield: f64,
     pub score: f64,
+    pub required_additions: Vec<SynthesisRequirement>,
+    pub condition_hints: Vec<SynthesisConditionHint>,
+    pub explanation: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,7 +53,37 @@ pub struct SynthesisStep {
     pub reaction_id: ReactionId,
     pub reactants: Vec<SubstanceId>,
     pub products: Vec<SubstanceId>,
+    pub missing_reactants: Vec<SubstanceId>,
+    pub external_reactants: Vec<SynthesisExternalHint>,
+    pub external_catalysts: Vec<SynthesisExternalHint>,
+    pub condition_hints: Vec<SynthesisConditionHint>,
+    pub requires_uv: bool,
+    pub phase_hints: Vec<String>,
     pub product_fraction: f64,
+    pub step_cost: f64,
+    pub safety_penalty: f64,
+    pub condition_penalty: f64,
+    pub selectivity_penalty: f64,
+    pub purification_penalty: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SynthesisRequirement {
+    pub substance_id: SubstanceId,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SynthesisExternalHint {
+    pub description: String,
+    pub moles_per_reaction: f64,
+    pub unchecked_mass_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SynthesisConditionHint {
+    pub description: String,
+    pub penalty: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -51,7 +100,60 @@ impl Default for SynthesisPlanner {
             max_routes: 8,
             allowed_reaction_prefixes: BTreeSet::new(),
             safety_policy: SynthesisSafetyPolicy::default(),
+            include_routes_with_missing_inputs: true,
         }
+    }
+}
+
+impl SynthesisRequest {
+    pub fn for_substance(target: impl Into<SubstanceId>) -> Self {
+        Self {
+            target: SynthesisTarget::Substance(target.into()),
+            available_substances: BTreeSet::new(),
+            max_steps: None,
+            max_routes: None,
+        }
+    }
+
+    pub fn for_structure(target: MolecularStructure) -> Self {
+        Self {
+            target: SynthesisTarget::Structure(target),
+            available_substances: BTreeSet::new(),
+            max_steps: None,
+            max_routes: None,
+        }
+    }
+
+    pub fn for_frowns(target: impl Into<String>) -> Self {
+        Self {
+            target: SynthesisTarget::Frowns(target.into()),
+            available_substances: BTreeSet::new(),
+            max_steps: None,
+            max_routes: None,
+        }
+    }
+
+    pub fn with_available_substance(mut self, substance_id: impl Into<SubstanceId>) -> Self {
+        self.available_substances.insert(substance_id.into());
+        self
+    }
+
+    pub fn with_available_substances<I>(mut self, substance_ids: I) -> Self
+    where
+        I: IntoIterator<Item = SubstanceId>,
+    {
+        self.available_substances.extend(substance_ids);
+        self
+    }
+
+    pub fn with_max_steps(mut self, max_steps: usize) -> Self {
+        self.max_steps = Some(max_steps);
+        self
+    }
+
+    pub fn with_max_routes(mut self, max_routes: usize) -> Self {
+        self.max_routes = Some(max_routes);
+        self
     }
 }
 
@@ -154,33 +256,58 @@ impl SynthesisPlanner {
         self
     }
 
+    pub fn include_routes_with_missing_inputs(mut self, value: bool) -> Self {
+        self.include_routes_with_missing_inputs = value;
+        self
+    }
+
+    pub fn plan_routes(
+        &self,
+        registry: &DynamicChemistryRegistry,
+        request: SynthesisRequest,
+    ) -> ChemistryResult<Vec<SynthesisRoute>> {
+        let mut working_registry = registry.clone();
+        let target = resolve_target(&mut working_registry, request.target)?;
+        self.find_routes_in_working_registry(
+            &mut working_registry,
+            request.available_substances,
+            target,
+            request.max_steps.unwrap_or(self.max_steps),
+            request.max_routes.unwrap_or(self.max_routes),
+        )
+    }
+
     pub fn find_routes(
         &self,
         registry: &mut DynamicChemistryRegistry,
         starting_substances: impl IntoIterator<Item = SubstanceId>,
         target_structure: MolecularStructure,
     ) -> ChemistryResult<Vec<SynthesisRoute>> {
-        if self.max_steps == 0 {
+        let request = SynthesisRequest::for_structure(target_structure)
+            .with_available_substances(starting_substances.into_iter().collect::<Vec<_>>());
+        self.plan_routes(registry, request)
+    }
+
+    fn find_routes_in_working_registry(
+        &self,
+        registry: &mut DynamicChemistryRegistry,
+        starting_substances: impl IntoIterator<Item = SubstanceId>,
+        target: SubstanceId,
+        max_steps: usize,
+        max_routes: usize,
+    ) -> ChemistryResult<Vec<SynthesisRoute>> {
+        if max_steps == 0 {
             return Err(ChemistryError::InvalidReaction {
                 reaction_id: "<synthesis-planner>".to_string(),
                 reason: "max_steps must be greater than zero".to_string(),
             });
         }
-        if self.max_routes == 0 {
+        if max_routes == 0 {
             return Err(ChemistryError::InvalidReaction {
                 reaction_id: "<synthesis-planner>".to_string(),
                 reason: "max_routes must be greater than zero".to_string(),
             });
         }
-        let target_canonical = write_frowns(&target_structure)?;
-        if let Some(reason) = self
-            .safety_policy
-            .denied_canonical_structures
-            .get(&target_canonical)
-        {
-            return Err(denied_synthesis_id("<target-structure>", reason));
-        }
-        let target = registry.resolve_structure(target_structure)?;
         self.safety_policy.check_substance(registry, &target)?;
         let mut initial_known = BTreeSet::new();
         for substance_id in starting_substances {
@@ -195,6 +322,9 @@ impl SynthesisPlanner {
                 steps: Vec::new(),
                 estimated_yield: 1.0,
                 score: 0.0,
+                required_additions: Vec::new(),
+                condition_hints: Vec::new(),
+                explanation: "target is already available".to_string(),
             }]);
         }
 
@@ -207,16 +337,15 @@ impl SynthesisPlanner {
         let mut seen_known_sets = BTreeSet::from([known_set_key(&initial_known)]);
 
         while let Some(state) = queue.pop_front() {
-            if state.steps.len() >= self.max_steps {
+            if state.steps.len() >= max_steps || state.known.is_empty() {
                 continue;
             }
             registry.generate_reactions_for_substances(state.known.iter().cloned(), 1)?;
             let candidates = registry
-                .reactions()
+                .reaction_candidates_for_substances(state.known.iter())
+                .into_iter()
                 .filter(|reaction| self.reaction_allowed(reaction))
-                .filter_map(|reaction| {
-                    synthesis_step_from_available_reaction(reaction, &state.known)
-                })
+                .filter_map(|reaction| synthesis_step_from_available_reaction(reaction, &state.known))
                 .collect::<Vec<_>>();
             for step in candidates {
                 let mut next_known = state.known.clone();
@@ -236,18 +365,15 @@ impl SynthesisPlanner {
                 next_steps.push(step.clone());
                 let estimated_yield = state.estimated_yield * step.product_fraction;
                 if next_known.contains(&target) {
-                    routes.push(SynthesisRoute {
-                        target: target.clone(),
-                        score: route_score(&next_steps, estimated_yield),
-                        steps: next_steps.clone(),
+                    routes.push(build_route(
+                        target.clone(),
                         estimated_yield,
-                    });
-                    routes.sort_by(|left, right| {
-                        left.score
-                            .total_cmp(&right.score)
-                            .then_with(|| right.estimated_yield.total_cmp(&left.estimated_yield))
-                    });
-                    routes.truncate(self.max_routes);
+                        next_steps.clone(),
+                        &initial_known,
+                        "route can be run from the available substances".to_string(),
+                    ));
+                    routes.sort_by(compare_routes);
+                    routes.truncate(max_routes);
                     continue;
                 }
                 let key = known_set_key(&next_known);
@@ -260,6 +386,24 @@ impl SynthesisPlanner {
                 }
             }
         }
+
+        if self.include_routes_with_missing_inputs && routes.len() < max_routes {
+            let mut visiting = BTreeSet::new();
+            let mut backward = backward_routes_for_target(
+                registry,
+                &self.safety_policy,
+                &initial_known,
+                &target,
+                max_steps,
+                max_routes - routes.len(),
+                &mut visiting,
+                self,
+            )?;
+            routes.append(&mut backward);
+            routes.sort_by(compare_routes);
+            routes.dedup_by(|left, right| route_key(left) == route_key(right));
+            routes.truncate(max_routes);
+        }
         Ok(routes)
     }
 
@@ -269,6 +413,20 @@ impl SynthesisPlanner {
                 .allowed_reaction_prefixes
                 .iter()
                 .any(|prefix| reaction.id.as_str().starts_with(prefix))
+    }
+}
+
+fn resolve_target(
+    registry: &mut DynamicChemistryRegistry,
+    target: SynthesisTarget,
+) -> ChemistryResult<SubstanceId> {
+    match target {
+        SynthesisTarget::Substance(id) => {
+            registry.substance(&id)?;
+            Ok(id)
+        }
+        SynthesisTarget::Structure(structure) => registry.resolve_structure(structure),
+        SynthesisTarget::Frowns(code) => registry.resolve_frowns(&code),
     }
 }
 
@@ -289,77 +447,398 @@ fn synthesis_step_from_available_reaction(
     reaction: &Reaction,
     known: &BTreeSet<SubstanceId>,
 ) -> Option<SynthesisStep> {
-    let reactants = reaction
-        .reactants
-        .iter()
-        .map(|term| term.substance_id.clone())
-        .collect::<Vec<_>>();
+    let reactants = term_ids(&reaction.reactants);
     if !reactants.iter().all(|substance| known.contains(substance)) {
         return None;
     }
-    if !reaction.products.is_empty() {
-        return Some(SynthesisStep {
-            reaction_id: reaction.id.clone(),
-            reactants,
-            products: term_ids(&reaction.products),
-            product_fraction: 1.0,
+    synthesis_step_from_reaction(reaction, known)
+}
+
+fn synthesis_step_from_reaction(
+    reaction: &Reaction,
+    known: &BTreeSet<SubstanceId>,
+) -> Option<SynthesisStep> {
+    let reactants = term_ids(&reaction.reactants);
+    let missing_reactants = reactants
+        .iter()
+        .filter(|substance| !known.contains(*substance))
+        .cloned()
+        .collect::<Vec<_>>();
+    let products = reaction_products(reaction);
+    if products.is_empty() {
+        return None;
+    }
+    let product_fraction = reaction_product_fraction(reaction, &products);
+    let mut step = SynthesisStep {
+        reaction_id: reaction.id.clone(),
+        reactants,
+        products,
+        missing_reactants,
+        external_reactants: external_hints(&reaction.external_reactants),
+        external_catalysts: external_hints(&reaction.external_catalysts),
+        condition_hints: condition_hints(reaction),
+        requires_uv: reaction.requires_uv,
+        phase_hints: phase_hints(reaction),
+        product_fraction,
+        step_cost: 0.0,
+        safety_penalty: safety_penalty(reaction),
+        condition_penalty: condition_penalty(reaction),
+        selectivity_penalty: selectivity_penalty(reaction, product_fraction),
+        purification_penalty: purification_penalty(reaction, product_fraction),
+    };
+    step.step_cost = synthesis_step_cost(&step);
+    Some(step)
+}
+
+fn backward_routes_for_target(
+    registry: &DynamicChemistryRegistry,
+    safety_policy: &SynthesisSafetyPolicy,
+    available: &BTreeSet<SubstanceId>,
+    target: &SubstanceId,
+    remaining_steps: usize,
+    max_routes: usize,
+    visiting: &mut BTreeSet<SubstanceId>,
+    planner: &SynthesisPlanner,
+) -> ChemistryResult<Vec<SynthesisRoute>> {
+    if remaining_steps == 0 || max_routes == 0 || !visiting.insert(target.clone()) {
+        return Ok(Vec::new());
+    }
+    let mut routes = Vec::new();
+    for reaction in registry
+        .reactions()
+        .filter(|reaction| planner.reaction_allowed(reaction))
+        .filter(|reaction| reaction_can_produce(reaction, target))
+    {
+        let Some(step) = synthesis_step_from_reaction(reaction, available) else {
+            continue;
+        };
+        if !step_products_allowed(registry, safety_policy, &step)? {
+            continue;
+        }
+        let mut sub_steps = Vec::new();
+        let mut requirements = Vec::new();
+        for reactant in step.missing_reactants.clone() {
+            if !safety_policy.allows_substance(registry, &reactant)? {
+                continue;
+            }
+            let nested = backward_routes_for_target(
+                registry,
+                safety_policy,
+                available,
+                &reactant,
+                remaining_steps.saturating_sub(1),
+                1,
+                visiting,
+                planner,
+            )?;
+            if let Some(route) = nested.into_iter().next() {
+                sub_steps.extend(route.steps);
+                requirements.extend(route.required_additions);
+            } else {
+                requirements.push(SynthesisRequirement {
+                    substance_id: reactant.clone(),
+                    reason: format!("required reactant for planned step '{}'", step.reaction_id),
+                });
+            }
+        }
+        sub_steps.push(step);
+        if sub_steps.len() > remaining_steps {
+            continue;
+        }
+        let estimated_yield = sub_steps
+            .iter()
+            .map(|step| step.product_fraction)
+            .product::<f64>();
+        let mut route = build_route(
+            target.clone(),
+            estimated_yield,
+            sub_steps,
+            available,
+            if requirements.is_empty() {
+                "route can be completed from available substances and generated intermediates"
+                    .to_string()
+            } else {
+                "route is chemically known, but requires additional input substances".to_string()
+            },
+        );
+        route.required_additions.extend(requirements);
+        route.required_additions.sort_by(|left, right| {
+            left.substance_id
+                .cmp(&right.substance_id)
+                .then_with(|| left.reason.cmp(&right.reason))
         });
+        route
+            .required_additions
+            .dedup_by(|left, right| left.substance_id == right.substance_id);
+        route.score = route_score(&route.steps, route.estimated_yield, &route.required_additions);
+        routes.push(route);
+        routes.sort_by(compare_routes);
+        routes.truncate(max_routes);
+    }
+    visiting.remove(target);
+    Ok(routes)
+}
+
+fn reaction_can_produce(reaction: &Reaction, target: &SubstanceId) -> bool {
+    reaction_products(reaction)
+        .iter()
+        .any(|product| product == target)
+}
+
+fn reaction_products(reaction: &Reaction) -> Vec<SubstanceId> {
+    let mut products = term_ids(&reaction.products);
+    if let Some(distribution) = &reaction.product_distribution {
+        for variant in &distribution.variants {
+            products.extend(term_ids(&variant.products));
+        }
+    }
+    for channel in &reaction.channels {
+        products.extend(term_ids(&channel.products));
+    }
+    products.sort();
+    products.dedup();
+    products
+}
+
+fn reaction_product_fraction(reaction: &Reaction, products: &[SubstanceId]) -> f64 {
+    if !reaction.products.is_empty() {
+        return 1.0;
     }
     if let Some(distribution) = &reaction.product_distribution {
-        let mut products = Vec::new();
         let mut fraction_by_product = BTreeMap::new();
         for variant in &distribution.variants {
             for product in term_ids(&variant.products) {
-                products.push(product.clone());
                 *fraction_by_product.entry(product).or_insert(0.0) += variant.fraction;
             }
         }
-        products.sort();
-        products.dedup();
-        let product_fraction = products
+        return products
             .iter()
             .filter_map(|product| fraction_by_product.get(product))
             .copied()
             .fold(0.0_f64, f64::max);
-        return Some(SynthesisStep {
-            reaction_id: reaction.id.clone(),
-            reactants,
-            products,
-            product_fraction,
-        });
     }
-    if !reaction.channels.is_empty() {
-        let mut products = Vec::new();
-        for channel in &reaction.channels {
-            products.extend(term_ids(&channel.products));
-        }
-        products.sort();
-        products.dedup();
-        let product_fraction = if products.is_empty() {
-            0.0
-        } else {
-            1.0 / products.len() as f64
-        };
-        return Some(SynthesisStep {
-            reaction_id: reaction.id.clone(),
-            reactants,
-            products,
-            product_fraction,
-        });
+    if !reaction.channels.is_empty() && !products.is_empty() {
+        return 1.0 / products.len() as f64;
     }
-    None
+    0.0
 }
 
 fn term_ids(terms: &[StoichiometricTerm]) -> Vec<SubstanceId> {
     terms.iter().map(|term| term.substance_id.clone()).collect()
 }
 
-fn route_score(steps: &[SynthesisStep], estimated_yield: f64) -> f64 {
-    steps.len() as f64 + (1.0 - estimated_yield.clamp(0.0, 1.0))
+fn build_route(
+    target: SubstanceId,
+    estimated_yield: f64,
+    steps: Vec<SynthesisStep>,
+    known_at_start: &BTreeSet<SubstanceId>,
+    explanation: String,
+) -> SynthesisRoute {
+    let mut required_additions = Vec::new();
+    for step in &steps {
+        for reactant in &step.missing_reactants {
+            if !known_at_start.contains(reactant) {
+                required_additions.push(SynthesisRequirement {
+                    substance_id: reactant.clone(),
+                    reason: format!("required by reaction '{}'", step.reaction_id),
+                });
+            }
+        }
+    }
+    required_additions.sort_by(|left, right| left.substance_id.cmp(&right.substance_id));
+    required_additions.dedup_by(|left, right| left.substance_id == right.substance_id);
+    let condition_hints = route_condition_hints(&steps);
+    let score = route_score(&steps, estimated_yield, &required_additions);
+    SynthesisRoute {
+        target,
+        steps,
+        estimated_yield,
+        score,
+        required_additions,
+        condition_hints,
+        explanation,
+    }
+}
+
+fn route_score(
+    steps: &[SynthesisStep],
+    estimated_yield: f64,
+    required_additions: &[SynthesisRequirement],
+) -> f64 {
+    steps.iter().map(|step| step.step_cost).sum::<f64>()
+        + required_additions.len() as f64 * 1.5
+        + (1.0 - estimated_yield.clamp(0.0, 1.0)) * 4.0
+}
+
+fn synthesis_step_cost(step: &SynthesisStep) -> f64 {
+    1.0 + step.safety_penalty
+        + step.condition_penalty
+        + step.selectivity_penalty
+        + step.purification_penalty
+        + step.external_reactants.len() as f64 * 0.4
+        + step.external_catalysts.len() as f64 * 0.2
+        + if step.requires_uv { 0.5 } else { 0.0 }
+}
+
+fn safety_penalty(reaction: &Reaction) -> f64 {
+    let mut penalty = 0.0;
+    if reaction.requires_uv {
+        penalty += 0.5;
+    }
+    penalty += reaction
+        .external_reactants
+        .iter()
+        .filter(|external| external.unchecked_mass_reason.is_some())
+        .count() as f64
+        * 0.75;
+    penalty += reaction.surface_requirements.len() as f64 * 0.25;
+    if reaction.activation_energy_kj_per_mol > 80.0 {
+        penalty += 0.5;
+    }
+    penalty
+}
+
+fn condition_penalty(reaction: &Reaction) -> f64 {
+    let mut penalty = reaction.conditions.len() as f64 * 0.25;
+    for condition in &reaction.conditions {
+        if condition.min_temperature_kelvin.is_some_and(|value| value > 373.15) {
+            penalty += 0.5;
+        }
+        if condition.max_temperature_kelvin.is_some() {
+            penalty += 0.25;
+        }
+        if condition.min_water_activity.is_some() || condition.max_water_activity.is_some() {
+            penalty += 0.2;
+        }
+        if condition.atmosphere.is_some() || condition.max_oxygen_activity.is_some() {
+            penalty += 0.3;
+        }
+        if condition.gas_pressure_atm.is_some_and(|value| value > 1.5) {
+            penalty += 0.4;
+        }
+    }
+    penalty
+}
+
+fn selectivity_penalty(reaction: &Reaction, product_fraction: f64) -> f64 {
+    let mut penalty = if reaction.selectivity_profile.is_some() {
+        0.15
+    } else {
+        0.0
+    };
+    if reaction.channels.len() > 1 || reaction.product_distribution.is_some() {
+        penalty += (1.0 - product_fraction.clamp(0.0, 1.0)) * 2.0;
+    }
+    penalty
+}
+
+fn purification_penalty(reaction: &Reaction, product_fraction: f64) -> f64 {
+    let mut penalty = 0.0;
+    if reaction.channels.len() > 1 {
+        penalty += 0.5;
+    }
+    if reaction.product_distribution.is_some() {
+        penalty += 0.5;
+    }
+    if product_fraction < 0.75 {
+        penalty += 0.5;
+    }
+    if !reaction.product_phases.is_empty() {
+        penalty += 0.15;
+    }
+    penalty
+}
+
+fn external_hints(requirements: &[ExternalRequirement]) -> Vec<SynthesisExternalHint> {
+    requirements
+        .iter()
+        .map(|requirement| SynthesisExternalHint {
+            description: requirement.description.clone(),
+            moles_per_reaction: requirement.moles_per_reaction,
+            unchecked_mass_reason: requirement.unchecked_mass_reason.clone(),
+        })
+        .collect()
+}
+
+fn condition_hints(reaction: &Reaction) -> Vec<SynthesisConditionHint> {
+    let mut hints = reaction
+        .conditions
+        .iter()
+        .map(|condition| SynthesisConditionHint {
+            description: condition.reason.clone(),
+            penalty: 0.25,
+        })
+        .collect::<Vec<_>>();
+    if reaction.requires_uv {
+        hints.push(SynthesisConditionHint {
+            description: "requires ultraviolet light".to_string(),
+            penalty: 0.5,
+        });
+    }
+    for catalyst in &reaction.external_catalysts {
+        hints.push(SynthesisConditionHint {
+            description: format!("requires catalyst '{}'", catalyst.description),
+            penalty: 0.2,
+        });
+    }
+    for requirement in &reaction.surface_requirements {
+        hints.push(SynthesisConditionHint {
+            description: format!("requires surface '{}'", requirement.surface_id),
+            penalty: 0.25,
+        });
+    }
+    hints
+}
+
+fn phase_hints(reaction: &Reaction) -> Vec<String> {
+    reaction
+        .phase_access
+        .iter()
+        .map(|(substance, access)| {
+            let phases = access
+                .phases
+                .iter()
+                .map(|phase| format!("{phase:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{substance}: {phases}")
+        })
+        .collect()
+}
+
+fn route_condition_hints(steps: &[SynthesisStep]) -> Vec<SynthesisConditionHint> {
+    let mut by_description = BTreeMap::<String, f64>::new();
+    for step in steps {
+        for hint in &step.condition_hints {
+            *by_description
+                .entry(hint.description.clone())
+                .or_insert(0.0) += hint.penalty;
+        }
+    }
+    by_description
+        .into_iter()
+        .map(|(description, penalty)| SynthesisConditionHint {
+            description,
+            penalty,
+        })
+        .collect()
 }
 
 fn known_set_key(known: &BTreeSet<SubstanceId>) -> Vec<SubstanceId> {
     known.iter().cloned().collect()
+}
+
+fn route_key(route: &SynthesisRoute) -> Vec<String> {
+    route.steps
+        .iter()
+        .map(|step| step.reaction_id.to_string())
+        .collect()
+}
+
+fn compare_routes(left: &SynthesisRoute, right: &SynthesisRoute) -> std::cmp::Ordering {
+    left.score
+        .total_cmp(&right.score)
+        .then_with(|| right.estimated_yield.total_cmp(&left.estimated_yield))
 }
 
 fn denied_synthesis(substance_id: &SubstanceId, reason: &str) -> ChemistryError {
@@ -380,6 +859,23 @@ mod tests {
     use crate::chemistry::frowns::parse_frowns;
 
     #[test]
+    fn planner_uses_private_working_registry() {
+        let registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let before = registry.reactions().count();
+        let routes = SynthesisPlanner::new()
+            .with_max_steps(2)
+            .plan_routes(
+                &registry,
+                SynthesisRequest::for_frowns("CCO")
+                    .with_available_substance("destroy:chloroethane")
+                    .with_available_substance("destroy:hydroxide"),
+            )
+            .unwrap();
+        assert!(!routes.is_empty());
+        assert_eq!(registry.reactions().count(), before);
+    }
+
+    #[test]
     fn planner_finds_local_route_without_generating_the_whole_space() {
         let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
         let routes = SynthesisPlanner::new()
@@ -398,6 +894,17 @@ mod tests {
             .reaction_id
             .as_str()
             .starts_with("halide_hydroxide_substitution")));
+    }
+
+    #[test]
+    fn planner_reports_missing_inputs_for_known_route() {
+        let registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let routes = SynthesisPlanner::new()
+            .with_max_steps(1)
+            .plan_routes(&registry, SynthesisRequest::for_substance("destroy:water"))
+            .unwrap();
+        assert!(!routes.is_empty());
+        assert!(!routes[0].required_additions.is_empty());
     }
 
     #[test]
