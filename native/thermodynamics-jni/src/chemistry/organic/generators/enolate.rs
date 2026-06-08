@@ -80,6 +80,12 @@ pub(crate) fn generate_alpha_halogenation(
             halogen_element: "I",
             acid_product: "destroy:hydrogen_iodide",
         },
+        AlphaHalogenationSpec {
+            prefix: "alpha_bromination",
+            halogen_reactant: "destroy:bromine",
+            halogen_element: "Br",
+            acid_product: "destroy:hydrobromic_acid",
+        },
     ] {
         let alpha_hydrogen = center.alpha_hydrogens[0];
         let mut editor = MolecularEditor::new(center.participant.structure);

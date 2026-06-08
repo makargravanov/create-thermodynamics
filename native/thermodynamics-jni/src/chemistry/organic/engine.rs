@@ -89,6 +89,9 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
+                for reaction in generate_halide_dehydrohalogenation(&site, &mut resolver)? {
+                    push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                }
                 for metal in [
                     OrganometallicFormationMetal::Magnesium,
                     OrganometallicFormationMetal::Lithium,
@@ -106,6 +109,9 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
                 if let Some(reaction) = generate_alcohol_dehydration(&site, &mut resolver)? {
+                    push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                }
+                if let Some(reaction) = generate_keto_enol_tautomerization(&site, &mut resolver)? {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
                 let reaction = generate_thionyl_chloride_substitution(&site, &mut resolver)?;
@@ -549,6 +555,18 @@ fn generate_pair_reactions_for_seed(
                 // Intramolecular closure to a lactone when the alcohol is on the
                 // same molecule (self-gated by substance id and ring size).
                 if let Some(reaction) = generate_lactonization(&acid_site, &alcohol_site, resolver)?
+                {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
+            // Condensation with a second carboxylic acid to an anhydride (incl.
+            // self-condensation to the symmetric anhydride). The generator folds
+            // the acid pair into a canonical order, so seeding from either acid
+            // yields one reaction that push_unique_reaction then collapses.
+            for other_acid in space.sites_of(&ReactiveSiteKind::CarboxylicAcid) {
+                let other_acid_site = other_acid.carboxylic_acid_site()?;
+                if let Some(reaction) =
+                    generate_acid_anhydride_formation(&acid_site, &other_acid_site, resolver)?
                 {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }

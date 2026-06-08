@@ -343,3 +343,55 @@ pub(crate) fn generate_wolff_kishner_reduction(
     )
     .build())
 }
+
+pub(crate) fn generate_keto_enol_tautomerization(
+    site: &AlcoholSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    // An enol is a hydroxyl borne on a C=C carbon (e.g. the vinyl alcohol that
+    // alkyne hydration produces). It tautomerizes to the carbonyl: the O-H proton
+    // leaves the oxygen, the C-O bond becomes the carbonyl double bond, the C=C
+    // collapses to a single bond, and the beta carbon picks up the proton. The
+    // equilibrium lies far toward the keto form, so this is modeled as a one-way
+    // conversion. Requiring a genuine order-2.0 C=C neighbor (not aromatic 1.5)
+    // means phenols are correctly excluded — their aromatic ring is not an enol.
+    let structure = site.participant.structure;
+    let enol_carbon = site.carbon;
+    let oxygen = site.oxygen;
+    let hydroxyl_hydrogen = site.hydrogen;
+    let Some(beta_carbon) =
+        structure
+            .neighbors(enol_carbon)
+            .into_iter()
+            .find_map(|(neighbor, order)| {
+                (structure.atoms[neighbor].element == "C"
+                    && crate::chemistry::molecule::bond_order_matches(order, 2.0))
+                .then_some(neighbor)
+            })
+    else {
+        return Ok(None);
+    };
+    let mut editor = MolecularEditor::new(structure);
+    let mapping = editor.remove_atoms(&[hydroxyl_hydrogen])?;
+    let enol_carbon = mapped_atom(&mapping, enol_carbon, "tautomerization enol carbon")?;
+    let oxygen = mapped_atom(&mapping, oxygen, "tautomerization oxygen")?;
+    let beta_carbon = mapped_atom(&mapping, beta_carbon, "tautomerization beta carbon")?;
+    editor.set_bond_order(enol_carbon, oxygen, 2.0)?;
+    editor.set_bond_order(enol_carbon, beta_carbon, 1.0)?;
+    editor.add_atom(beta_carbon, "H", 0.0, 1.0)?;
+    let product = resolver.resolve(editor.finish()?)?;
+    Ok(Some(
+        Reaction::builder(generated_site_reaction_id(
+            "keto_enol_tautomerization",
+            &site.participant,
+        ))
+        .reactant(site.participant.substance.id.clone(), 1, 1)
+        .product(product, 1)
+        .catalyst_order("destroy:proton", 1)
+        .condition(ReactionCondition::new(
+            "keto-enol tautomerization proceeds under acid or base catalysis",
+        ))
+        .activation_energy_kj_per_mol(20.0)
+        .build(),
+    ))
+}

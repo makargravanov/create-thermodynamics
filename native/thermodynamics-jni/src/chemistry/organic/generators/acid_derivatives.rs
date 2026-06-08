@@ -246,6 +246,97 @@ pub(crate) fn generate_acyl_chloride_thioesterification(
     )
 }
 
+/// Intermolecular acid anhydride formation: two carboxylic acids condense,
+/// expelling water. One acid keeps its carbonyl and its hydroxyl oxygen, which
+/// becomes the bridge; the other sheds its entire -OH (oxygen + proton) and
+/// donates its acyl carbon to that bridge oxygen. This is the dehydrative mirror
+/// of esterification, with a second acid playing the alcohol role. The reaction
+/// is symmetric in its two acid partners, so the id folds the substance ids in a
+/// canonical order and the donor/bridge roles are assigned by that same order —
+/// seeding from either partner yields one identical reaction, which
+/// `push_unique_reaction` then collapses. Self-condensation (one acid with
+/// itself, 2 RCOOH -> (RCO)2O) is allowed and produces the symmetric anhydride.
+pub(crate) fn generate_acid_anhydride_formation(
+    first_site: &CarboxylicAcidSite<'_>,
+    second_site: &CarboxylicAcidSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    // Canonical ordering: the bridge-oxygen donor is the lexicographically
+    // smaller substance id (ties broken by acyl-carbon index for two sites on
+    // one molecule), so the symmetric pair maps to a single reaction.
+    let first_key = (first_site.participant.substance.id.as_str(), first_site.carbon);
+    let second_key = (
+        second_site.participant.substance.id.as_str(),
+        second_site.carbon,
+    );
+    if first_key == second_key {
+        return Ok(None);
+    }
+    let (bridge_site, acyl_site) = if first_key <= second_key {
+        (first_site, second_site)
+    } else {
+        (second_site, first_site)
+    };
+
+    // Bridge acid: drop only the hydroxyl proton, keeping its oxygen as the
+    // bridge. Acyl acid: drop its whole -OH so its acyl carbon bonds the bridge.
+    let mut bridge_editor = MolecularEditor::new(bridge_site.participant.structure);
+    let bridge_mapping = bridge_editor.remove_atoms(&[bridge_site.hydroxyl_hydrogen])?;
+    let bridge_oxygen = mapped_atom(
+        &bridge_mapping,
+        bridge_site.hydroxyl_oxygen,
+        "anhydride bridge oxygen",
+    )?;
+    let bridge_fragment = bridge_editor.finish()?;
+
+    let mut acyl_editor = MolecularEditor::new(acyl_site.participant.structure);
+    let acyl_mapping =
+        acyl_editor.remove_atoms(&[acyl_site.hydroxyl_oxygen, acyl_site.hydroxyl_hydrogen])?;
+    let acyl_carbon = mapped_atom(&acyl_mapping, acyl_site.carbon, "anhydride acyl carbon")?;
+    let acyl_fragment = acyl_editor.finish()?;
+
+    let product = resolver.resolve(MolecularEditor::join_structures(
+        &bridge_fragment,
+        bridge_oxygen,
+        &acyl_fragment,
+        acyl_carbon,
+        1.0,
+    )?)?;
+
+    let self_condensation =
+        bridge_site.participant.substance.id == acyl_site.participant.substance.id;
+    let acyl_coefficient = if self_condensation { 2 } else { 1 };
+    let mut builder = Reaction::builder(generated_pair_site_reaction_id(
+        "acid_anhydride_formation",
+        &bridge_site.participant,
+        &acyl_site.participant,
+    ))
+    .product(product, 1)
+    .product("destroy:water", 1)
+    .catalyst_order("destroy:sulfuric_acid", 1)
+    .condition(
+        ReactionCondition::new(
+            "anhydride formation is an equilibrium dehydration favored only under \
+             acid catalysis and water-poor conditions",
+        )
+        .acidity(AcidityCondition::Acidic)
+        .max_water_activity(0.5),
+    )
+    .activation_energy_kj_per_mol(35.0)
+    .selectivity_profile(SelectivityProfile::new(
+        ReactionType::AcylSubstitution,
+        SiteDescriptorBuilder::from_carboxylic_acid_site(bridge_site),
+    ));
+    builder = if self_condensation {
+        builder.reactant(bridge_site.participant.substance.id.clone(), acyl_coefficient, 1)
+    } else {
+        builder
+            .reactant(bridge_site.participant.substance.id.clone(), 1, 1)
+            .reactant(acyl_site.participant.substance.id.clone(), 1, 1)
+    };
+    Ok(Some(builder.build()))
+}
+
 pub(crate) fn generate_anhydride_hydrolysis(
     site: &AcidAnhydrideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,

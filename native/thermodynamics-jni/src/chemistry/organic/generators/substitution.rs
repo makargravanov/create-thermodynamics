@@ -52,6 +52,60 @@ pub(crate) fn generate_halide_hydroxide_substitution(
     ))
 }
 
+pub(crate) fn generate_halide_dehydrohalogenation(
+    site: &HalideSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Vec<Reaction>> {
+    // E2 elimination: a base removes a beta hydrogen anti-periplanar to the
+    // leaving halide, the C-X bond breaks, and the resulting electrons form the
+    // new pi bond. Mechanistically the mirror of acid-catalyzed alcohol
+    // dehydration, with halide (not water) as the leaving group. Every beta
+    // carbon bearing an abstractable hydrogen is a distinct regiochemical
+    // outcome (Zaitsev vs Hofmann), so we emit one reaction per beta carbon and
+    // let the selectivity layer rank them.
+    let structure = site.participant.structure;
+    let carbon = site.carbon;
+    let halogen = site.halogen;
+    let halide_ion = halide_ion(structure, halogen, "dehydrohalogenation", &site.participant)?;
+    let mut reactions = Vec::new();
+    for (beta_carbon, order) in structure.neighbors(carbon) {
+        if structure.atoms[beta_carbon].element != "C" || !bond_order_matches(order, 1.0) {
+            continue;
+        }
+        let Some(beta_hydrogen) = first_bonded_hydrogen(structure, beta_carbon) else {
+            continue;
+        };
+        let mut editor = MolecularEditor::new(structure);
+        let mapping = editor.remove_atoms(&[halogen, beta_hydrogen])?;
+        let alpha = mapped_atom(&mapping, carbon, "dehydrohalogenation alpha carbon")?;
+        let beta = mapped_atom(&mapping, beta_carbon, "dehydrohalogenation beta carbon")?;
+        editor.set_bond_order(alpha, beta, 2.0)?;
+        let product = resolver.resolve(editor.finish()?)?;
+        reactions.push(
+            Reaction::builder(generated_site_reaction_id(
+                "dehydrohalogenation",
+                &site.participant,
+            ))
+            .reactant(site.participant.substance.id.clone(), 1, 1)
+            .reactant("destroy:hydroxide", 1, 1)
+            .product(product, 1)
+            .product(halide_ion, 1)
+            .product("destroy:water", 1)
+            .condition(
+                ReactionCondition::new("E2 elimination requires a base to abstract a beta proton")
+                    .acidity(AcidityCondition::Basic),
+            )
+            .activation_energy_kj_per_mol(30.0)
+            .selectivity_profile(SelectivityProfile::new(
+                ReactionType::E2,
+                SiteDescriptorBuilder::from_halide_site(site),
+            ))
+            .build(),
+        );
+    }
+    Ok(reactions)
+}
+
 pub(crate) fn generate_alkoxide_protonation(
     site: &AlkoxideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
