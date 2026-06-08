@@ -467,6 +467,14 @@ pub fn reaction_rate_mol_per_bucket_per_tick_with_context(
     if reaction.requires_uv {
         rate *= context.uv_power;
     }
+    if let Some(delta_v_cm3) = reaction.activation_volume_cm3_per_mol {
+        let delta_v_m3 = delta_v_cm3 * 1.0e-6;
+        let delta_p = mixture.gas_pressure_pascal() - super::mixture::STANDARD_PRESSURE_PASCAL;
+        let pressure_correction =
+            (-delta_v_m3 * delta_p / (super::reaction::GAS_CONSTANT_J_PER_MOL_KELVIN * mixture.temperature_kelvin()))
+                .exp();
+        rate *= pressure_correction;
+    }
     rate *= reaction_selectivity_rate_factor(registry, mixture, reaction, context)?;
     rate *= surface_rate_factor(reaction, context)?;
     for (substance_id, order) in &reaction.orders {
@@ -525,6 +533,14 @@ fn reaction_rate_mol_per_bucket_per_tick_for_indexed_reaction(
     rate *= condition_evaluation.multiplier;
     if reaction.requires_uv {
         rate *= context.uv_power;
+    }
+    if let Some(delta_v_cm3) = reaction.activation_volume_cm3_per_mol {
+        let delta_v_m3 = delta_v_cm3 * 1.0e-6;
+        let delta_p = mixture.gas_pressure_pascal() - super::mixture::STANDARD_PRESSURE_PASCAL;
+        let pressure_correction =
+            (-delta_v_m3 * delta_p / (super::reaction::GAS_CONSTANT_J_PER_MOL_KELVIN * mixture.temperature_kelvin()))
+                .exp();
+        rate *= pressure_correction;
     }
     rate *= reaction_selectivity_rate_factor(registry, mixture, reaction, context)?;
     rate *= surface_rate_factor(reaction, context)?;

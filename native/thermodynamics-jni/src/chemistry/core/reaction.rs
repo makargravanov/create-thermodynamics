@@ -91,6 +91,7 @@ pub struct Reaction {
     pub reaction_results: Vec<ReactionResult>,
     pub pre_exponential_factor: f64,
     pub activation_energy_kj_per_mol: f64,
+    pub activation_volume_cm3_per_mol: Option<f64>,
     pub enthalpy_change_kj_per_mol: f64,
     pub thermodynamics: Option<ReactionThermodynamics>,
     pub reverse_reaction_id: Option<ReactionId>,
@@ -175,6 +176,7 @@ impl Reaction {
                 reaction_results: Vec::new(),
                 pre_exponential_factor: 10_000.0,
                 activation_energy_kj_per_mol: 25.0,
+                activation_volume_cm3_per_mol: None,
                 enthalpy_change_kj_per_mol: 0.0,
                 thermodynamics: None,
                 reverse_reaction_id: None,
@@ -653,6 +655,11 @@ impl ReactionBuilder {
 
     pub fn activation_energy_kj_per_mol(mut self, value: f64) -> Self {
         self.reaction.activation_energy_kj_per_mol = value;
+        self
+    }
+
+    pub fn activation_volume_cm3_per_mol(mut self, value: f64) -> Self {
+        self.reaction.activation_volume_cm3_per_mol = Some(value);
         self
     }
 

@@ -271,23 +271,25 @@ pub(crate) fn generate_chain_growth_polymerization(
         return Ok(None);
     };
     let product = resolver.resolve_substance(polymer)?;
-    Ok(Some(
-        Reaction::builder(generated_site_reaction_id(
-            "chain_growth_polymerization",
-            &site.participant,
-        ))
-        .reactant(substance.id.clone(), monomer_count, 1)
-        .product(product, 1)
-        // Initiated radical/ionic chain growth is thermally promoted but has no
-        // sharp cutoff, so the Arrhenius barrier alone gates it (no binary
-        // temperature ban). Sized for a typical vinyl propagation.
-        .activation_energy_kj_per_mol(40.0)
-        .selectivity_profile(SelectivityProfile::new(
-            ReactionType::ChainGrowthPolymerization,
-            SiteDescriptorBuilder::from_unsaturated_bond_site(site),
-        ))
-        .build(),
+    let delta_v = crate::chemistry::polymer::estimate_polymerization_delta_v(site.participant.structure);
+    let mut builder = Reaction::builder(generated_site_reaction_id(
+        "chain_growth_polymerization",
+        &site.participant,
     ))
+    .reactant(substance.id.clone(), monomer_count, 1)
+    .product(product, 1)
+    // Initiated radical/ionic chain growth is thermally promoted but has no
+    // sharp cutoff, so the Arrhenius barrier alone gates it (no binary
+    // temperature ban). Sized for a typical vinyl propagation.
+    .activation_energy_kj_per_mol(40.0)
+    .selectivity_profile(SelectivityProfile::new(
+        ReactionType::ChainGrowthPolymerization,
+        SiteDescriptorBuilder::from_unsaturated_bond_site(site),
+    ));
+    if let Some(delta_v_cm3) = delta_v {
+        builder = builder.activation_volume_cm3_per_mol(delta_v_cm3);
+    }
+    Ok(Some(builder.build()))
 }
 
 pub(crate) fn apply_alkyne_stereo_rule(

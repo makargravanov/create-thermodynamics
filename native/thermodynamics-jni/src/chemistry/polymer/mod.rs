@@ -741,6 +741,90 @@ fn is_aromatic_bond(structure: &MolecularStructure, first: usize, second: usize)
     })
 }
 
+/// Estimates the activation volume (ΔV‡) in cm³/mol for chain-growth polymerization
+/// of a given monomer. The estimate is based on structural features of the
+/// polymerizable C=C bond: substitution degree, steric bulk, and heteroatom
+/// proximity. Returns None if no polymerizable C=C bond is found.
+///
+/// Typical values from literature:
+/// - Ethylene (unsubstituted): -8 to -15 cm³/mol
+/// - Styrene (monosubstituted, aromatic): -10 to -15 cm³/mol
+/// - MMA (disubstituted, ester): -10 to -15 cm³/mol
+/// - Tetrafluoroethylene (disubstituted, F): -5 to -10 cm³/mol
+pub fn estimate_polymerization_delta_v(structure: &MolecularStructure) -> Option<f64> {
+    let (first, second) = polymerizable_carbon_carbon_double_bond(structure)?;
+
+    let base = -8.0;
+
+    let substitution_degree = non_hydrogen_substituent_count(structure, first)
+        + non_hydrogen_substituent_count(structure, second);
+    let substitution_bonus = -2.0 * (substitution_degree as f64);
+
+    let steric = bulky_substituent_count(structure, first, second);
+    let steric_bonus = -1.5 * (steric as f64);
+
+    let hetero = heteroatom_count_near_double_bond(structure, first, second);
+    let heteroatom_correction = 2.0 * (hetero as f64);
+
+    Some(base + substitution_bonus + steric_bonus + heteroatom_correction)
+}
+
+fn non_hydrogen_substituent_count(structure: &MolecularStructure, carbon: usize) -> usize {
+    structure
+        .neighbors(carbon)
+        .into_iter()
+        .filter(|(neighbor, order)| {
+            bond_order_matches(*order, 1.0) && structure.atoms[*neighbor].element != "H"
+        })
+        .count()
+}
+
+fn bulky_substituent_count(structure: &MolecularStructure, first: usize, second: usize) -> usize {
+    let mut count = 0;
+    for carbon in [first, second] {
+        for (neighbor, order) in structure.neighbors(carbon) {
+            if !bond_order_matches(order, 1.0) || structure.atoms[neighbor].element != "C" {
+                continue;
+            }
+            if is_aromatic_carbon(structure, neighbor) {
+                count += 1;
+                continue;
+            }
+            let carbon_neighbors: usize = structure
+                .neighbors(neighbor)
+                .into_iter()
+                .filter(|(n, o)| {
+                    bond_order_matches(*o, 1.0) && structure.atoms[*n].element == "C" && *n != carbon
+                })
+                .count();
+            if carbon_neighbors >= 2 {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn is_aromatic_carbon(structure: &MolecularStructure, atom: usize) -> bool {
+    structure.neighbors(atom).iter().any(|(_, order)| bond_order_matches(*order, 1.5))
+}
+
+fn heteroatom_count_near_double_bond(structure: &MolecularStructure, first: usize, second: usize) -> usize {
+    let mut count = 0;
+    let heteroatoms = ["O", "N", "S", "F", "Cl"];
+    for carbon in [first, second] {
+        for (neighbor, order) in structure.neighbors(carbon) {
+            if !bond_order_matches(order, 1.0) {
+                continue;
+            }
+            if heteroatoms.contains(&structure.atoms[neighbor].element.as_str()) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 fn validate_repeat_unit_structure(
     structure: &MolecularStructure,
     connection_atoms: [usize; 2],
@@ -946,5 +1030,54 @@ mod tests {
         assert!(step_growth_repeat_unit_structure(&acetic, &hexanediamine)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn delta_v_estimation_for_ethene_is_negative() {
+        let ethene = parse_frowns("C=C").unwrap();
+        let delta_v = estimate_polymerization_delta_v(&ethene).unwrap();
+        assert!(
+            delta_v < 0.0,
+            "ethylene activation volume should be negative, got {delta_v}"
+        );
+        assert!(
+            delta_v > -20.0,
+            "ethylene activation volume should be physically reasonable, got {delta_v}"
+        );
+    }
+
+    #[test]
+    fn delta_v_estimation_for_styrene_is_more_negative_than_ethene() {
+        let ethene = parse_frowns("C=C").unwrap();
+        // Use toluene-like styrene analog: methylstyrene via topology
+        let styrene = parse_frowns("destroy:linear:C=C(C)C").unwrap();
+        let dv_ethene = estimate_polymerization_delta_v(&ethene).unwrap();
+        let dv_styrene = estimate_polymerization_delta_v(&styrene).unwrap();
+        assert!(
+            dv_styrene < dv_ethene,
+            "methylstyrene ΔV‡ ({dv_styrene}) should be more negative than ethylene ({dv_ethene})"
+        );
+    }
+
+    #[test]
+    fn delta_v_estimation_for_tetrasubstituted_alkene() {
+        // 2,3-dimethyl-2-butene: (CH3)2C=C(CH3)2 — tetrasubstituted
+        let tetra = parse_frowns("CC(C)=C(C)C").unwrap();
+        let dv = estimate_polymerization_delta_v(&tetra).unwrap();
+        assert!(dv < 0.0, "tetrasubstituted alkene ΔV‡ should be negative");
+        // Should be more negative than ethylene due to substitution
+        let ethene = parse_frowns("C=C").unwrap();
+        let dv_ethene = estimate_polymerization_delta_v(&ethene).unwrap();
+        assert!(
+            dv < dv_ethene,
+            "tetrasubstituted ΔV‡ ({dv}) should be more negative than ethylene ({dv_ethene})"
+        );
+    }
+
+    #[test]
+    fn delta_v_estimation_returns_none_for_non_polymerizable() {
+        // Ethane — no C=C bond
+        let ethane = parse_frowns("CC").unwrap();
+        assert!(estimate_polymerization_delta_v(&ethane).is_none());
     }
 }
