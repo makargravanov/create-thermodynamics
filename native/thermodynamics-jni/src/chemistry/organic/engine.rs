@@ -89,7 +89,7 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
-                for reaction in generate_halide_dehydrohalogenation(&site, &mut resolver)? {
+                if let Some(reaction) = generate_halide_dehydrohalogenation(&site, &mut resolver)? {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
                 for metal in [

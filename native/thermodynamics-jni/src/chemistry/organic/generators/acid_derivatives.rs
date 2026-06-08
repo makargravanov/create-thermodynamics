@@ -269,9 +269,6 @@ pub(crate) fn generate_acid_anhydride_formation(
         second_site.participant.substance.id.as_str(),
         second_site.carbon,
     );
-    if first_key == second_key {
-        return Ok(None);
-    }
     let (bridge_site, acyl_site) = if first_key <= second_key {
         (first_site, second_site)
     } else {
