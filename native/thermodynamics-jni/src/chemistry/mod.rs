@@ -31,6 +31,8 @@ pub mod molecule;
 pub mod organic;
 #[path = "polymer/mod.rs"]
 pub mod polymer;
+#[path = "reactor/mod.rs"]
+pub mod reactor;
 #[path = "core/reaction.rs"]
 pub mod reaction;
 #[path = "data/reactions.rs"]
