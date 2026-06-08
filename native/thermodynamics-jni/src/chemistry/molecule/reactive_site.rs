@@ -38,6 +38,7 @@ pub enum ReactiveSiteKind {
     Nitrile,
     Nitro,
     NonTertiaryAmine,
+    NucleophilicPhosphorus,
     Organocopper,
     Organolithium,
     Organomagnesium,
@@ -50,6 +51,7 @@ pub enum ReactiveSiteKind {
     PhosphorusYlide,
     SulfoneCarbanion,
     Sulfide,
+    Sulfoxide,
     SulfonylChloride,
     Thiol,
     SilylEther,
@@ -294,6 +296,10 @@ pub fn try_find_reactive_sites(
             FunctionalGroupType::Phosphine => {
                 (ReactiveSiteKind::Phosphine, vec![ReactiveRole::Nucleophile])
             }
+            FunctionalGroupType::NucleophilicPhosphorus => (
+                ReactiveSiteKind::NucleophilicPhosphorus,
+                vec![ReactiveRole::Nucleophile],
+            ),
             FunctionalGroupType::PhosphonateCarbanion => (
                 ReactiveSiteKind::PhosphonateCarbanion,
                 vec![ReactiveRole::Nucleophile],
@@ -494,17 +500,41 @@ fn add_sulfur_sites(structure: &MolecularStructure, sites: &mut Vec<ReactiveSite
                 [ReactiveRole::AcidicProton, ReactiveRole::Nucleophile],
             ));
         }
-        if neighbors
+        let carbon_substituents: Vec<usize> = neighbors
             .iter()
             .filter(|(neighbor, order)| {
                 bond_order_matches(*order, 1.0) && structure.atoms[*neighbor].element == "C"
             })
-            .count()
-            >= 2
-        {
+            .map(|(neighbor, _)| *neighbor)
+            .collect();
+        if oxygens == 1 && carbon_substituents.len() == 2 {
+            let mut atoms = vec![sulfur];
+            atoms.extend(carbon_substituents.iter().copied());
+            let oxygen_atom = neighbors
+                .iter()
+                .find(|(neighbor, order)| {
+                    structure.atoms[*neighbor].element == "O" && *order >= 1.5
+                })
+                .map(|(neighbor, _)| *neighbor);
+            if let Some(o) = oxygen_atom {
+                atoms.push(o);
+            }
+            atoms.sort_unstable();
+            atoms.dedup();
+            sites.push(ReactiveSite::new(
+                ReactiveSiteKind::Sulfoxide,
+                atoms,
+                [ReactiveRole::Oxidizable],
+            ));
+        }
+        if carbon_substituents.len() >= 2 && oxygens == 0 {
+            let mut atoms = vec![sulfur];
+            atoms.extend(carbon_substituents.iter().copied());
+            atoms.sort_unstable();
+            atoms.dedup();
             sites.push(ReactiveSite::new(
                 ReactiveSiteKind::Sulfide,
-                [sulfur],
+                atoms,
                 [ReactiveRole::Nucleophile, ReactiveRole::Oxidizable],
             ));
         }

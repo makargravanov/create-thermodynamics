@@ -28,6 +28,7 @@ pub enum FunctionalGroupType {
     PhosphoniumSalt,
     PhosphorusYlide,
     SulfoneCarbanion,
+    NucleophilicPhosphorus,
     UnsubstitutedAmide,
     SubstitutedAmide,
     /// A nucleophilic amide/imide/lactam N-H. Distinct from the amine variants: an
@@ -463,6 +464,22 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
             atoms.sort_unstable();
             atoms.dedup();
             groups.push(FunctionalGroup::new(FunctionalGroupType::Phosphine, atoms));
+        }
+
+        // Nucleophilic phosphorus: P with at least one P-H bond, neutral, no P=O.
+        // This covers PH3, primary phosphines (R-PH2), and secondary phosphines
+        // (R2PH), enabling nucleophilic substitution at phosphorus (alkylation).
+        if !positive
+            && structure.atoms[phosphorus].charge.abs() < 0.1
+            && !hydrogens.is_empty()
+            && double_oxygens.is_empty()
+        {
+            for hydrogen in &hydrogens {
+                groups.push(FunctionalGroup::new(
+                    FunctionalGroupType::NucleophilicPhosphorus,
+                    vec![phosphorus, *hydrogen],
+                ));
+            }
         }
     }
 

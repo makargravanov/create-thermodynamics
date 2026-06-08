@@ -281,3 +281,73 @@ fn aldehyde_peroxide_oxidation(
     ))
     .build()
 }
+
+/// Sulfide oxidation to sulfoxide: R-S-R' + H2O2 -> R-S(=O)-R' + H2O.
+/// One oxygen atom is transferred from hydrogen peroxide to the sulfur, forming
+/// a sulfoxide. This is the first step of the two-step oxidation to sulfone.
+pub(crate) fn generate_sulfide_oxidation_to_sulfoxide(
+    site: &SulfideSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let sulfur = site.sulfur;
+    let mut editor = MolecularEditor::new(structure);
+    let oxygen = editor.add_atom(sulfur, "O", 0.0, 2.0)?;
+    let _ = oxygen;
+    let product = resolver.resolve(editor.finish()?)?;
+    Ok(Some(
+        Reaction::builder(generated_site_reaction_id(
+            "sulfide_oxidation_to_sulfoxide",
+            &site.participant,
+        ))
+        .reactant(substance.id.clone(), 1, 1)
+        .reactant("destroy:hydrogen_peroxide", 1, 1)
+        .product(product, 1)
+        .product("destroy:water", 1)
+        .condition(ReactionCondition::new(
+            "sulfide oxidation requires an oxygen-transfer oxidant",
+        ))
+        .activation_energy_kj_per_mol(30.0)
+        .selectivity_profile(SelectivityProfile::new(
+            ReactionType::OrganicOxidation,
+            SiteDescriptorBuilder::sulfide(),
+        ))
+        .build(),
+    ))
+}
+
+/// Sulfoxide oxidation to sulfone: R-S(=O)-R' + H2O2 -> R-S(=O)2-R' + H2O.
+/// A second oxygen atom is transferred to the sulfoxide sulfur, forming a
+/// sulfone. This is the second step of the two-step oxidation from sulfide.
+pub(crate) fn generate_sulfoxide_oxidation_to_sulfone(
+    site: &SulfoxideSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let sulfur = site.sulfur;
+    let mut editor = MolecularEditor::new(structure);
+    let oxygen = editor.add_atom(sulfur, "O", 0.0, 2.0)?;
+    let _ = oxygen;
+    let product = resolver.resolve(editor.finish()?)?;
+    Ok(Some(
+        Reaction::builder(generated_site_reaction_id(
+            "sulfoxide_oxidation_to_sulfone",
+            &site.participant,
+        ))
+        .reactant(substance.id.clone(), 1, 1)
+        .reactant("destroy:hydrogen_peroxide", 1, 1)
+        .product(product, 1)
+        .product("destroy:water", 1)
+        .condition(ReactionCondition::new(
+            "sulfoxide oxidation requires an oxygen-transfer oxidant",
+        ))
+        .activation_energy_kj_per_mol(48.0)
+        .selectivity_profile(SelectivityProfile::new(
+            ReactionType::OrganicOxidation,
+            SiteDescriptorBuilder::sulfoxide(),
+        ))
+        .build(),
+    ))
+}

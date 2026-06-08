@@ -1,13 +1,13 @@
 use super::super::centers::{
-    PhosphineSite, PhosphonateCarbanionSite, PhosphoniumSaltSite, PhosphorusYlideSite,
-    SulfoneCarbanionSite, YlideStability,
+    HalideSite, NucleophilicPhosphorusSite, PhosphineSite, PhosphonateCarbanionSite,
+    PhosphoniumSaltSite, PhosphorusYlideSite, SulfoneCarbanionSite, YlideStability,
 };
 use super::super::resolver::DerivedSubstanceResolver;
 use super::addition::{expand_stereo_product_distribution_with_parameters, StereoProductVariant};
 use super::common::*;
 use crate::chemistry::error::{ChemistryError, ChemistryResult};
 use crate::chemistry::kinetics::ReactionChannel;
-use crate::chemistry::molecule::MolecularEditor;
+use crate::chemistry::molecule::{bond_order_matches, MolecularEditor};
 use crate::chemistry::reaction::{Reaction, StoichiometricTerm};
 use crate::chemistry::selectivity::{
     engine::SiteDescriptorBuilder,
@@ -512,4 +512,140 @@ fn build_olefination_reaction(
         );
     }
     Ok(Some(builder.build()))
+}
+
+/// Nucleophilic substitution at phosphorus: a phosphine with a P-H bond
+/// (PH3, R-PH2, or R2PH) attacks an alkyl halide, replacing one P-H with a
+/// P-C bond and releasing HX. Mechanistically identical to amine alkylation
+/// (SN2 at the halide carbon by the phosphorus lone pair), but the nucleophile
+/// is phosphorus rather than nitrogen.
+pub(crate) fn generate_nucleophilic_phosphorus_alkylation(
+    halide_site: &HalideSite<'_>,
+    phosphorus_site: &NucleophilicPhosphorusSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    if halide_site.degree >= 3 {
+        return Ok(None);
+    }
+    let halide_structure = halide_site.participant.structure;
+    if halide_structure
+        .neighbors(halide_site.carbon)
+        .into_iter()
+        .any(|(n, order)| {
+            bond_order_matches(order, 2.0) && halide_structure.atoms[n].element == "C"
+        })
+    {
+        return Ok(None);
+    }
+
+    let halide = halide_site.participant.substance;
+    let phosphine = phosphorus_site.participant.substance;
+    let phosphine_structure = phosphorus_site.participant.structure;
+    let halide_carbon = halide_site.carbon;
+    let halogen = halide_site.halogen;
+    let phosphorus = phosphorus_site.phosphorus;
+    let phosphorus_hydrogen = *phosphorus_site.hydrogens.first().ok_or_else(|| {
+        ChemistryError::InvalidReaction {
+            reaction_id: generated_pair_site_reaction_id(
+                "nucleophilic_phosphorus_alkylation",
+                &halide_site.participant,
+                &phosphorus_site.participant,
+            ),
+            reason: "nucleophilic phosphorus has no P-H bond".to_string(),
+        }
+    })?;
+
+    let mut halide_editor = MolecularEditor::new(halide_structure);
+    let halide_mapping = halide_editor.remove_atoms(&[halogen])?;
+    let halide_carbon = mapped_atom(&halide_mapping, halide_carbon, "halide carbon")?;
+    let halide_fragment = halide_editor.finish()?;
+
+    let mut phosphine_editor = MolecularEditor::new(phosphine_structure);
+    let phosphine_mapping = phosphine_editor.remove_atoms(&[phosphorus_hydrogen])?;
+    let phosphorus_atom =
+        mapped_atom(&phosphine_mapping, phosphorus, "nucleophilic phosphorus")?;
+    phosphine_editor.add_group(phosphorus_atom, &halide_fragment, halide_carbon, 1.0)?;
+    let product = resolver.resolve(phosphine_editor.finish()?)?;
+
+    let halide_desc = SiteDescriptorBuilder::from_halide_site(halide_site);
+    Ok(Some(
+        Reaction::builder(generated_pair_site_reaction_id(
+            "nucleophilic_phosphorus_alkylation",
+            &halide_site.participant,
+            &phosphorus_site.participant,
+        ))
+        .reactant(halide.id.clone(), 1, 1)
+        .reactant(phosphine.id.clone(), 1, 1)
+        .product(product, 1)
+        .product(
+            halide_ion(
+                halide_structure,
+                halogen,
+                "nucleophilic_phosphorus_alkylation",
+                &halide_site.participant,
+            )?,
+            1,
+        )
+        .product("destroy:proton", 1)
+        .activation_energy_kj_per_mol(28.0)
+        .selectivity_profile(
+            SelectivityProfile::new(ReactionType::SN2, halide_desc)
+                .with_nucleophile_strength(NucleophileStrength::VeryStrong),
+        )
+        .build(),
+    ))
+}
+
+/// Hydrolysis of white phosphorus (P4) under basic conditions produces phosphine
+/// (PH3). This is the industrial route and the missing entry point for phosphorus
+/// into the organic reaction network.
+///
+/// Disproportionation: P4 + 6 H2O → PH3 + 3 H3PO2 (hypophosphorous acid)
+/// Both products are charge-neutral, so charge is conserved.
+pub(crate) fn generate_p4_hydrolysis(
+    substance: &crate::chemistry::substance::Substance,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    let structure = match &substance.molecular_structure {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+    let phosphorus_atoms: Vec<usize> = (0..structure.atoms.len())
+        .filter(|&i| structure.atoms[i].element == "P")
+        .collect();
+    if phosphorus_atoms.len() != 4 {
+        return Ok(None);
+    }
+    for &p in &phosphorus_atoms {
+        let p_neighbors: usize = structure
+            .neighbors(p)
+            .into_iter()
+            .filter(|(n, order)| {
+                structure.atoms[*n].element == "P" && bond_order_matches(*order, 1.0)
+            })
+            .count();
+        if p_neighbors != 3 {
+            return Ok(None);
+        }
+    }
+
+    let phosphine = resolver.resolve(crate::chemistry::frowns::parse_frowns("P")?)?;
+    let hypophosphorous_acid =
+        resolver.resolve(crate::chemistry::frowns::parse_frowns("OP(O)")?)?;
+
+    Ok(Some(
+        Reaction::builder(format!("p4_hydrolysis_{}", substance.id))
+            .reactant(substance.id.clone(), 1, 1)
+            .reactant("destroy:water", 6, 1)
+            .product(phosphine, 1)
+            .product(hypophosphorous_acid, 3)
+            .condition(
+                crate::chemistry::condition::ReactionCondition::new(
+                    "P4 hydrolysis requires moderate temperature",
+                )
+                .min_temperature_kelvin(300.0),
+            )
+            .activation_energy_kj_per_mol(60.0)
+            .build(),
+    ))
 }

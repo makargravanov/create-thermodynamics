@@ -145,6 +145,13 @@ pub(crate) struct PhosphineSite<'a> {
 }
 
 #[derive(Clone)]
+pub(crate) struct NucleophilicPhosphorusSite<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) phosphorus: usize,
+    pub(crate) hydrogens: Vec<usize>,
+}
+
+#[derive(Clone)]
 pub(crate) struct PhosphoniumSaltSite<'a> {
     pub(crate) participant: SiteParticipant<'a>,
     pub(crate) phosphorus: usize,
@@ -172,6 +179,23 @@ pub(crate) struct SulfoneCarbanionSite<'a> {
     pub(crate) participant: SiteParticipant<'a>,
     pub(crate) sulfur: usize,
     pub(crate) alpha_carbon: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct SulfideSite<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) sulfur: usize,
+    pub(crate) substituent_a: usize,
+    pub(crate) substituent_b: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct SulfoxideSite<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) sulfur: usize,
+    pub(crate) oxygen: usize,
+    pub(crate) substituent_a: usize,
+    pub(crate) substituent_b: usize,
 }
 
 #[derive(Clone)]
@@ -605,6 +629,22 @@ impl<'a> SiteParticipant<'a> {
         })
     }
 
+    pub(crate) fn nucleophilic_phosphorus_site(
+        self,
+    ) -> ChemistryResult<NucleophilicPhosphorusSite<'a>> {
+        self.require_kind(ReactiveSiteKind::NucleophilicPhosphorus)?;
+        let phosphorus = self.site_atom_by_element("P", "nucleophilic phosphorus")?;
+        let hydrogens = bonded_hydrogens(self.structure, phosphorus);
+        if hydrogens.is_empty() {
+            return Err(self.site_error("nucleophilic phosphorus has no P-H bond"));
+        }
+        Ok(NucleophilicPhosphorusSite {
+            participant: self,
+            phosphorus,
+            hydrogens,
+        })
+    }
+
     pub(crate) fn phosphonium_salt_site(self) -> ChemistryResult<PhosphoniumSaltSite<'a>> {
         self.require_kind(ReactiveSiteKind::PhosphoniumSalt)?;
         let phosphorus = self.site_atom_by_element("P", "phosphonium phosphorus")?;
@@ -739,6 +779,64 @@ impl<'a> SiteParticipant<'a> {
             participant: self,
             sulfur,
             alpha_carbon,
+        })
+    }
+
+    pub(crate) fn sulfide_site(self) -> ChemistryResult<SulfideSite<'a>> {
+        self.require_kind(ReactiveSiteKind::Sulfide)?;
+        let sulfur = self.site_atom_by_element("S", "sulfide sulfur")?;
+        let carbon_substituents: Vec<usize> = self
+            .structure
+            .neighbors(sulfur)
+            .into_iter()
+            .filter(|(neighbor, order)| {
+                crate::chemistry::molecule::bond_order_matches(*order, 1.0)
+                    && self.structure.atoms[*neighbor].element == "C"
+            })
+            .map(|(neighbor, _)| neighbor)
+            .collect();
+        if carbon_substituents.len() < 2 {
+            return Err(self.site_error("sulfide has fewer than two carbon substituents"));
+        }
+        Ok(SulfideSite {
+            participant: self,
+            sulfur,
+            substituent_a: carbon_substituents[0],
+            substituent_b: carbon_substituents[1],
+        })
+    }
+
+    pub(crate) fn sulfoxide_site(self) -> ChemistryResult<SulfoxideSite<'a>> {
+        self.require_kind(ReactiveSiteKind::Sulfoxide)?;
+        let sulfur = self.site_atom_by_element("S", "sulfoxide sulfur")?;
+        let oxygen = self
+            .structure
+            .neighbors(sulfur)
+            .into_iter()
+            .find(|(neighbor, order)| {
+                self.structure.atoms[*neighbor].element == "O" && *order >= 1.5
+            })
+            .map(|(neighbor, _)| neighbor)
+            .ok_or_else(|| self.site_error("sulfoxide has no S=O bond"))?;
+        let carbon_substituents: Vec<usize> = self
+            .structure
+            .neighbors(sulfur)
+            .into_iter()
+            .filter(|(neighbor, order)| {
+                crate::chemistry::molecule::bond_order_matches(*order, 1.0)
+                    && self.structure.atoms[*neighbor].element == "C"
+            })
+            .map(|(neighbor, _)| neighbor)
+            .collect();
+        if carbon_substituents.len() < 2 {
+            return Err(self.site_error("sulfoxide has fewer than two carbon substituents"));
+        }
+        Ok(SulfoxideSite {
+            participant: self,
+            sulfur,
+            oxygen,
+            substituent_a: carbon_substituents[0],
+            substituent_b: carbon_substituents[1],
         })
     }
 

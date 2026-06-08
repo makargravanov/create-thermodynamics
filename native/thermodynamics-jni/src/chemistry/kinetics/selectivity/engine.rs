@@ -934,6 +934,32 @@ impl SiteDescriptorBuilder {
         descriptor.electronics.resonance_stabilization = true;
         descriptor
     }
+
+    pub fn sulfide() -> SiteDescriptor {
+        Self::build(
+            ReactiveSiteKind::Sulfide,
+            SubstitutionDegree::Primary,
+            0,
+            0,
+            0,
+            false,
+            false,
+            false,
+        )
+    }
+
+    pub fn sulfoxide() -> SiteDescriptor {
+        Self::build(
+            ReactiveSiteKind::Sulfoxide,
+            SubstitutionDegree::Primary,
+            0,
+            0,
+            0,
+            false,
+            false,
+            false,
+        )
+    }
 }
 
 fn missing_secondary_site(profile: &SelectivityProfile) -> SelectivityRuntimeEffect {

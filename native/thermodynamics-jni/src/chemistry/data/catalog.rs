@@ -930,6 +930,12 @@ fn estimate_phase_properties(
     if id == "trimethylphosphine" {
         return SubstancePhaseProperties::organic_solute(0.0);
     }
+    if id == "phosphine" || id == "hydrogen_sulfide" {
+        return SubstancePhaseProperties::organic_unlimited(0.01);
+    }
+    if id == "white_phosphorus" {
+        return SubstancePhaseProperties::organic_solute(0.0);
+    }
     if id.ends_with("_acid") || id.contains("acid") || id == "ammonia" {
         return SubstancePhaseProperties {
             preferred_liquid_phase: LiquidPhasePreference::Aqueous,
@@ -989,6 +995,7 @@ pub const DESTROY_TAGS: &[&str] = &[
     "destroy:bleach",
     "destroy:carcinogen",
     "destroy:explosive",
+    "destroy:flammable",
     "destroy:flame_retardant",
     "destroy:fragrant",
     "destroy:fuel_additive",
@@ -3153,6 +3160,32 @@ const DESTROY_SUBSTANCES: &[RawSubstance] = &[
         tags: &["acutely_toxic", "ozone_depleter", "smelly"],
     },
     RawSubstance {
+        id: "white_phosphorus",
+        structure_code: Some(r#"destroy:white_phosphorus:"#),
+        java_structure_code: None,
+        translation_key: None,
+        boiling_point_celsius: Some(280.0),
+        boiling_point_kelvin: None,
+        density: Some(1820.0),
+        molar_heat_capacity: Some(90.0),
+        specific_heat_capacity: None,
+        color_argb: 0,
+        tags: &["acutely_toxic", "smelly", "flammable"],
+    },
+    RawSubstance {
+        id: "phosphine",
+        structure_code: Some(r#"destroy:linear:P"#),
+        java_structure_code: None,
+        translation_key: None,
+        boiling_point_celsius: Some(-87.7),
+        boiling_point_kelvin: None,
+        density: Some(1376.0),
+        molar_heat_capacity: Some(37.0),
+        specific_heat_capacity: None,
+        color_argb: 0,
+        tags: &["acutely_toxic", "flammable", "smelly"],
+    },
+    RawSubstance {
         id: "trimethylphosphine",
         structure_code: Some(r#"destroy:linear:CP(C)C"#),
         java_structure_code: None,
@@ -3283,6 +3316,19 @@ const DESTROY_SUBSTANCES: &[RawSubstance] = &[
         specific_heat_capacity: None,
         color_argb: 0,
         tags: &["acid_rain"],
+    },
+    RawSubstance {
+        id: "hydrogen_sulfide",
+        structure_code: Some(r#"destroy:linear:S"#),
+        java_structure_code: None,
+        translation_key: None,
+        boiling_point_celsius: Some(-60.0),
+        boiling_point_kelvin: None,
+        density: Some(1539.0),
+        molar_heat_capacity: Some(34.0),
+        specific_heat_capacity: None,
+        color_argb: 0,
+        tags: &["acutely_toxic", "smelly"],
     },
     RawSubstance {
         id: "sulfide",
@@ -3708,8 +3754,8 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(DESTROY_SUBSTANCE_COUNT, 167);
-        assert_eq!(registry.substance_count(), 221);
+        assert_eq!(DESTROY_SUBSTANCE_COUNT, 170);
+        assert_eq!(registry.substance_count(), 224);
     }
 
     #[test]

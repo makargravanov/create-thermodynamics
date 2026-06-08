@@ -1601,6 +1601,7 @@ fn add_topology(builder: &mut StructureBuilder, topology: &str) -> ChemistryResu
             Ok(vec![b1, h1, b2, h2])
         }
         "octasulfur" => add_ring(builder, "S", 8, 1.0).map(|_| Vec::new()),
+        "white_phosphorus" => add_white_phosphorus(builder),
         "tetraborate" => add_tetraborate(builder),
         "anthracene" | "anthraquinone" => add_fused_aromatic_14(builder),
         "isohydrobenzofuran" => add_isohydrobenzofuran(builder),
@@ -1623,6 +1624,17 @@ fn add_ring(
     }
     for index in 0..count {
         builder.add_bond(sites[index], sites[(index + 1) % count], order);
+    }
+    Ok(sites)
+}
+
+fn add_white_phosphorus(builder: &mut StructureBuilder) -> ChemistryResult<Vec<usize>> {
+    let mut sites = Vec::with_capacity(4);
+    for _ in 0..4 {
+        sites.push(builder.add_atom("P", 0.0)?);
+    }
+    for (from, to) in [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)] {
+        builder.add_bond(sites[from], sites[to], 1.0);
     }
     Ok(sites)
 }
