@@ -3,8 +3,8 @@ use super::reaction::Reaction;
 use super::redox::{RedoxAnnotation, RedoxEnvironment};
 use super::registry::ChemistryRegistryBuilder;
 
-pub const DESTROY_EXPLICIT_REACTION_COUNT: usize = 118;
-pub const DESTROY_REGISTERED_REACTION_COUNT: usize = 155;
+pub const DESTROY_EXPLICIT_REACTION_COUNT: usize = 120;
+pub const DESTROY_REGISTERED_REACTION_COUNT: usize = 157;
 
 pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder) -> ChemistryResult<ChemistryRegistryBuilder> {
     builder = builder.reaction(
@@ -1626,6 +1626,28 @@ pub fn destroy_reactions_registry_builder(mut builder: ChemistryRegistryBuilder)
             .pre_exponential_factor(1.0)
             .show_in_jei(false)
             .allow_mass_imbalance()
+            .build(),
+    );
+    // Sabatier reaction: CO2 + 4 H2 -> CH4 + 2 H2O
+    builder = builder.reaction(
+        Reaction::builder("destroy:sabatier_methanation")
+            .reactant("destroy:carbon_dioxide", 1, 1)
+            .reactant("destroy:hydrogen", 4, 1)
+            .product("destroy:methane", 1)
+            .product("destroy:water", 2)
+            .activation_energy_kj_per_mol(75.0)
+            .pre_exponential_factor(1.0e8)
+            .build(),
+    );
+    // CO methanation: CO + 3 H2 -> CH4 + H2O
+    builder = builder.reaction(
+        Reaction::builder("destroy:co_methanation")
+            .reactant("destroy:carbon_monoxide", 1, 1)
+            .reactant("destroy:hydrogen", 3, 1)
+            .product("destroy:methane", 1)
+            .product("destroy:water", 1)
+            .activation_energy_kj_per_mol(85.0)
+            .pre_exponential_factor(1.0e8)
             .build(),
     );
     Ok(builder)
