@@ -1,6 +1,7 @@
 pub mod io;
 pub mod peripheral;
 pub mod reactor;
+pub mod reactors;
 pub mod zone;
 
 pub use peripheral::Peripheral;

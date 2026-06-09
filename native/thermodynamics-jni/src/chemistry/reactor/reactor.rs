@@ -6,7 +6,7 @@ use crate::chemistry::substance::SubstanceId;
 use super::io;
 use super::zone::ReactorZone;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ZoneId(pub usize);
 
 #[derive(Debug, Clone)]
@@ -85,6 +85,9 @@ impl Reactor {
         }
         for zone in &mut self.zones {
             zone.tick(registry, dt_seconds);
+        }
+        for zone in &mut self.zones {
+            zone.mixture_mut().equilibrate_vapor_liquid(registry)?;
         }
         Ok(())
     }
