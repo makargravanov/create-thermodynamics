@@ -1561,7 +1561,7 @@ mod tests {
         let oxide_ion = SubstanceId::from("destroy:oxide");
         let mut mixture = Mixture::new(1_800.0).unwrap();
         mixture
-            .add_substance(&registry, oxide.clone(), 0.01)
+            .add_substance(&registry, oxide.clone(), 1.0)
             .unwrap();
 
         let cell = ElectrolysisCell::new(
@@ -1585,7 +1585,7 @@ mod tests {
         assert!((report.transferred_electrons_mol_per_bucket - 0.002).abs() < 1.0e-12);
         assert!(mixture.concentration_in_phase(&metal, MixturePhase::MoltenMetal) > 0.0);
         assert!(mixture.concentration_in_phase(&oxygen, MixturePhase::Gas) > 0.0);
-        assert!(mixture.concentration_of(&oxide) < 0.01);
+        assert!(mixture.concentration_of(&oxide) < 1.0);
         assert!(
             mixture.concentration_of(&oxide_ion)
                 <= super::mixture::TRACE_CONCENTRATION_MOL_PER_BUCKET

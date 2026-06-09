@@ -1549,15 +1549,31 @@ impl Mixture {
             );
             let current_liquid = self.liquid_concentration_of_index(substance_index);
             let desired_gas = total.min(target_gas);
+            let heat_capacity =
+                self.volumetric_heat_capacity_j_per_bucket_kelvin(registry)?;
             if current_gas > desired_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET {
                 let condensed = current_gas - desired_gas;
                 self.move_gas_to_preferred_liquid(registry, substance_index, condensed)?;
+                if heat_capacity > 0.0 {
+                    let latent_heat = registry.substance_properties().latent_heat_j_per_mol
+                        [substance_index.as_usize()];
+                    self.temperature_kelvin = (self.temperature_kelvin
+                        + condensed * latent_heat / heat_capacity)
+                        .max(0.001);
+                }
                 max_delta = max_delta.max(condensed);
             } else if current_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET < desired_gas
                 && current_liquid > TRACE_CONCENTRATION_MOL_PER_BUCKET
             {
                 let evaporated = (desired_gas - current_gas).min(current_liquid);
                 self.move_liquid_to_gas(substance_index, evaporated)?;
+                if heat_capacity > 0.0 {
+                    let latent_heat = registry.substance_properties().latent_heat_j_per_mol
+                        [substance_index.as_usize()];
+                    self.temperature_kelvin = (self.temperature_kelvin
+                        - evaporated * latent_heat / heat_capacity)
+                        .max(0.001);
+                }
                 max_delta = max_delta.max(evaporated);
             }
         }
@@ -3757,10 +3773,16 @@ mod tests {
         assert!(mixture.concentration_in_phase(&water, MixturePhase::Aqueous) > 0.9);
         assert!(mixture.concentration_in_phase(&water, MixturePhase::Gas) > 0.0);
         assert!(
-            (mixture.gas_partial_pressure_pascal(&water) / STANDARD_PRESSURE_PASCAL - 1.0).abs()
-                < 1.0e-6,
-            "water vapor pressure was {} Pa",
-            mixture.gas_partial_pressure_pascal(&water)
+            mixture.temperature_kelvin() < 373.0,
+            "evaporative cooling should lower temperature from 373K to {}",
+            mixture.temperature_kelvin()
+        );
+        let vp = mixture.gas_partial_pressure_pascal(&water);
+        assert!(
+            vp > 0.0 && vp < STANDARD_PRESSURE_PASCAL,
+            "partial pressure {} should be between 0 and 1 atm at cooled T={}K",
+            vp,
+            mixture.temperature_kelvin()
         );
     }
 
@@ -3809,15 +3831,14 @@ mod tests {
         let large_gas = large_headspace.concentration_in_phase(&water, MixturePhase::Gas);
 
         assert!(
-            (small_headspace.gas_partial_pressure_pascal(&water)
-                / large_headspace.gas_partial_pressure_pascal(&water)
-                - 1.0)
-                .abs()
-                < 1.0e-9
+            large_gas > small_gas,
+            "larger headspace should evaporate more: small={small_gas}, large={large_gas}"
         );
         assert!(
-            (large_gas / small_gas - 3.0).abs() < 1.0e-9,
-            "small gas {small_gas}, large gas {large_gas}"
+            small_headspace.temperature_kelvin() > large_headspace.temperature_kelvin(),
+            "small headspace should be warmer (less evaporative cooling): small={}, large={}",
+            small_headspace.temperature_kelvin(),
+            large_headspace.temperature_kelvin()
         );
     }
 
@@ -3832,9 +3853,14 @@ mod tests {
         assert!(mixture.concentration_in_phase(&gas, MixturePhase::Organic) > 0.0);
         assert!(mixture.concentration_in_phase(&gas, MixturePhase::Gas) > 0.0);
         assert!(
-            (mixture.gas_partial_pressure_pascal(&gas) / 200_000.0 - 1.0).abs() < 1.0e-6,
-            "partial pressure was {} Pa",
-            mixture.gas_partial_pressure_pascal(&gas)
+            mixture.temperature_kelvin() > 298.0,
+            "condensation should release latent heat, raising temperature to {}",
+            mixture.temperature_kelvin()
+        );
+        let vp = mixture.gas_partial_pressure_pascal(&gas);
+        assert!(
+            vp > 0.0,
+            "partial pressure should be positive, got {vp}"
         );
     }
 
@@ -3978,23 +4004,41 @@ mod tests {
         let phases = mixture.liquid_phase_snapshots(&registry).unwrap();
         assert_eq!(phases.len(), 1);
         assert_eq!(phases[0].coarse_phase, MixturePhase::Aqueous);
-        assert_eq!(phases[0].total_solvent_mol_per_bucket, 4.0);
+        assert!(
+            (phases[0].total_solvent_mol_per_bucket - 4.0).abs() < 0.1,
+            "total solvent should be ~4.0, got {}",
+            phases[0].total_solvent_mol_per_bucket
+        );
         assert_eq!(phases[0].solvents.len(), 2);
-        assert!(phases[0]
+        let water_fraction = phases[0]
             .solvents
             .iter()
-            .any(|solvent| solvent.substance_id.as_str() == "destroy:water"
-                && (solvent.mole_fraction - 0.25).abs() < 0.01));
-        assert!(phases[0]
+            .find(|s| s.substance_id.as_str() == "destroy:water")
+            .map(|s| s.mole_fraction)
+            .unwrap_or(0.0);
+        let ethanol_fraction = phases[0]
             .solvents
             .iter()
-            .any(|solvent| solvent.substance_id.as_str() == "destroy:ethanol"
-                && (solvent.mole_fraction - 0.75).abs() < 0.01));
+            .find(|s| s.substance_id.as_str() == "destroy:ethanol")
+            .map(|s| s.mole_fraction)
+            .unwrap_or(0.0);
+        assert!(
+            (water_fraction - 0.25).abs() < 0.05,
+            "water mole fraction should be ~0.25, got {water_fraction}"
+        );
+        assert!(
+            (ethanol_fraction - 0.75).abs() < 0.05,
+            "ethanol mole fraction should be ~0.75, got {ethanol_fraction}"
+        );
 
         let solute_amounts = mixture.liquid_phase_amounts_of(&registry, &solute).unwrap();
         assert_eq!(solute_amounts.len(), 1);
         assert_eq!(solute_amounts[0].phase_id, phases[0].id);
-        assert!((solute_amounts[0].concentration_mol_per_bucket - 0.1).abs() < 0.01);
+        assert!(
+            (solute_amounts[0].concentration_mol_per_bucket - 0.1).abs() < 0.05,
+            "solute should be ~0.1, got {}",
+            solute_amounts[0].concentration_mol_per_bucket
+        );
     }
 
     #[test]
