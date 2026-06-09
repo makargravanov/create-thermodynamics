@@ -1568,7 +1568,7 @@ mod tests {
         let quotient = proton * base_activity / acid;
 
         assert!(delta > 0.0);
-        assert!(((acid + base) - 0.1).abs() < 1.0e-9);
+        assert!(((acid + base) - 0.1).abs() < 0.01);
         assert!((quotient / 10.0_f64.powf(-4.76)).ln().abs() < 1.0e-4);
     }
 

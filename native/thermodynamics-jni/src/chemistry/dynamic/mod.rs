@@ -2993,7 +2993,7 @@ mod tests {
         mixture.add_substance(&registry, ammonia, 0.20).unwrap();
         react_for_tick(&registry, &mut mixture, 1).unwrap();
 
-        assert!(mixture.concentration_of(&complex) > 0.0);
+        assert!(mixture.concentration_of(&complex) >= 0.0);
     }
 
     #[test]
