@@ -918,6 +918,34 @@ impl Mixture {
         self.validate(registry)
     }
 
+    pub(crate) fn extract_from_phase_by_index(
+        &mut self,
+        registry: &ChemistryRegistry,
+        substance: SubstanceIndex,
+        phase: MixturePhase,
+        amount: f64,
+    ) -> ChemistryResult<f64> {
+        if amount <= 0.0 {
+            return Ok(0.0);
+        }
+        let position = match self.position_of_substance(substance) {
+            Some(p) => p,
+            None => return Ok(0.0),
+        };
+        let available = self.components[position].amount_in_phase(phase);
+        let take = available.min(amount);
+        if take <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            return Ok(0.0);
+        }
+        self.components[position].remove_from_phase(phase, take)?;
+        let total = self.components[position].total_concentration();
+        if total <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            self.remove_component(substance);
+        }
+        self.validate(registry)?;
+        Ok(take)
+    }
+
     pub(crate) fn apply_reaction_phase_deltas_by_index(
         &mut self,
         registry: &ChemistryRegistry,
@@ -1550,30 +1578,36 @@ impl Mixture {
             let current_liquid = self.liquid_concentration_of_index(substance_index);
             let desired_gas = total.min(target_gas);
             let heat_capacity = self.volumetric_heat_capacity_j_per_bucket_kelvin(registry)?;
+            if heat_capacity <= 0.0 {
+                continue;
+            }
+            let latent_heat = registry.substance_properties().latent_heat_j_per_mol
+                [substance_index.as_usize()];
+            if latent_heat <= 0.0 {
+                continue;
+            }
+            let max_delta_t = self.temperature_kelvin * 0.1;
             if current_gas > desired_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET {
-                let condensed = current_gas - desired_gas;
-                self.move_gas_to_preferred_liquid(registry, substance_index, condensed)?;
-                if heat_capacity > 0.0 {
-                    let latent_heat = registry.substance_properties().latent_heat_j_per_mol
-                        [substance_index.as_usize()];
-                    self.temperature_kelvin = (self.temperature_kelvin
-                        + condensed * latent_heat / heat_capacity)
-                        .max(0.001);
+                let max_condensable = max_delta_t * heat_capacity / latent_heat;
+                let condensed = (current_gas - desired_gas).min(max_condensable);
+                if condensed > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                    self.move_gas_to_preferred_liquid(registry, substance_index, condensed)?;
+                    self.temperature_kelvin += condensed * latent_heat / heat_capacity;
+                    max_delta = max_delta.max(condensed);
                 }
-                max_delta = max_delta.max(condensed);
             } else if current_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET < desired_gas
                 && current_liquid > TRACE_CONCENTRATION_MOL_PER_BUCKET
             {
-                let evaporated = (desired_gas - current_gas).min(current_liquid);
-                self.move_liquid_to_gas(substance_index, evaporated)?;
-                if heat_capacity > 0.0 {
-                    let latent_heat = registry.substance_properties().latent_heat_j_per_mol
-                        [substance_index.as_usize()];
-                    self.temperature_kelvin = (self.temperature_kelvin
-                        - evaporated * latent_heat / heat_capacity)
-                        .max(0.001);
+                let max_evaporable =
+                    (self.temperature_kelvin - 1.0).min(max_delta_t) * heat_capacity / latent_heat;
+                let evaporated = (desired_gas - current_gas)
+                    .min(current_liquid)
+                    .min(max_evaporable);
+                if evaporated > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                    self.move_liquid_to_gas(substance_index, evaporated)?;
+                    self.temperature_kelvin -= evaporated * latent_heat / heat_capacity;
+                    max_delta = max_delta.max(evaporated);
                 }
-                max_delta = max_delta.max(evaporated);
             }
         }
         self.validate(registry)?;

@@ -126,9 +126,18 @@ pub fn extract_from_phase(
         }
 
         let take = mol_in_phase * scale;
-        zone.mixture_mut()
-            .change_concentration(registry, &component.id, -take)?;
-        extracted.push((component.id.clone(), take));
+        let Some(substance_index) = registry.substance_index(&component.id) else {
+            continue;
+        };
+        let actual = zone.mixture_mut().extract_from_phase_by_index(
+            registry,
+            substance_index,
+            phase,
+            take,
+        )?;
+        if actual > 0.0 {
+            extracted.push((component.id.clone(), actual));
+        }
     }
 
     Ok(extracted)
@@ -167,82 +176,4 @@ pub fn transfer_all(
             .add_substance(registry, id.clone(), *amount)?;
     }
     Ok(extracted)
-}
-
-pub fn insert_from_phase(
-    zone: &mut ReactorZone,
-    registry: &ChemistryRegistry,
-    phase: MixturePhase,
-    max_mol_per_bucket: f64,
-) -> ChemistryResult<Vec<(SubstanceId, f64)>> {
-    let mut inserted = Vec::new();
-    let snapshot = mixture_snapshot(zone);
-    let total_in_phase: f64 = snapshot
-        .substances
-        .iter()
-        .filter_map(|s| {
-            s.phase_amounts
-                .iter()
-                .find(|p| p.phase == phase)
-                .map(|p| p.mol_per_bucket)
-        })
-        .sum();
-
-    if total_in_phase <= 0.0 || max_mol_per_bucket <= 0.0 {
-        return Ok(Vec::new());
-    }
-
-    let scale = (max_mol_per_bucket / total_in_phase).min(1.0);
-
-    for component in &snapshot.substances {
-        let mol_in_phase = component
-            .phase_amounts
-            .iter()
-            .find(|p| p.phase == phase)
-            .map(|p| p.mol_per_bucket)
-            .unwrap_or(0.0);
-
-        if mol_in_phase <= 0.0 {
-            continue;
-        }
-
-        let amount = mol_in_phase * scale;
-        zone.mixture_mut()
-            .add_substance(registry, component.id.clone(), amount)?;
-        inserted.push((component.id.clone(), amount));
-    }
-
-    Ok(inserted)
-}
-
-pub fn insert_all(
-    zone: &mut ReactorZone,
-    registry: &ChemistryRegistry,
-    max_mol_per_bucket: f64,
-) -> ChemistryResult<Vec<(SubstanceId, f64)>> {
-    let snapshot = mixture_snapshot(zone);
-    let mut inserted = Vec::new();
-
-    let total: f64 = snapshot
-        .substances
-        .iter()
-        .map(|s| s.total_mol_per_bucket)
-        .sum();
-    if total <= 0.0 || max_mol_per_bucket <= 0.0 {
-        return Ok(Vec::new());
-    }
-
-    let scale = (max_mol_per_bucket / total).min(1.0);
-
-    for component in &snapshot.substances {
-        if component.total_mol_per_bucket <= 0.0 {
-            continue;
-        }
-        let amount = component.total_mol_per_bucket * scale;
-        zone.mixture_mut()
-            .add_substance(registry, component.id.clone(), amount)?;
-        inserted.push((component.id.clone(), amount));
-    }
-
-    Ok(inserted)
 }

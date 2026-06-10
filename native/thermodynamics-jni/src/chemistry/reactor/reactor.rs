@@ -343,45 +343,13 @@ impl Reactor {
                     }
                 }
             }
-            TransitionMode::Phases { entries } => {
-                for entry in entries {
-                    let max_amount = entry.rate_mol_per_second * dt_seconds;
-                    if max_amount > 0.0 {
-                        io::insert_from_phase(
-                            &mut self.zones[zone_id.0],
-                            registry,
-                            entry.phase,
-                            max_amount,
-                        )?;
-                    }
-                }
-            }
-            TransitionMode::All {
-                rate_mol_per_second,
-            } => {
-                let max_amount = rate_mol_per_second * dt_seconds;
-                if max_amount > 0.0 {
-                    io::insert_all(&mut self.zones[zone_id.0], registry, max_amount)?;
-                }
-            }
-            TransitionMode::SubstancesThreshold {
-                entries,
-                threshold_mol_per_bucket,
-            } => {
-                for entry in entries {
-                    let concentration = self.zones[zone_id.0].concentration_of(&entry.id);
-                    let excess = concentration - threshold_mol_per_bucket;
-                    if excess > 0.0 {
-                        let max_amount = entry.rate_mol_per_second * dt_seconds;
-                        let take = excess.min(max_amount);
-                        io::insert_substance(
-                            &mut self.zones[zone_id.0],
-                            registry,
-                            &entry.id,
-                            take,
-                        )?;
-                    }
-                }
+            TransitionMode::Phases { .. }
+            | TransitionMode::All { .. }
+            | TransitionMode::SubstancesThreshold { .. } => {
+                return Err(ChemistryError::InvalidMixtureState(
+                    "input mode must be Substances — Phases/All/Threshold are not valid for external input"
+                        .to_string(),
+                ));
             }
         }
         Ok(())
@@ -457,26 +425,32 @@ impl Reactor {
                 if max_amount <= 0.0 {
                     return Ok(());
                 }
-                let (left, right) = self.zones.split_at_mut(from.0 + 1);
-                let from_zone = &mut left[from.0];
-                let to_zone = &mut right[to.0 - from.0 - 1];
-                let extracted = io::extract_all(from_zone, registry)?;
-                let total: f64 = extracted.iter().map(|(_, a)| a).sum();
-                if total > 0.0 {
-                    let scale = (max_amount / total).min(1.0);
-                    for (id, amount) in &extracted {
-                        let take = amount * scale;
-                        if take > 0.0 {
-                            io::insert_substance(to_zone, registry, id, take)?;
-                        }
-                    }
-                    let remain = total - total * scale;
-                    if remain > 0.0 {
-                        for (id, amount) in &extracted {
-                            let leftover = amount * (1.0 - scale);
-                            if leftover > 0.0 {
-                                io::insert_substance(from_zone, registry, id, leftover)?;
-                            }
+                let snapshot = io::mixture_snapshot(&self.zones[from.0]);
+                let total: f64 = snapshot
+                    .substances
+                    .iter()
+                    .map(|s| s.total_mol_per_bucket)
+                    .sum();
+                if total <= 0.0 {
+                    return Ok(());
+                }
+                let scale = (max_amount / total).min(1.0);
+                for component in &snapshot.substances {
+                    let take = component.total_mol_per_bucket * scale;
+                    if take > 0.0 {
+                        let amount = io::extract_substance(
+                            &mut self.zones[from.0],
+                            registry,
+                            &component.id,
+                            take,
+                        )?;
+                        if amount > 0.0 {
+                            io::insert_substance(
+                                &mut self.zones[to.0],
+                                registry,
+                                &component.id,
+                                amount,
+                            )?;
                         }
                     }
                 }
@@ -545,43 +519,30 @@ impl Reactor {
                 rate_mol_per_second,
             } => {
                 let max_amount = rate_mol_per_second * dt_seconds;
-                let all_extracted = io::extract_all(&mut self.zones[zone_id.0], registry)?;
-                let total: f64 = all_extracted.iter().map(|(_, a)| a).sum();
-                if total > 0.0 && max_amount > 0.0 {
-                    let scale = (max_amount / total).min(1.0);
-                    for (id, amount) in &all_extracted {
-                        let take = amount * scale;
-                        if take > 0.0 {
-                            extracted.push((id.clone(), take));
-                        }
-                    }
-                    let remain: f64 = all_extracted
-                        .iter()
-                        .map(|(id, a)| {
-                            let taken = extracted
-                                .iter()
-                                .find(|(eid, _)| eid == id)
-                                .map(|(_, t)| *t)
-                                .unwrap_or(0.0);
-                            a - taken
-                        })
-                        .sum();
-                    if remain > 0.0 {
-                        for (id, amount) in &all_extracted {
-                            let leftover = amount
-                                - extracted
-                                    .iter()
-                                    .find(|(eid, _)| eid == id)
-                                    .map(|(_, t)| *t)
-                                    .unwrap_or(0.0);
-                            if leftover > 0.0 {
-                                io::insert_substance(
-                                    &mut self.zones[zone_id.0],
-                                    registry,
-                                    id,
-                                    leftover,
-                                )?;
-                            }
+                if max_amount <= 0.0 {
+                    return Ok(extracted);
+                }
+                let snapshot = io::mixture_snapshot(&self.zones[zone_id.0]);
+                let total: f64 = snapshot
+                    .substances
+                    .iter()
+                    .map(|s| s.total_mol_per_bucket)
+                    .sum();
+                if total <= 0.0 {
+                    return Ok(extracted);
+                }
+                let scale = (max_amount / total).min(1.0);
+                for component in &snapshot.substances {
+                    let take = component.total_mol_per_bucket * scale;
+                    if take > 0.0 {
+                        let amount = io::extract_substance(
+                            &mut self.zones[zone_id.0],
+                            registry,
+                            &component.id,
+                            take,
+                        )?;
+                        if amount > 0.0 {
+                            extracted.push((component.id.clone(), amount));
                         }
                     }
                 }
