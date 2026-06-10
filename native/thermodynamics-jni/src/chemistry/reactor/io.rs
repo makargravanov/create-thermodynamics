@@ -37,7 +37,10 @@ pub fn mixture_snapshot(zone: &ReactorZone) -> MixtureSnapshot {
                 .filter_map(|&phase| {
                     let mol = mixture.concentration_in_phase(id, phase);
                     if mol > 0.0 {
-                        Some(PhaseAmount { phase, mol_per_bucket: mol })
+                        Some(PhaseAmount {
+                            phase,
+                            mol_per_bucket: mol,
+                        })
                     } else {
                         None
                     }
@@ -92,7 +95,7 @@ pub fn extract_from_phase(
     max_mol_per_bucket: f64,
 ) -> ChemistryResult<Vec<(SubstanceId, f64)>> {
     let snapshot = mixture_snapshot(zone);
-    let mut total_in_phase: f64 = snapshot
+    let total_in_phase: f64 = snapshot
         .substances
         .iter()
         .filter_map(|s| {
@@ -142,8 +145,11 @@ pub fn extract_all(
         if component.total_mol_per_bucket <= 0.0 {
             continue;
         }
-        zone.mixture_mut()
-            .change_concentration(registry, &component.id, -component.total_mol_per_bucket)?;
+        zone.mixture_mut().change_concentration(
+            registry,
+            &component.id,
+            -component.total_mol_per_bucket,
+        )?;
         extracted.push((component.id.clone(), component.total_mol_per_bucket));
     }
 
@@ -171,7 +177,7 @@ pub fn insert_from_phase(
 ) -> ChemistryResult<Vec<(SubstanceId, f64)>> {
     let mut inserted = Vec::new();
     let snapshot = mixture_snapshot(zone);
-    let mut total_in_phase: f64 = snapshot
+    let total_in_phase: f64 = snapshot
         .substances
         .iter()
         .filter_map(|s| {
@@ -217,7 +223,11 @@ pub fn insert_all(
     let snapshot = mixture_snapshot(zone);
     let mut inserted = Vec::new();
 
-    let total: f64 = snapshot.substances.iter().map(|s| s.total_mol_per_bucket).sum();
+    let total: f64 = snapshot
+        .substances
+        .iter()
+        .map(|s| s.total_mol_per_bucket)
+        .sum();
     if total <= 0.0 || max_mol_per_bucket <= 0.0 {
         return Ok(Vec::new());
     }

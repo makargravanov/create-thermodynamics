@@ -1549,8 +1549,7 @@ impl Mixture {
             );
             let current_liquid = self.liquid_concentration_of_index(substance_index);
             let desired_gas = total.min(target_gas);
-            let heat_capacity =
-                self.volumetric_heat_capacity_j_per_bucket_kelvin(registry)?;
+            let heat_capacity = self.volumetric_heat_capacity_j_per_bucket_kelvin(registry)?;
             if current_gas > desired_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET {
                 let condensed = current_gas - desired_gas;
                 self.move_gas_to_preferred_liquid(registry, substance_index, condensed)?;
@@ -3313,9 +3312,7 @@ mod tests {
         assert!(
             (mixture.concentration_in_phase(&water, MixturePhase::Aqueous) - 0.75).abs() < 0.01
         );
-        assert!(
-            (mixture.concentration_in_phase(&water, MixturePhase::Gas) - 0.25).abs() < 0.01
-        );
+        assert!((mixture.concentration_in_phase(&water, MixturePhase::Gas) - 0.25).abs() < 0.01);
         assert!((mixture.gaseous_fraction_of(&water) - 0.25).abs() < 0.01);
     }
 
@@ -3330,24 +3327,16 @@ mod tests {
             .unwrap();
         mixture.add_substance(&registry, salt.clone(), 1.0).unwrap();
 
-        assert!(
-            (mixture.concentration_in_phase(&salt, MixturePhase::Aqueous) - 0.5).abs() < 0.01
-        );
-        assert!(
-            (mixture.concentration_in_phase(&salt, MixturePhase::Solid) - 0.5).abs() < 0.01
-        );
+        assert!((mixture.concentration_in_phase(&salt, MixturePhase::Aqueous) - 0.5).abs() < 0.01);
+        assert!((mixture.concentration_in_phase(&salt, MixturePhase::Solid) - 0.5).abs() < 0.01);
 
         mixture
             .change_concentration(&registry, &salt, -0.5)
             .unwrap();
 
         assert!((mixture.concentration_of(&salt) - 0.5).abs() < 0.01);
-        assert!(
-            (mixture.concentration_in_phase(&salt, MixturePhase::Aqueous) - 0.5).abs() < 0.01
-        );
-        assert!(
-            (mixture.concentration_in_phase(&salt, MixturePhase::Solid)).abs() < 0.01
-        );
+        assert!((mixture.concentration_in_phase(&salt, MixturePhase::Aqueous) - 0.5).abs() < 0.01);
+        assert!((mixture.concentration_in_phase(&salt, MixturePhase::Solid)).abs() < 0.01);
     }
 
     #[test]
@@ -3358,12 +3347,8 @@ mod tests {
 
         mixture.add_substance(&registry, oil.clone(), 1.0).unwrap();
 
-        assert!(
-            (mixture.concentration_in_phase(&oil, MixturePhase::Organic) - 1.0).abs() < 0.01
-        );
-        assert!(
-            (mixture.concentration_in_phase(&oil, MixturePhase::Aqueous)).abs() < 0.01
-        );
+        assert!((mixture.concentration_in_phase(&oil, MixturePhase::Organic) - 1.0).abs() < 0.01);
+        assert!((mixture.concentration_in_phase(&oil, MixturePhase::Aqueous)).abs() < 0.01);
     }
 
     #[test]
@@ -3390,7 +3375,7 @@ mod tests {
             (mixture
                 .concentration_in_organic_solvent(&registry, &oil, &chloroform)
                 .unwrap())
-                .abs()
+            .abs()
                 < 0.01
         );
         assert!(
@@ -3638,7 +3623,7 @@ mod tests {
         let registry = gas_registry();
         let gas: SubstanceId = "destroy:unknown_gas".into();
         let mut mixture = Mixture::new(298.0).unwrap();
-        mixture.set_gas_volume_cubic_meters(0.1);
+        mixture.set_gas_volume_cubic_meters(0.1).unwrap();
 
         mixture.add_substance(&registry, gas.clone(), 1.0).unwrap();
 
@@ -3858,10 +3843,7 @@ mod tests {
             mixture.temperature_kelvin()
         );
         let vp = mixture.gas_partial_pressure_pascal(&gas);
-        assert!(
-            vp > 0.0,
-            "partial pressure should be positive, got {vp}"
-        );
+        assert!(vp > 0.0, "partial pressure should be positive, got {vp}");
     }
 
     #[test]
