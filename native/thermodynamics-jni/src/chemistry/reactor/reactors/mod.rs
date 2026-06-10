@@ -2,6 +2,7 @@ use crate::chemistry::mixture::MixturePhase;
 use crate::chemistry::reactor::peripheral::{ControlMode, ElectrodeState, Peripheral, SmartHeaterState};
 use crate::chemistry::reactor::reactor::{Input, Output, PhaseEntry, Reactor, SubstanceEntry, TransitionMode, ZoneId, ZoneTransition};
 use crate::chemistry::reactor::zone::ReactorZone;
+use crate::chemistry::substance::SubstanceId;
 
 pub fn batch_reactor(volume_m3: f64, target_kelvin: f64) -> Reactor {
     let mut reactor = Reactor::new();
@@ -80,8 +81,8 @@ pub fn electrolysis_cell(volume_m3: f64) -> Reactor {
         product,
         TransitionMode::Substances {
             entries: vec![
-                SubstanceEntry { id: "destroy:hydrogen".into(), rate_mol_per_second: 0.1 },
-                SubstanceEntry { id: "destroy:oxygen".into(), rate_mol_per_second: 0.1 },
+                SubstanceEntry { id: SubstanceId::from("destroy:hydrogen"), rate_mol_per_second: 0.1 },
+                SubstanceEntry { id: SubstanceId::from("destroy:oxygen"), rate_mol_per_second: 0.1 },
             ],
         },
     ));
@@ -154,8 +155,6 @@ mod tests {
     use super::*;
     use crate::chemistry::destroy_registry_builder;
     use crate::chemistry::reactor::io;
-    use crate::chemistry::substance::SubstanceId;
-    use crate::chemistry::mixture::MixturePhase;
 
     #[test]
     fn distillation_column_separates_ethanol_from_water() {
@@ -233,7 +232,7 @@ mod tests {
             println!("\nEthanol fraction: bottom={:.4}, top={:.4}", frac_bottom, frac_top);
 
             if temp >= 353.0 {
-                // Ethanol should have moved upward — top zone either has
+                // Ethanol should have moved upward вЂ” top zone either has
                 // more ethanol fraction, or ethanol left zone 0 entirely
                 let ethanol_in_top_zones: f64 = results[1..].iter().map(|r| r.2).sum();
                 let ethanol_in_bottom = results[0].2;
@@ -285,7 +284,7 @@ mod tests {
             },
         ));
 
-        // Apply input for 2 seconds → 2 mol water
+        // Apply input for 2 seconds в†’ 2 mol water
         reactor.apply_input(&registry, input_idx, 2.0).unwrap();
         assert!(
             (reactor.zone(&zone).unwrap().concentration_of(&water_id) - 2.0).abs() < 1.0e-9,
@@ -293,7 +292,7 @@ mod tests {
             reactor.zone(&zone).unwrap().concentration_of(&water_id)
         );
 
-        // Apply output for 1 second → 0.5 mol removed
+        // Apply output for 1 second в†’ 0.5 mol removed
         let extracted = reactor.apply_output(&registry, output_idx, 1.0).unwrap();
         assert_eq!(extracted.len(), 1);
         assert!(
@@ -462,6 +461,272 @@ mod tests {
         assert!(
             to_water < 1.0e-9,
             "to zone should receive nothing from disabled transition"
+        );
+    }
+
+    #[test]
+    fn electrical_interface_on_smart_heater() {
+        let water_id: SubstanceId = SubstanceId::from("destroy:water");
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let mut heater = SmartHeaterState::new(
+            373.0, 10.0, 293.15, 0.0004, 1673.0, 120.0, ControlMode::PID,
+        );
+
+        assert!((heater.voltage() - 120.0).abs() < 1.0e-9);
+        heater.set_voltage(240.0);
+        assert!((heater.voltage() - 240.0).abs() < 1.0e-9);
+
+        let r = heater.resistance_at(300.0);
+        assert!(r > 0.0);
+        let expected_power = 240.0 * 240.0 / r;
+        assert!(
+            (heater.power_at(300.0) - expected_power).abs() < 1.0e-6,
+            "power_at should use current voltage"
+        );
+
+        let mut zone = ReactorZone::new(0.001);
+        let _ = zone.mixture_mut().add_substance(&registry, water_id, 1.0);
+        let mut peripheral = Peripheral::SmartHeater(heater);
+        peripheral.apply(&mut zone, &registry, 1.0);
+
+        let state = match &peripheral {
+            Peripheral::SmartHeater(s) => s,
+            _ => unreachable!(),
+        };
+        assert!(
+            state.electrical_draw_w() >= 0.0,
+            "electrical_draw_w should be non-negative"
+        );
+        assert!(
+            state.heating_power_w() >= 0.0,
+            "heating_power_w should be non-negative"
+        );
+        assert!(state.last_resistance_ohm() > 0.0);
+    }
+
+    #[test]
+    fn electrical_interface_on_electrode() {
+        let water_id: SubstanceId = SubstanceId::from("destroy:water");
+        let mut electrode = ElectrodeState::new(12.0, 50.0, 1.23);
+
+        assert!((electrode.voltage() - 12.0).abs() < 1.0e-9);
+        electrode.set_voltage(24.0);
+        assert!((electrode.voltage() - 24.0).abs() < 1.0e-9);
+
+        assert!((electrode.current_a() - 0.0).abs() < 1.0e-9);
+        electrode.set_current(10.0);
+        assert!((electrode.current_a() - 10.0).abs() < 1.0e-9);
+        assert!((electrode.max_current_a() - 50.0).abs() < 1.0e-9);
+
+        electrode.set_current(100.0);
+        assert!(
+            (electrode.current_a() - 50.0).abs() < 1.0e-9,
+            "should clamp to max_current_a"
+        );
+
+        let draw = electrode.electrical_draw_w();
+        assert!(draw >= 0.0);
+        let energy = electrode.energy_delivered_j();
+        assert!(energy >= 0.0);
+
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let mut zone = ReactorZone::new(0.001);
+        let _ = zone.mixture_mut().add_substance(&registry, water_id, 1.0);
+        let mut peripheral = Peripheral::Electrode(electrode);
+        peripheral.apply(&mut zone, &registry, 1.0);
+
+        match &peripheral {
+            Peripheral::Electrode(e) => {
+                assert!(e.electrical_draw_w() >= 0.0);
+                assert!(e.energy_delivered_j() >= 0.0);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn reactor_total_electrical_draw() {
+        let water_id: SubstanceId = SubstanceId::from("destroy:water");
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let mut reactor = Reactor::new();
+        let zone = reactor.add_zone(
+            ReactorZone::new(0.001)
+                .with_peripheral(Peripheral::SmartHeater(SmartHeaterState::new(
+                    373.0, 10.0, 293.15, 0.0004, 1673.0, 120.0, ControlMode::PID,
+                )))
+                .with_peripheral(Peripheral::Electrode(ElectrodeState::new(
+                    12.0, 50.0, 1.23,
+                ).with_current(5.0))),
+        );
+
+        {
+            let z = reactor.zone_mut(&zone).unwrap();
+            let _ = z.mixture_mut().add_substance(&registry, water_id, 1.0);
+        }
+
+        reactor.tick(&registry, 1.0).unwrap();
+
+        let total = reactor.total_electrical_draw_w();
+        assert!(
+            total >= 0.0,
+            "total electrical draw should be non-negative, got {total}"
+        );
+    }
+
+    #[test]
+    fn ambient_heat_exchange_cools_hot_zone() {
+        let water_id: SubstanceId = SubstanceId::from("destroy:water");
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let mut reactor = Reactor::new();
+        let zone = reactor.add_zone(ReactorZone::new(0.001));
+
+        {
+            let z = reactor.zone_mut(&zone).unwrap();
+            let _ = z.mixture_mut().add_substance(&registry, water_id, 1.0);
+        }
+
+        reactor.set_ambient_temperature(293.0);
+        reactor.set_heat_transfer_coefficient(0.1);
+
+        let initial_temp = reactor.zone(&zone).unwrap().temperature_kelvin();
+        assert!(
+            initial_temp > 293.0,
+            "initial temp should be above ambient, got {initial_temp}"
+        );
+
+        for _ in 0..10 {
+            reactor.tick(&registry, 1.0).unwrap();
+        }
+
+        let final_temp = reactor.zone(&zone).unwrap().temperature_kelvin();
+        assert!(
+            final_temp < initial_temp,
+            "zone should cool toward ambient: {initial_temp} -> {final_temp}"
+        );
+
+        let energy_exchanged = reactor.last_ambient_energy_exchange_j();
+        assert!(
+            energy_exchanged < 0.0,
+            "energy should be negative (lost to ambient), got {energy_exchanged}"
+        );
+    }
+
+    #[test]
+    fn ambient_heat_exchange_heats_cold_zone() {
+        let water_id: SubstanceId = SubstanceId::from("destroy:water");
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let mut reactor = Reactor::new();
+        let zone = reactor.add_zone(ReactorZone::new(0.001));
+
+        {
+            let z = reactor.zone_mut(&zone).unwrap();
+            let _ = z.mixture_mut().add_substance(&registry, water_id, 1.0);
+        }
+
+        reactor.set_ambient_temperature(400.0);
+        reactor.set_heat_transfer_coefficient(0.1);
+
+        let initial_temp = reactor.zone(&zone).unwrap().temperature_kelvin();
+        assert!(
+            initial_temp < 400.0,
+            "initial temp should be below ambient, got {initial_temp}"
+        );
+
+        for _ in 0..10 {
+            reactor.tick(&registry, 1.0).unwrap();
+        }
+
+        let final_temp = reactor.zone(&zone).unwrap().temperature_kelvin();
+        assert!(
+            final_temp > initial_temp,
+            "zone should heat toward ambient: {initial_temp} -> {final_temp}"
+        );
+
+        let energy_exchanged = reactor.last_ambient_energy_exchange_j();
+        assert!(
+            energy_exchanged > 0.0,
+            "energy should be positive (gained from ambient), got {energy_exchanged}"
+        );
+    }
+
+    #[test]
+    fn ambient_heat_exchange_independent_zones() {
+        let water_id: SubstanceId = SubstanceId::from("destroy:water");
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let mut reactor = Reactor::new();
+
+        let hot_zone = reactor.add_zone(ReactorZone::new(0.001));
+        let cold_zone = reactor.add_zone(ReactorZone::new(0.001));
+
+        {
+            let z = reactor.zone_mut(&hot_zone).unwrap();
+            let _ = z.mixture_mut().add_substance(&registry, water_id.clone(), 5.0);
+        }
+        {
+            let z = reactor.zone_mut(&cold_zone).unwrap();
+            let _ = z.mixture_mut().add_substance(&registry, water_id, 0.5);
+        }
+
+        reactor.zone_mut(&hot_zone).unwrap()
+            .mixture_mut().heat(&registry, 50_000.0).unwrap();
+        reactor.zone_mut(&cold_zone).unwrap()
+            .mixture_mut().heat(&registry, 50_000.0).unwrap();
+
+        let hot_initial = reactor.zone(&hot_zone).unwrap().temperature_kelvin();
+        let cold_initial = reactor.zone(&cold_zone).unwrap().temperature_kelvin();
+
+        reactor.set_ambient_temperature(293.0);
+        reactor.set_heat_transfer_coefficient(0.01);
+
+        for _ in 0..100 {
+            reactor.tick(&registry, 1.0).unwrap();
+        }
+
+        let hot_final = reactor.zone(&hot_zone).unwrap().temperature_kelvin();
+        let cold_final = reactor.zone(&cold_zone).unwrap().temperature_kelvin();
+
+        assert!(
+            hot_final < hot_initial,
+            "hot zone should cool: {hot_initial} -> {hot_final}"
+        );
+        assert!(
+            cold_final < cold_initial,
+            "cold zone should also cool: {cold_initial} -> {cold_final}"
+        );
+        assert!(
+            (hot_initial - cold_initial).abs() > (hot_final - cold_final).abs(),
+            "temperature difference should decrease: О”T_initial={} vs О”T_final={}",
+            hot_initial - cold_initial,
+            hot_final - cold_final
+        );
+    }
+
+    #[test]
+    fn no_ambient_exchange_when_not_configured() {
+        let water_id: SubstanceId = SubstanceId::from("destroy:water");
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let mut reactor = Reactor::new();
+        let zone = reactor.add_zone(ReactorZone::new(0.001));
+
+        {
+            let z = reactor.zone_mut(&zone).unwrap();
+            let _ = z.mixture_mut().add_substance(&registry, water_id, 1.0);
+        }
+
+        let initial_temp = reactor.zone(&zone).unwrap().temperature_kelvin();
+
+        for _ in 0..10 {
+            reactor.tick(&registry, 1.0).unwrap();
+        }
+
+        let final_temp = reactor.zone(&zone).unwrap().temperature_kelvin();
+        assert!(
+            (final_temp - initial_temp).abs() < 1.0,
+            "without ambient config, temperature should not change: {initial_temp} -> {final_temp}"
+        );
+        assert!(
+            (reactor.last_ambient_energy_exchange_j()).abs() < 1.0e-12,
+            "energy exchange should be zero"
         );
     }
 }

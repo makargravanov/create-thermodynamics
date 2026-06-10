@@ -89,6 +89,26 @@ impl SmartHeaterState {
         }
         self.voltage * self.voltage / r
     }
+
+    pub fn set_voltage(&mut self, voltage: f64) {
+        self.voltage = voltage.max(0.0);
+    }
+
+    pub fn voltage(&self) -> f64 {
+        self.voltage
+    }
+
+    pub fn electrical_draw_w(&self) -> f64 {
+        self.last_electrical_draw_w
+    }
+
+    pub fn heating_power_w(&self) -> f64 {
+        self.last_heating_power_w
+    }
+
+    pub fn last_resistance_ohm(&self) -> f64 {
+        self.last_resistance_ohm
+    }
 }
 
 impl ElectrodeState {
@@ -107,6 +127,34 @@ impl ElectrodeState {
     pub fn with_current(mut self, current_a: f64) -> Self {
         self.current_a = current_a.clamp(0.0, self.max_current_a);
         self
+    }
+
+    pub fn set_voltage(&mut self, voltage: f64) {
+        self.voltage = voltage.max(0.0);
+    }
+
+    pub fn voltage(&self) -> f64 {
+        self.voltage
+    }
+
+    pub fn set_current(&mut self, current_a: f64) {
+        self.current_a = current_a.clamp(0.0, self.max_current_a);
+    }
+
+    pub fn current_a(&self) -> f64 {
+        self.current_a
+    }
+
+    pub fn max_current_a(&self) -> f64 {
+        self.max_current_a
+    }
+
+    pub fn electrical_draw_w(&self) -> f64 {
+        self.last_electrical_draw_w
+    }
+
+    pub fn energy_delivered_j(&self) -> f64 {
+        self.last_energy_delivered_j
     }
 
     /// Electrical power drawn from the grid: P = V × I
@@ -175,6 +223,18 @@ impl Peripheral {
             Peripheral::UVLamp { intensity } => *intensity,
             _ => 0.0,
         }
+    }
+
+    pub fn electrical_draw_w(&self) -> f64 {
+        match self {
+            Peripheral::SmartHeater(state) => state.electrical_draw_w(),
+            Peripheral::Electrode(state) => state.electrical_draw_w(),
+            _ => 0.0,
+        }
+    }
+
+    pub fn is_electrical(&self) -> bool {
+        matches!(self, Peripheral::SmartHeater(_) | Peripheral::Electrode(_))
     }
 }
 

@@ -113,6 +113,9 @@ pub struct Reactor {
     transitions: Vec<ZoneTransition>,
     inputs: Vec<Input>,
     outputs: Vec<Output>,
+    ambient_temperature_kelvin: Option<f64>,
+    heat_transfer_coefficient_kw_per_kelvin: Option<f64>,
+    last_ambient_energy_exchange_j: f64,
 }
 
 impl Reactor {
@@ -122,6 +125,9 @@ impl Reactor {
             transitions: Vec::new(),
             inputs: Vec::new(),
             outputs: Vec::new(),
+            ambient_temperature_kelvin: None,
+            heat_transfer_coefficient_kw_per_kelvin: None,
+            last_ambient_energy_exchange_j: 0.0,
         }
     }
 
@@ -206,6 +212,30 @@ impl Reactor {
         &self.outputs
     }
 
+    pub fn set_ambient_temperature(&mut self, temperature_kelvin: f64) {
+        self.ambient_temperature_kelvin = Some(temperature_kelvin);
+    }
+
+    pub fn ambient_temperature(&self) -> Option<f64> {
+        self.ambient_temperature_kelvin
+    }
+
+    pub fn set_heat_transfer_coefficient(&mut self, u_kw_per_kelvin: f64) {
+        self.heat_transfer_coefficient_kw_per_kelvin = Some(u_kw_per_kelvin);
+    }
+
+    pub fn heat_transfer_coefficient(&self) -> Option<f64> {
+        self.heat_transfer_coefficient_kw_per_kelvin
+    }
+
+    pub fn last_ambient_energy_exchange_j(&self) -> f64 {
+        self.last_ambient_energy_exchange_j
+    }
+
+    pub fn total_electrical_draw_w(&self) -> f64 {
+        self.zones.iter().map(|z| z.total_electrical_draw_w()).sum()
+    }
+
     pub fn tick(&mut self, registry: &ChemistryRegistry, dt_seconds: f64) -> ChemistryResult<()> {
         let transitions: Vec<ZoneTransition> = self.transitions.clone();
         for transition in &transitions {
@@ -226,6 +256,55 @@ impl Reactor {
         for zone in &mut self.zones {
             zone.mixture_mut().equilibrate_vapor_liquid(registry)?;
         }
+        self.apply_ambient_heat_exchange(registry, dt_seconds)?;
+        Ok(())
+    }
+
+    fn apply_ambient_heat_exchange(
+        &mut self,
+        registry: &ChemistryRegistry,
+        dt_seconds: f64,
+    ) -> ChemistryResult<()> {
+        let (ambient_temp, u_kw) = match (
+            self.ambient_temperature_kelvin,
+            self.heat_transfer_coefficient_kw_per_kelvin,
+        ) {
+            (Some(t), Some(u)) => (t, u),
+            _ => {
+                self.last_ambient_energy_exchange_j = 0.0;
+                return Ok(());
+            }
+        };
+
+        let u_w_per_k = u_kw * 1000.0;
+        let mut total_energy_j = 0.0;
+
+        for zone in &mut self.zones {
+            let zone_temp = zone.temperature_kelvin();
+            let delta_t = ambient_temp - zone_temp;
+            if delta_t.abs() < 0.01 {
+                continue;
+            }
+
+            let heat_capacity = match zone
+                .mixture()
+                .volumetric_heat_capacity_j_per_bucket_kelvin(registry)
+            {
+                Ok(hc) if hc > 0.0 => hc,
+                _ => continue,
+            };
+
+            let max_energy = u_w_per_k * delta_t.abs() * dt_seconds;
+            let energy_to_equilibrium = delta_t * heat_capacity;
+            let energy = energy_to_equilibrium.clamp(-max_energy, max_energy);
+
+            if energy.abs() > 1.0e-12 {
+                let _ = zone.mixture_mut().heat(registry, energy);
+                total_energy_j += energy;
+            }
+        }
+
+        self.last_ambient_energy_exchange_j = total_energy_j;
         Ok(())
     }
 
