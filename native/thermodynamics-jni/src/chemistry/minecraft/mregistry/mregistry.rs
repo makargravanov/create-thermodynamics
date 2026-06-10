@@ -2,6 +2,13 @@ use super::item_to_substance::{ItemSubstancePair, ItemToSubstanceMappingRegistry
 use super::substance_to_item::{SubstanceItemPair, SubstanceToItemMappingRegistry};
 use crate::chemistry::substance::SubstanceId;
 
+#[derive(Debug, Clone)]
+pub struct DuplicateItemError {
+    pub item_id: MinecraftId,
+    pub existing_substance_id: SubstanceId,
+    pub new_substance_id: SubstanceId,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct MinecraftChemicalRegistry {
     item_to_substance: ItemToSubstanceMappingRegistry,
@@ -18,7 +25,14 @@ impl MinecraftChemicalRegistry {
         item_id: MinecraftId,
         substance_id: SubstanceId,
         mol_per_item: f64,
-    ) {
+    ) -> Result<(), DuplicateItemError> {
+        if let Some(existing) = self.item_to_substance.lookup(item_id.as_str()) {
+            return Err(DuplicateItemError {
+                item_id,
+                existing_substance_id: existing.substance_id.clone(),
+                new_substance_id: substance_id,
+            });
+        }
         self.item_to_substance.register(
             item_id.clone(),
             ItemSubstancePair::new(substance_id.clone(), mol_per_item),
@@ -27,6 +41,7 @@ impl MinecraftChemicalRegistry {
             substance_id,
             SubstanceItemPair::new(item_id, mol_per_item),
         );
+        Ok(())
     }
 
     pub fn lookup_by_item(&self, item_id: &str) -> Option<&ItemSubstancePair> {
