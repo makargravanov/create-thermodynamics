@@ -116,6 +116,7 @@ pub struct Reactor {
     ambient_temperature_kelvin: Option<f64>,
     heat_transfer_coefficient_kw_per_kelvin: Option<f64>,
     last_ambient_energy_exchange_j: f64,
+    vle_iterations: usize,
 }
 
 impl Reactor {
@@ -128,7 +129,16 @@ impl Reactor {
             ambient_temperature_kelvin: None,
             heat_transfer_coefficient_kw_per_kelvin: None,
             last_ambient_energy_exchange_j: 0.0,
+            vle_iterations: 1,
         }
+    }
+
+    pub fn set_vle_iterations(&mut self, iterations: usize) {
+        self.vle_iterations = iterations.max(1);
+    }
+
+    pub fn vle_iterations(&self) -> usize {
+        self.vle_iterations
     }
 
     pub fn add_input(&mut self, input: Input) -> usize {
@@ -253,8 +263,10 @@ impl Reactor {
         for zone in &mut self.zones {
             zone.tick(registry, dt_seconds);
         }
-        for zone in &mut self.zones {
-            zone.mixture_mut().equilibrate_vapor_liquid(registry)?;
+        for _ in 0..self.vle_iterations {
+            for zone in &mut self.zones {
+                zone.mixture_mut().equilibrate_vapor_liquid(registry)?;
+            }
         }
         self.apply_ambient_heat_exchange(registry, dt_seconds)?;
         Ok(())

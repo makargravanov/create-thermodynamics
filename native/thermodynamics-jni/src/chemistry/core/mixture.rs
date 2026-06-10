@@ -1586,10 +1586,8 @@ impl Mixture {
             if latent_heat <= 0.0 {
                 continue;
             }
-            let max_delta_t = self.temperature_kelvin * 0.1;
             if current_gas > desired_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET {
-                let max_condensable = max_delta_t * heat_capacity / latent_heat;
-                let condensed = (current_gas - desired_gas).min(max_condensable);
+                let condensed = current_gas - desired_gas;
                 if condensed > TRACE_CONCENTRATION_MOL_PER_BUCKET {
                     self.move_gas_to_preferred_liquid(registry, substance_index, condensed)?;
                     self.temperature_kelvin += condensed * latent_heat / heat_capacity;
@@ -1598,11 +1596,7 @@ impl Mixture {
             } else if current_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET < desired_gas
                 && current_liquid > TRACE_CONCENTRATION_MOL_PER_BUCKET
             {
-                let max_evaporable =
-                    (self.temperature_kelvin - 1.0).min(max_delta_t) * heat_capacity / latent_heat;
-                let evaporated = (desired_gas - current_gas)
-                    .min(current_liquid)
-                    .min(max_evaporable);
+                let evaporated = (desired_gas - current_gas).min(current_liquid);
                 if evaporated > TRACE_CONCENTRATION_MOL_PER_BUCKET {
                     self.move_liquid_to_gas(substance_index, evaporated)?;
                     self.temperature_kelvin -= evaporated * latent_heat / heat_capacity;
