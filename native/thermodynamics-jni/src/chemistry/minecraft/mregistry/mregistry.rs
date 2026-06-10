@@ -1,11 +1,18 @@
 use super::item_to_substance::{ItemSubstancePair, ItemToSubstanceMappingRegistry, MinecraftId};
 use super::substance_to_item::{SubstanceItemPair, SubstanceToItemMappingRegistry};
 use crate::chemistry::substance::SubstanceId;
+use crate::chemistry::ChemistryRegistry;
+
 #[derive(Debug, Clone)]
-pub struct DuplicateItemError {
-    pub item_id: MinecraftId,
-    pub existing_substance_id: SubstanceId,
-    pub new_substance_id: SubstanceId,
+pub enum RegistrationError {
+    DuplicateItem {
+        item_id: MinecraftId,
+        existing_substance_id: SubstanceId,
+        new_substance_id: SubstanceId,
+    },
+    UnknownSubstance {
+        substance_id: SubstanceId,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -24,9 +31,13 @@ impl MinecraftChemicalRegistry {
         item_id: MinecraftId,
         substance_id: SubstanceId,
         mol_per_item: f64,
-    ) -> Result<(), DuplicateItemError> {
+        catalog: &ChemistryRegistry,
+    ) -> Result<(), RegistrationError> {
+        if catalog.substance(&substance_id).is_err() {
+            return Err(RegistrationError::UnknownSubstance { substance_id });
+        }
         if let Some(existing) = self.item_to_substance.lookup(item_id.as_str()) {
-            return Err(DuplicateItemError {
+            return Err(RegistrationError::DuplicateItem {
                 item_id,
                 existing_substance_id: existing.substance_id.clone(),
                 new_substance_id: substance_id,
@@ -80,17 +91,22 @@ impl MinecraftChemicalRegistry {
 
 #[cfg(test)]
 mod tests {
+    use crate::chemistry::catalog;
     use crate::chemistry::minecraft::mregistry::{
         item_to_substance::MinecraftId, mregistry::MinecraftChemicalRegistry,
+        mregistry::RegistrationError,
     };
     use crate::chemistry::substance::SubstanceId;
 
-    fn fe_id() -> SubstanceId {
-        SubstanceId::from("destroy:iron_iii")
+    fn static_catalog() -> crate::chemistry::ChemistryRegistry {
+        catalog::destroy_substances_registry_builder()
+            .unwrap()
+            .build()
+            .unwrap()
     }
 
-    fn fe_block_id() -> SubstanceId {
-        SubstanceId::from("destroy:iron_block")
+    fn fe_id() -> SubstanceId {
+        SubstanceId::from("destroy:iron_iii")
     }
 
     fn cu_id() -> SubstanceId {
@@ -99,12 +115,13 @@ mod tests {
 
     #[test]
     fn same_substance_can_map_to_multiple_items() {
+        let catalog = static_catalog();
         let mut registry = MinecraftChemicalRegistry::new();
         registry
-            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0)
+            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0, &catalog)
             .unwrap();
         registry
-            .register(MinecraftId::from("minecraft:iron_block"), fe_id(), 90.0)
+            .register(MinecraftId::from("minecraft:iron_block"), fe_id(), 90.0, &catalog)
             .unwrap();
 
         assert_eq!(registry.item_count(), 2);
@@ -115,25 +132,56 @@ mod tests {
 
     #[test]
     fn duplicate_item_id_is_rejected() {
+        let catalog = static_catalog();
         let mut registry = MinecraftChemicalRegistry::new();
         registry
-            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0)
+            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0, &catalog)
             .unwrap();
         let err = registry
-            .register(MinecraftId::from("minecraft:iron_ore"), cu_id(), 5.0)
+            .register(MinecraftId::from("minecraft:iron_ore"), cu_id(), 5.0, &catalog)
             .unwrap_err();
-        assert_eq!(err.existing_substance_id, fe_id());
-        assert_eq!(err.new_substance_id, cu_id());
+        match err {
+            RegistrationError::DuplicateItem {
+                existing_substance_id,
+                new_substance_id,
+                ..
+            } => {
+                assert_eq!(existing_substance_id, fe_id());
+                assert_eq!(new_substance_id, cu_id());
+            }
+            _ => panic!("expected DuplicateItem error"),
+        }
+    }
+
+    #[test]
+    fn unknown_substance_is_rejected() {
+        let catalog = static_catalog();
+        let mut registry = MinecraftChemicalRegistry::new();
+        let err = registry
+            .register(
+                MinecraftId::from("minecraft:magic_ore"),
+                SubstanceId::from("destroy:nonexistent"),
+                10.0,
+                &catalog,
+            )
+            .unwrap_err();
+        match err {
+            RegistrationError::UnknownSubstance { substance_id } => {
+                assert_eq!(substance_id, SubstanceId::from("destroy:nonexistent"));
+            }
+            _ => panic!("expected UnknownSubstance error"),
+        }
     }
 
     #[test]
     fn lookup_by_item_returns_correct_substance() {
+        let catalog = static_catalog();
         let mut registry = MinecraftChemicalRegistry::new();
         registry
-            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0)
+            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0, &catalog)
             .unwrap();
         registry
-            .register(MinecraftId::from("minecraft:copper_ore"), cu_id(), 8.0)
+            .register(MinecraftId::from("minecraft:copper_ore"), cu_id(), 8.0, &catalog)
             .unwrap();
 
         let iron = registry.lookup_by_item("minecraft:iron_ore").unwrap();
@@ -147,15 +195,16 @@ mod tests {
 
     #[test]
     fn lookup_by_substance_returns_all_items() {
+        let catalog = static_catalog();
         let mut registry = MinecraftChemicalRegistry::new();
         registry
-            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0)
+            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0, &catalog)
             .unwrap();
         registry
-            .register(MinecraftId::from("minecraft:iron_ingot"), fe_id(), 1.0)
+            .register(MinecraftId::from("minecraft:iron_ingot"), fe_id(), 1.0, &catalog)
             .unwrap();
         registry
-            .register(MinecraftId::from("minecraft:iron_block"), fe_id(), 90.0)
+            .register(MinecraftId::from("minecraft:iron_block"), fe_id(), 90.0, &catalog)
             .unwrap();
 
         let items = registry.lookup_by_substance(&fe_id()).unwrap();
@@ -170,12 +219,14 @@ mod tests {
 
     #[test]
     fn contains_checks_both_directions() {
+        let catalog = static_catalog();
         let mut registry = MinecraftChemicalRegistry::new();
         registry
             .register(
                 MinecraftId::from("minecraft:iron_ore"),
                 SubstanceId::from("destroy:iron_iii"),
                 10.0,
+                &catalog,
             )
             .unwrap();
 
@@ -187,22 +238,20 @@ mod tests {
 
     #[test]
     fn items_and_substances_iterators() {
+        let catalog = static_catalog();
         let mut registry = MinecraftChemicalRegistry::new();
         registry
-            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0)
+            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0, &catalog)
             .unwrap();
         registry
-            .register(MinecraftId::from("minecraft:copper_ore"), cu_id(), 8.0)
+            .register(MinecraftId::from("minecraft:copper_ore"), cu_id(), 8.0, &catalog)
             .unwrap();
 
         let item_ids: Vec<&str> = registry.items().map(|(id, _)| id.as_str()).collect();
         assert!(item_ids.contains(&"minecraft:iron_ore"));
         assert!(item_ids.contains(&"minecraft:copper_ore"));
 
-        let substance_ids: Vec<&SubstanceId> = registry
-            .substances()
-            .map(|(id, _)| id)
-            .collect();
+        let substance_ids: Vec<&SubstanceId> = registry.substances().map(|(id, _)| id).collect();
         assert!(substance_ids.contains(&&SubstanceId::from("destroy:iron_iii")));
         assert!(substance_ids.contains(&&SubstanceId::from("destroy:copper_ii")));
     }
@@ -221,12 +270,13 @@ mod tests {
 
     #[test]
     fn duplicate_error_does_not_corrupt_registry() {
+        let catalog = static_catalog();
         let mut registry = MinecraftChemicalRegistry::new();
         registry
-            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0)
+            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0, &catalog)
             .unwrap();
         let _err = registry
-            .register(MinecraftId::from("minecraft:iron_ore"), cu_id(), 5.0)
+            .register(MinecraftId::from("minecraft:iron_ore"), cu_id(), 5.0, &catalog)
             .unwrap_err();
 
         assert!(registry.contains_item("minecraft:iron_ore"));
