@@ -25,6 +25,8 @@ pub mod metallurgy;
 pub mod metallurgy_data;
 #[path = "core/mixture.rs"]
 pub mod mixture;
+#[path = "minecraft/mod.rs"]
+pub mod minecraft;
 #[path = "molecule/mod.rs"]
 pub mod molecule;
 #[path = "organic/mod.rs"]
