@@ -117,6 +117,7 @@ pub struct Reactor {
     heat_transfer_coefficient_kw_per_kelvin: Option<f64>,
     last_ambient_energy_exchange_j: f64,
     vle_iterations: usize,
+    vle_relaxation: f64,
 }
 
 impl Reactor {
@@ -130,6 +131,7 @@ impl Reactor {
             heat_transfer_coefficient_kw_per_kelvin: None,
             last_ambient_energy_exchange_j: 0.0,
             vle_iterations: 1,
+            vle_relaxation: 1.0,
         }
     }
 
@@ -139,6 +141,14 @@ impl Reactor {
 
     pub fn vle_iterations(&self) -> usize {
         self.vle_iterations
+    }
+
+    pub fn set_vle_relaxation(&mut self, relaxation: f64) {
+        self.vle_relaxation = relaxation.clamp(0.01, 1.0);
+    }
+
+    pub fn vle_relaxation(&self) -> f64 {
+        self.vle_relaxation
     }
 
     pub fn add_input(&mut self, input: Input) -> usize {
@@ -265,7 +275,8 @@ impl Reactor {
         }
         for _ in 0..self.vle_iterations {
             for zone in &mut self.zones {
-                zone.mixture_mut().equilibrate_vapor_liquid(registry)?;
+                zone.mixture_mut()
+                    .equilibrate_vapor_liquid(registry, self.vle_relaxation)?;
             }
         }
         self.apply_ambient_heat_exchange(registry, dt_seconds)?;

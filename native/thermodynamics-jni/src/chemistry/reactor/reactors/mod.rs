@@ -92,7 +92,8 @@ pub fn electrolysis_cell(volume_m3: f64) -> Reactor {
 
 pub fn distillation_column(stages: usize, volume_per_stage_m3: f64) -> Reactor {
     let mut reactor = Reactor::new();
-    reactor.set_vle_iterations(8);
+    reactor.set_vle_iterations(2);
+    reactor.set_vle_relaxation(1.0);
 
     let mut zone_ids: Vec<ZoneId> = Vec::new();
     for _ in 0..stages {

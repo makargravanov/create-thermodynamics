@@ -1392,7 +1392,7 @@ impl Mixture {
             .map(|component| (component.substance, component.total_concentration()))
             .collect::<Vec<_>>();
         self.redistribute_condensed_phases(registry)?;
-        let vapor_liquid_delta = self.equilibrate_vapor_liquid(registry)?;
+        let vapor_liquid_delta = self.equilibrate_vapor_liquid(registry, 1.0)?;
         if vapor_liquid_delta > TRACE_CONCENTRATION_MOL_PER_BUCKET {
             self.redistribute_condensed_phases(registry)?;
         }
@@ -1506,6 +1506,7 @@ impl Mixture {
     pub fn equilibrate_vapor_liquid(
         &mut self,
         registry: &ChemistryRegistry,
+        relaxation: f64,
     ) -> ChemistryResult<f64> {
         self.validate_registry_shape(registry)?;
         if self.temperature_kelvin <= 0.0 {
@@ -1587,7 +1588,7 @@ impl Mixture {
                 continue;
             }
             if current_gas > desired_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET {
-                let condensed = current_gas - desired_gas;
+                let condensed = (current_gas - desired_gas) * relaxation;
                 if condensed > TRACE_CONCENTRATION_MOL_PER_BUCKET {
                     self.move_gas_to_preferred_liquid(registry, substance_index, condensed)?;
                     self.temperature_kelvin += condensed * latent_heat / heat_capacity;
@@ -1596,7 +1597,10 @@ impl Mixture {
             } else if current_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET < desired_gas
                 && current_liquid > TRACE_CONCENTRATION_MOL_PER_BUCKET
             {
-                let evaporated = (desired_gas - current_gas).min(current_liquid);
+                let max_evaporable =
+                    ((self.temperature_kelvin - 1.0).max(0.0)) * heat_capacity / latent_heat;
+                let evaporated = ((desired_gas - current_gas).min(current_liquid).min(max_evaporable))
+                    * relaxation;
                 if evaporated > TRACE_CONCENTRATION_MOL_PER_BUCKET {
                     self.move_liquid_to_gas(substance_index, evaporated)?;
                     self.temperature_kelvin -= evaporated * latent_heat / heat_capacity;
@@ -3921,7 +3925,7 @@ mod tests {
                 0.5,
             )
             .unwrap();
-        let delta = mixture.equilibrate_vapor_liquid(&registry).unwrap();
+        let delta = mixture.equilibrate_vapor_liquid(&registry, 1.0).unwrap();
 
         assert!(delta > 0.0);
         assert_eq!(
