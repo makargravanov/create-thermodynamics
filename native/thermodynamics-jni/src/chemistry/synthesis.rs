@@ -63,6 +63,7 @@ pub enum SynthesisPlanStatus {
     TargetAlreadyAvailable,
     RoutesFound,
     RequiresAdditionalInputs,
+    SearchLimitReached,
     UnsupportedByCurrentModel,
 }
 
@@ -303,6 +304,7 @@ impl SynthesisPlanner {
         let mut working_registry = registry.clone();
         let target = resolve_target(&mut working_registry, request.target.clone())?;
         let starting_substances = request.available_substances.clone();
+        let requested_max_steps = request.max_steps;
         let max_steps = request.max_steps.unwrap_or(self.max_steps);
         let max_routes = request.max_routes.unwrap_or(self.max_routes);
         let routes = self.find_routes_in_working_registry(
@@ -324,13 +326,23 @@ impl SynthesisPlanner {
                 &target,
             )?;
             if direct_requirements.is_empty() {
-                (
-                    SynthesisPlanStatus::UnsupportedByCurrentModel,
-                    Some(format!(
-                        "no known reaction in the current model produces '{}'",
-                        target.as_str()
-                    )),
-                )
+                if requested_max_steps.is_some_and(|requested| requested < self.max_steps) {
+                    (
+                        SynthesisPlanStatus::SearchLimitReached,
+                        Some(format!(
+                            "no route to '{}' was found within {max_steps} step(s)",
+                            target.as_str()
+                        )),
+                    )
+                } else {
+                    (
+                        SynthesisPlanStatus::UnsupportedByCurrentModel,
+                        Some(format!(
+                            "no known reaction in the current model produces '{}'",
+                            target.as_str()
+                        )),
+                    )
+                }
             } else {
                 required_additions = direct_requirements;
                 (SynthesisPlanStatus::RequiresAdditionalInputs, None)
@@ -1109,6 +1121,37 @@ mod tests {
             .unsupported_reason
             .as_deref()
             .is_some_and(|reason| reason.contains("destroy:argon")));
+    }
+
+    #[test]
+    fn planner_report_distinguishes_search_limit_from_unsupported_target() {
+        let registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let report = SynthesisPlanner::new()
+            .with_max_steps(5)
+            .with_max_routes(4)
+            .allow_reaction_prefix("halide_cyanide_substitution/")
+            .allow_reaction_prefix("nitrile_hydrolysis/")
+            .allow_reaction_prefix("amide_hydrolysis/")
+            .allow_reaction_prefix("acyl_chloride_formation/")
+            .allow_reaction_prefix("acyl_chloride_esterification/")
+            .plan_report(
+                &registry,
+                SynthesisRequest::for_frowns("CCC(=O)OCC")
+                    .with_available_substance("destroy:chloroethane")
+                    .with_available_substance("destroy:cyanide")
+                    .with_available_substance("destroy:water")
+                    .with_available_substance("destroy:phosgene")
+                    .with_available_substance("destroy:ethanol")
+                    .with_max_steps(2),
+            )
+            .unwrap();
+
+        assert_eq!(report.status, SynthesisPlanStatus::SearchLimitReached);
+        assert!(report.routes.is_empty());
+        assert!(report
+            .unsupported_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("2 step")));
     }
 
     #[test]
