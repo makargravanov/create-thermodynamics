@@ -1,6 +1,7 @@
 pub(super) mod acid_derivatives;
 pub(super) mod addition;
 pub(super) mod alcohol;
+pub(super) mod annulation;
 pub(super) mod aromatic;
 pub(super) mod boron;
 pub(super) mod c1_nitrogen;
@@ -25,6 +26,7 @@ pub(super) mod substitution;
 pub(super) use acid_derivatives::*;
 pub(super) use addition::*;
 pub(super) use alcohol::*;
+pub(super) use annulation::*;
 pub(super) use aromatic::*;
 pub(super) use boron::*;
 pub(super) use c1_nitrogen::*;

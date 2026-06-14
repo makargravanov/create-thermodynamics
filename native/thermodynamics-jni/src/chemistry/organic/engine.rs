@@ -142,6 +142,13 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
             }
+            ReactiveSiteKind::Hydrazone => {
+                if let Some(site) = participant.clone().try_aryl_hydrazone_center()? {
+                    for reaction in generate_hydrazone_aryl_annulation(&site, &mut resolver)? {
+                        push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                    }
+                }
+            }
             ReactiveSiteKind::AcylChloride => {
                 let site = participant.clone().acyl_chloride_site()?;
                 let reaction = generate_acyl_chloride_hydrolysis(&site, &mut resolver)?;
@@ -485,6 +492,7 @@ fn is_generator_seed_site(kind: &ReactiveSiteKind) -> bool {
             | ReactiveSiteKind::Nitrile
             | ReactiveSiteKind::Nitro
             | ReactiveSiteKind::Oxime
+            | ReactiveSiteKind::Hydrazone
             | ReactiveSiteKind::AcylChloride
             | ReactiveSiteKind::AcidAnhydride
             | ReactiveSiteKind::CarboxylicAcid
@@ -1172,6 +1180,13 @@ fn generate_site_reactions_for_seed_participants<'a>(
                 let oxime_site = seed.clone().oxime_site()?;
                 for reaction in generate_beckmann_rearrangements(&oxime_site, resolver)? {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
+            ReactiveSiteKind::Hydrazone => {
+                if let Some(site) = seed.clone().try_aryl_hydrazone_center()? {
+                    for reaction in generate_hydrazone_aryl_annulation(&site, resolver)? {
+                        push_unique_reaction(reactions, reaction_ids, reaction)?;
+                    }
                 }
             }
             ReactiveSiteKind::Organomagnesium

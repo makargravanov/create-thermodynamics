@@ -111,6 +111,7 @@ enum OrganicGeneratorKind {
     RetroDielsAlder,
     KnoevenagelCondensation,
     BisNucleophileDicarbonylCondensation,
+    HydrazoneArylAnnulation,
 }
 
 impl OrganicGeneratorKind {
@@ -192,6 +193,7 @@ impl OrganicGeneratorKind {
             OrganicGeneratorKind::RetroDielsAlder => 69,
             OrganicGeneratorKind::KnoevenagelCondensation => 70,
             OrganicGeneratorKind::BisNucleophileDicarbonylCondensation => 71,
+            OrganicGeneratorKind::HydrazoneArylAnnulation => 72,
         }
     }
 }
@@ -1904,6 +1906,7 @@ fn generators_for_site(
         ReactiveSiteKind::BisNucleophile | ReactiveSiteKind::UreaLike => {
             &[OrganicGeneratorKind::BisNucleophileDicarbonylCondensation]
         }
+        ReactiveSiteKind::Hydrazone => &[OrganicGeneratorKind::HydrazoneArylAnnulation],
         _ => &[],
     }
 }

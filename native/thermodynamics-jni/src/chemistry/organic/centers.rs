@@ -1007,6 +1007,13 @@ impl<'a> SiteParticipant<'a> {
     }
 
     pub(crate) fn aryl_hydrazone_center(self) -> ChemistryResult<ArylHydrazoneCenter<'a>> {
+        let error = self.site_error("hydrazone has no aryl N-substituent");
+        self.try_aryl_hydrazone_center()?.ok_or(error)
+    }
+
+    pub(crate) fn try_aryl_hydrazone_center(
+        self,
+    ) -> ChemistryResult<Option<ArylHydrazoneCenter<'a>>> {
         let center = self.hydrazone_center()?;
         let aryl_attachment_atom = center
             .participant
@@ -1020,19 +1027,19 @@ impl<'a> SiteParticipant<'a> {
                     && is_aromatic_atom(center.participant.structure, neighbor))
                 .then_some(neighbor)
             })
-            .ok_or_else(|| {
-                center
-                    .participant
-                    .site_error("hydrazone has no aryl N-substituent")
-            })?;
-        Ok(ArylHydrazoneCenter {
+            .map(Some)
+            .unwrap_or(None);
+        let Some(aryl_attachment_atom) = aryl_attachment_atom else {
+            return Ok(None);
+        };
+        Ok(Some(ArylHydrazoneCenter {
             participant: center.participant,
             carbon: center.carbon,
             imine_nitrogen: center.imine_nitrogen,
             terminal_nitrogen: center.terminal_nitrogen,
             aryl_attachment_atom,
             terminal_hydrogens: center.terminal_hydrogens,
-        })
+        }))
     }
 
     pub(crate) fn bis_nucleophile_center(self) -> ChemistryResult<BisNucleophileCenter<'a>> {

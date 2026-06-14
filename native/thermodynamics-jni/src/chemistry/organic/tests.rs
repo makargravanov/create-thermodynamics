@@ -3340,6 +3340,113 @@ fn carbonyl_and_hydrazine_like_bis_nucleophile_form_hydrazone() {
     assert!(site_kinds.contains(&ReactiveSiteKind::Hydrazone));
 }
 
+#[test]
+fn aryl_hydrazone_annulates_through_explicit_ortho_and_sidechain_hydrogens() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let aryl_hydrazone = dynamic
+        .resolve_frowns(
+            "destroy:graph:atoms=C.C.C.C.C.C.N.N.C.H.H.H.H.H.H.C.H.H.H.H;\
+             bonds=0-a-1,1-a-2,2-a-3,3-a-4,4-a-5,5-a-0,\
+             0-s-6,6-s-7,7-d-8,1-s-9,2-s-10,3-s-11,4-s-12,5-s-13,6-s-14,\
+             8-s-15,8-s-16,15-s-17,15-s-18,15-s-19",
+        )
+        .unwrap();
+    let report = dynamic
+        .generate_reactions_for_substances([aryl_hydrazone.clone()], 1)
+        .unwrap();
+    assert!(
+        report.generator_errors.is_empty(),
+        "generation errors: {:?}",
+        report.generator_errors
+    );
+
+    let reactions = dynamic
+        .reactions()
+        .filter(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("hydrazone_aryl_annulation/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == aryl_hydrazone)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reactions.len(), 2);
+    for reaction in reactions {
+        assert!(reaction
+            .products
+            .iter()
+            .any(|term| term.substance_id.as_str() == "destroy:ammonia"));
+        assert!(reaction
+            .conditions
+            .iter()
+            .any(|condition| condition.reason.contains("aryl hydrazone annulation")));
+    }
+}
+
+#[test]
+fn blocked_ortho_aryl_hydrazone_annulates_only_at_free_ortho_site() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let aryl_hydrazone = dynamic
+        .resolve_frowns(
+            "destroy:graph:atoms=C.C.C.C.C.C.N.N.C.C.H.H.H.H.H.C.H.H.H.H.H.H.H;\
+             bonds=0-a-1,1-a-2,2-a-3,3-a-4,4-a-5,5-a-0,\
+             0-s-6,6-s-7,7-d-8,1-s-9,2-s-10,3-s-11,4-s-12,5-s-13,6-s-14,\
+             8-s-15,8-s-16,9-s-17,9-s-18,9-s-19,15-s-20,15-s-21,15-s-22",
+        )
+        .unwrap();
+    dynamic
+        .generate_reactions_for_substances([aryl_hydrazone.clone()], 1)
+        .unwrap();
+
+    let reactions = dynamic
+        .reactions()
+        .filter(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("hydrazone_aryl_annulation/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == aryl_hydrazone)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reactions.len(), 1);
+}
+
+#[test]
+fn aryl_hydrazone_annulation_requires_carbon_sidechain_hydrogens() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let aryl_formaldehyde_hydrazone = dynamic
+        .resolve_frowns(
+            "destroy:graph:atoms=C.C.C.C.C.C.N.N.C.H.H.H.H.H.H.H.H;\
+             bonds=0-a-1,1-a-2,2-a-3,3-a-4,4-a-5,5-a-0,\
+             0-s-6,6-s-7,7-d-8,\
+             1-s-9,2-s-10,3-s-11,4-s-12,5-s-13,6-s-14,8-s-15,8-s-16",
+        )
+        .unwrap();
+    dynamic
+        .generate_reactions_for_substances([aryl_formaldehyde_hydrazone.clone()], 1)
+        .unwrap();
+
+    assert!(!dynamic.reactions().any(|reaction| {
+        reaction
+            .id
+            .as_str()
+            .starts_with("hydrazone_aryl_annulation/")
+            && reaction
+                .reactants
+                .iter()
+                .any(|term| term.substance_id == aryl_formaldehyde_hydrazone)
+    }));
+}
+
 /// Uracil: pyrimidine-2,4-dione. Ring N1 sits between C2=O and C6... (N1 is bonded
 /// to C2=O and to C6; N3 sits between C2=O and C4=O). Both ring nitrogens are imide
 /// N-H. Graph: 0 N1(H) 1 C2 2 O 3 N3(H) 4 C4 5 O 6 C5(H) 7 C6(H).
