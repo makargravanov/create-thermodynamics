@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "chemistry/08-generalized-organic-synthesis-plan.md",
+                "file": "chemistry/09-complete-organic-synthesis-implementation-plan.md",
                 "mode": "preview",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "08-generalized-organic-synthesis-plan"
+              "title": "09-complete-organic-synthesis-implementation-plan"
             }
           }
         ]
@@ -185,8 +185,9 @@
   },
   "active": "f3ef191ded25ae4b",
   "lastOpenFiles": [
-    "chemistry/files/organic-aromatic-catalog.md",
     "chemistry/08-generalized-organic-synthesis-plan.md",
+    "chemistry/09-complete-organic-synthesis-implementation-plan.md",
+    "chemistry/files/organic-aromatic-catalog.md",
     "chemistry/files/core-error.md",
     "chemistry/files/core-error.md.tmp.11948.34fcfcc140e0",
     "chemistry/files/molecule-frowns.md",
