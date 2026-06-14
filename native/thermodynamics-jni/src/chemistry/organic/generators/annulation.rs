@@ -70,7 +70,7 @@ pub(crate) fn generate_hydrazone_aryl_annulation(
                 )
                 .activation_energy_kj_per_mol(58.0)
                 .selectivity_profile(SelectivityProfile::new(
-                    ReactionType::SkeletalRearrangement,
+                    ReactionType::HeterocycleCondensation,
                     SiteDescriptorBuilder::build(
                         center.participant.site.kind.clone(),
                         crate::chemistry::selectivity::types::SubstitutionDegree::Secondary,

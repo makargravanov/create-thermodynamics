@@ -3376,6 +3376,13 @@ fn aryl_hydrazone_annulates_through_explicit_ortho_and_sidechain_hydrogens() {
         .collect::<Vec<_>>();
     assert_eq!(reactions.len(), 2);
     for reaction in reactions {
+        assert_eq!(
+            reaction
+                .selectivity_profile
+                .as_ref()
+                .map(|profile| profile.mechanism),
+            Some(crate::chemistry::selectivity::types::ReactionType::HeterocycleCondensation)
+        );
         assert!(reaction
             .products
             .iter()
@@ -3384,6 +3391,21 @@ fn aryl_hydrazone_annulates_through_explicit_ortho_and_sidechain_hydrogens() {
             .conditions
             .iter()
             .any(|condition| condition.reason.contains("aryl hydrazone annulation")));
+        let product_id = reaction
+            .products
+            .iter()
+            .find(|term| term.substance_id.as_str() != "destroy:ammonia")
+            .expect("annulation must create an organic product")
+            .substance_id
+            .clone();
+        let product = dynamic.substance(&product_id).unwrap();
+        let product_sites = try_find_reactive_sites(product.molecular_structure.as_ref().unwrap())
+            .unwrap()
+            .into_iter()
+            .map(|site| site.kind)
+            .collect::<Vec<_>>();
+        assert!(product_sites.contains(&ReactiveSiteKind::AromaticRing));
+        assert!(!product_sites.contains(&ReactiveSiteKind::Hydrazone));
     }
 }
 
