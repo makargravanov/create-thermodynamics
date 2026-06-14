@@ -319,6 +319,9 @@ impl SynthesisPlanner {
         let (status, unsupported_reason) = if starting_substances.contains(&target) {
             (SynthesisPlanStatus::TargetAlreadyAvailable, None)
         } else if routes.is_empty() {
+            if starting_substances.is_empty() {
+                working_registry.generate_reactions(1)?;
+            }
             let direct_requirements = direct_target_requirements(
                 &working_registry,
                 self,
@@ -1104,6 +1107,30 @@ mod tests {
         assert!(!report.routes.is_empty());
         assert!(!report.required_additions.is_empty());
         assert!(report.unsupported_reason.is_none());
+    }
+
+    #[test]
+    fn planner_report_with_empty_inputs_suggests_dynamic_reactants() {
+        let registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let before = registry.reactions().count();
+        let report = SynthesisPlanner::new()
+            .with_max_steps(2)
+            .allow_reaction_prefix("halide_hydroxide_substitution/")
+            .plan_report(&registry, SynthesisRequest::for_frowns("CCO"))
+            .unwrap();
+
+        assert_eq!(report.status, SynthesisPlanStatus::RequiresAdditionalInputs);
+        assert!(report.routes.is_empty());
+        assert!(report
+            .required_additions
+            .iter()
+            .any(|requirement| requirement.substance_id.as_str() == "destroy:chloroethane"));
+        assert!(report
+            .required_additions
+            .iter()
+            .any(|requirement| requirement.substance_id.as_str() == "destroy:hydroxide"));
+        assert!(report.unsupported_reason.is_none());
+        assert_eq!(registry.reactions().count(), before);
     }
 
     #[test]
