@@ -345,7 +345,9 @@ impl SynthesisPlanner {
                 .reaction_candidates_for_substances(state.known.iter())
                 .into_iter()
                 .filter(|reaction| self.reaction_allowed(reaction))
-                .filter_map(|reaction| synthesis_step_from_available_reaction(reaction, &state.known))
+                .filter_map(|reaction| {
+                    synthesis_step_from_available_reaction(reaction, &state.known)
+                })
                 .collect::<Vec<_>>();
             for step in candidates {
                 let mut next_known = state.known.clone();
@@ -570,7 +572,11 @@ fn backward_routes_for_target(
         route
             .required_additions
             .dedup_by(|left, right| left.substance_id == right.substance_id);
-        route.score = route_score(&route.steps, route.estimated_yield, &route.required_additions);
+        route.score = route_score(
+            &route.steps,
+            route.estimated_yield,
+            &route.required_additions,
+        );
         routes.push(route);
         routes.sort_by(compare_routes);
         routes.truncate(max_routes);
@@ -701,7 +707,10 @@ fn safety_penalty(reaction: &Reaction) -> f64 {
 fn condition_penalty(reaction: &Reaction) -> f64 {
     let mut penalty = reaction.conditions.len() as f64 * 0.25;
     for condition in &reaction.conditions {
-        if condition.min_temperature_kelvin.is_some_and(|value| value > 373.15) {
+        if condition
+            .min_temperature_kelvin
+            .is_some_and(|value| value > 373.15)
+        {
             penalty += 0.5;
         }
         if condition.max_temperature_kelvin.is_some() {
@@ -829,7 +838,8 @@ fn known_set_key(known: &BTreeSet<SubstanceId>) -> Vec<SubstanceId> {
 }
 
 fn route_key(route: &SynthesisRoute) -> Vec<String> {
-    route.steps
+    route
+        .steps
         .iter()
         .map(|step| step.reaction_id.to_string())
         .collect()
@@ -1145,13 +1155,25 @@ mod tests {
                 eprintln!(
                     "    step {s}: {}  [{}] -> [{}]",
                     step.reaction_id.as_str(),
-                    step.reactants.iter().map(|r| r.as_str()).collect::<Vec<_>>().join(" + "),
-                    step.products.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(" + "),
+                    step.reactants
+                        .iter()
+                        .map(|r| r.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" + "),
+                    step.products
+                        .iter()
+                        .map(|p| p.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" + "),
                 );
                 if !step.missing_reactants.is_empty() {
                     eprintln!(
                         "        missing: {}",
-                        step.missing_reactants.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")
+                        step.missing_reactants
+                            .iter()
+                            .map(|m| m.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     );
                 }
             }

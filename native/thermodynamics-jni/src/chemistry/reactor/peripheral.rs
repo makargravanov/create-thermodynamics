@@ -4,13 +4,17 @@ use super::zone::ReactorZone;
 
 #[derive(Debug, Clone)]
 pub enum Peripheral {
-    Heater { power_kw: f64 },
+    Heater {
+        power_kw: f64,
+    },
     SmartHeater(SmartHeaterState),
     HeatExchanger {
         coolant_temperature_kelvin: f64,
         u_kw_per_kelvin: f64,
     },
-    UVLamp { intensity: f64 },
+    UVLamp {
+        intensity: f64,
+    },
     Electrode(ElectrodeState),
 }
 
@@ -78,8 +82,7 @@ impl SmartHeaterState {
 
     pub fn resistance_at(&self, temperature_kelvin: f64) -> f64 {
         let delta_t = temperature_kelvin - self.reference_temperature_kelvin;
-        self.resistance_at_ref_ohm
-            * (1.0 + self.temperature_coefficient_per_kelvin * delta_t)
+        self.resistance_at_ref_ohm * (1.0 + self.temperature_coefficient_per_kelvin * delta_t)
     }
 
     pub fn power_at(&self, temperature_kelvin: f64) -> f64 {
@@ -185,12 +188,7 @@ impl Peripheral {
         }
     }
 
-    pub fn apply(
-        &mut self,
-        zone: &mut ReactorZone,
-        registry: &ChemistryRegistry,
-        dt_seconds: f64,
-    ) {
+    pub fn apply(&mut self, zone: &mut ReactorZone, registry: &ChemistryRegistry, dt_seconds: f64) {
         match self {
             Peripheral::Heater { power_kw } => {
                 let energy = *power_kw * 1000.0 * dt_seconds;

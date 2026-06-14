@@ -102,8 +102,9 @@ pub(crate) fn generate_pyrolysis(
         } else {
             continue;
         };
-        let Some(reaction) =
-            dehydrogenate_bond(feedstock, structure, bond.from, bond.to, next_order, resolver)?
+        let Some(reaction) = dehydrogenate_bond(
+            feedstock, structure, bond.from, bond.to, next_order, resolver,
+        )?
         else {
             continue;
         };
@@ -129,9 +130,10 @@ pub(crate) fn generate_dehydrogenative_coupling(
     second: &Substance,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Vec<Reaction>> {
-    let (Some(first_structure), Some(second_structure)) =
-        (first.molecular_structure.as_ref(), second.molecular_structure.as_ref())
-    else {
+    let (Some(first_structure), Some(second_structure)) = (
+        first.molecular_structure.as_ref(),
+        second.molecular_structure.as_ref(),
+    ) else {
         return Ok(Vec::new());
     };
     if !is_couplable_hydrocarbon(first) || !is_couplable_hydrocarbon(second) {

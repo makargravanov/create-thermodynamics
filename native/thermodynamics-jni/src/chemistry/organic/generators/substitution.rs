@@ -90,7 +90,11 @@ pub(crate) fn generate_halide_dehydrohalogenation(
         "dehydrohalogenation",
         &site.participant,
     ))
-    .reactant(site.participant.substance.id.clone(), products.len() as u32, 1)
+    .reactant(
+        site.participant.substance.id.clone(),
+        products.len() as u32,
+        1,
+    )
     .reactant("destroy:hydroxide", products.len() as u32, 1)
     .product(halide_ion, products.len() as u32)
     .product("destroy:water", products.len() as u32)

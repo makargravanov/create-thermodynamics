@@ -794,7 +794,9 @@ fn bulky_substituent_count(structure: &MolecularStructure, first: usize, second:
                 .neighbors(neighbor)
                 .into_iter()
                 .filter(|(n, o)| {
-                    bond_order_matches(*o, 1.0) && structure.atoms[*n].element == "C" && *n != carbon
+                    bond_order_matches(*o, 1.0)
+                        && structure.atoms[*n].element == "C"
+                        && *n != carbon
                 })
                 .count();
             if carbon_neighbors >= 2 {
@@ -806,10 +808,17 @@ fn bulky_substituent_count(structure: &MolecularStructure, first: usize, second:
 }
 
 fn is_aromatic_carbon(structure: &MolecularStructure, atom: usize) -> bool {
-    structure.neighbors(atom).iter().any(|(_, order)| bond_order_matches(*order, 1.5))
+    structure
+        .neighbors(atom)
+        .iter()
+        .any(|(_, order)| bond_order_matches(*order, 1.5))
 }
 
-fn heteroatom_count_near_double_bond(structure: &MolecularStructure, first: usize, second: usize) -> usize {
+fn heteroatom_count_near_double_bond(
+    structure: &MolecularStructure,
+    first: usize,
+    second: usize,
+) -> usize {
     let mut count = 0;
     let heteroatoms = ["O", "N", "S", "F", "Cl"];
     for carbon in [first, second] {

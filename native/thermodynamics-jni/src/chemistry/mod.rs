@@ -23,24 +23,24 @@ pub mod kinetics;
 pub mod metallurgy;
 #[path = "data/metallurgy.rs"]
 pub mod metallurgy_data;
-#[path = "core/mixture.rs"]
-pub mod mixture;
 #[path = "minecraft/mod.rs"]
 pub mod minecraft;
+#[path = "core/mixture.rs"]
+pub mod mixture;
 #[path = "molecule/mod.rs"]
 pub mod molecule;
 #[path = "organic/mod.rs"]
 pub mod organic;
 #[path = "polymer/mod.rs"]
 pub mod polymer;
-#[path = "reactor/mod.rs"]
-pub mod reactor;
 #[path = "core/reaction.rs"]
 pub mod reaction;
 #[path = "data/reactions.rs"]
 pub mod reactions;
 #[path = "molecule/reactive_site.rs"]
 pub mod reactive_site;
+#[path = "reactor/mod.rs"]
+pub mod reactor;
 #[path = "core/redox.rs"]
 pub mod redox;
 #[path = "core/registry.rs"]
@@ -983,8 +983,8 @@ mod tests {
         mixture
             .add_substance(&registry, "destroy:ammonia", 0.50)
             .unwrap();
-        let ammonia_in_gas = mixture
-            .concentration_in_phase(&"destroy:ammonia".into(), MixturePhase::Gas);
+        let ammonia_in_gas =
+            mixture.concentration_in_phase(&"destroy:ammonia".into(), MixturePhase::Gas);
         if ammonia_in_gas > 0.0 {
             mixture
                 .move_between_phases(

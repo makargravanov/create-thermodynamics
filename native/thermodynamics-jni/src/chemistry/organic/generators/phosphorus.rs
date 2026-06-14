@@ -544,16 +544,18 @@ pub(crate) fn generate_nucleophilic_phosphorus_alkylation(
     let halide_carbon = halide_site.carbon;
     let halogen = halide_site.halogen;
     let phosphorus = phosphorus_site.phosphorus;
-    let phosphorus_hydrogen = *phosphorus_site.hydrogens.first().ok_or_else(|| {
-        ChemistryError::InvalidReaction {
-            reaction_id: generated_pair_site_reaction_id(
-                "nucleophilic_phosphorus_alkylation",
-                &halide_site.participant,
-                &phosphorus_site.participant,
-            ),
-            reason: "nucleophilic phosphorus has no P-H bond".to_string(),
-        }
-    })?;
+    let phosphorus_hydrogen =
+        *phosphorus_site
+            .hydrogens
+            .first()
+            .ok_or_else(|| ChemistryError::InvalidReaction {
+                reaction_id: generated_pair_site_reaction_id(
+                    "nucleophilic_phosphorus_alkylation",
+                    &halide_site.participant,
+                    &phosphorus_site.participant,
+                ),
+                reason: "nucleophilic phosphorus has no P-H bond".to_string(),
+            })?;
 
     let mut halide_editor = MolecularEditor::new(halide_structure);
     let halide_mapping = halide_editor.remove_atoms(&[halogen])?;
@@ -562,8 +564,7 @@ pub(crate) fn generate_nucleophilic_phosphorus_alkylation(
 
     let mut phosphine_editor = MolecularEditor::new(phosphine_structure);
     let phosphine_mapping = phosphine_editor.remove_atoms(&[phosphorus_hydrogen])?;
-    let phosphorus_atom =
-        mapped_atom(&phosphine_mapping, phosphorus, "nucleophilic phosphorus")?;
+    let phosphorus_atom = mapped_atom(&phosphine_mapping, phosphorus, "nucleophilic phosphorus")?;
     phosphine_editor.add_group(phosphorus_atom, &halide_fragment, halide_carbon, 1.0)?;
     let product = resolver.resolve(phosphine_editor.finish()?)?;
 

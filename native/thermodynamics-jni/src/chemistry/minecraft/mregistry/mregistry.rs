@@ -118,10 +118,20 @@ mod tests {
         let catalog = static_catalog();
         let mut registry = MinecraftChemicalRegistry::new();
         registry
-            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0, &catalog)
+            .register(
+                MinecraftId::from("minecraft:iron_ore"),
+                fe_id(),
+                10.0,
+                &catalog,
+            )
             .unwrap();
         registry
-            .register(MinecraftId::from("minecraft:iron_block"), fe_id(), 90.0, &catalog)
+            .register(
+                MinecraftId::from("minecraft:iron_block"),
+                fe_id(),
+                90.0,
+                &catalog,
+            )
             .unwrap();
 
         assert_eq!(registry.item_count(), 2);
@@ -135,10 +145,20 @@ mod tests {
         let catalog = static_catalog();
         let mut registry = MinecraftChemicalRegistry::new();
         registry
-            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0, &catalog)
+            .register(
+                MinecraftId::from("minecraft:iron_ore"),
+                fe_id(),
+                10.0,
+                &catalog,
+            )
             .unwrap();
         let err = registry
-            .register(MinecraftId::from("minecraft:iron_ore"), cu_id(), 5.0, &catalog)
+            .register(
+                MinecraftId::from("minecraft:iron_ore"),
+                cu_id(),
+                5.0,
+                &catalog,
+            )
             .unwrap_err();
         match err {
             RegistrationError::DuplicateItem {
@@ -178,10 +198,20 @@ mod tests {
         let catalog = static_catalog();
         let mut registry = MinecraftChemicalRegistry::new();
         registry
-            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0, &catalog)
+            .register(
+                MinecraftId::from("minecraft:iron_ore"),
+                fe_id(),
+                10.0,
+                &catalog,
+            )
             .unwrap();
         registry
-            .register(MinecraftId::from("minecraft:copper_ore"), cu_id(), 8.0, &catalog)
+            .register(
+                MinecraftId::from("minecraft:copper_ore"),
+                cu_id(),
+                8.0,
+                &catalog,
+            )
             .unwrap();
 
         let iron = registry.lookup_by_item("minecraft:iron_ore").unwrap();
@@ -198,13 +228,28 @@ mod tests {
         let catalog = static_catalog();
         let mut registry = MinecraftChemicalRegistry::new();
         registry
-            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0, &catalog)
+            .register(
+                MinecraftId::from("minecraft:iron_ore"),
+                fe_id(),
+                10.0,
+                &catalog,
+            )
             .unwrap();
         registry
-            .register(MinecraftId::from("minecraft:iron_ingot"), fe_id(), 1.0, &catalog)
+            .register(
+                MinecraftId::from("minecraft:iron_ingot"),
+                fe_id(),
+                1.0,
+                &catalog,
+            )
             .unwrap();
         registry
-            .register(MinecraftId::from("minecraft:iron_block"), fe_id(), 90.0, &catalog)
+            .register(
+                MinecraftId::from("minecraft:iron_block"),
+                fe_id(),
+                90.0,
+                &catalog,
+            )
             .unwrap();
 
         let items = registry.lookup_by_substance(&fe_id()).unwrap();
@@ -241,10 +286,20 @@ mod tests {
         let catalog = static_catalog();
         let mut registry = MinecraftChemicalRegistry::new();
         registry
-            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0, &catalog)
+            .register(
+                MinecraftId::from("minecraft:iron_ore"),
+                fe_id(),
+                10.0,
+                &catalog,
+            )
             .unwrap();
         registry
-            .register(MinecraftId::from("minecraft:copper_ore"), cu_id(), 8.0, &catalog)
+            .register(
+                MinecraftId::from("minecraft:copper_ore"),
+                cu_id(),
+                8.0,
+                &catalog,
+            )
             .unwrap();
 
         let item_ids: Vec<&str> = registry.items().map(|(id, _)| id.as_str()).collect();
@@ -273,10 +328,20 @@ mod tests {
         let catalog = static_catalog();
         let mut registry = MinecraftChemicalRegistry::new();
         registry
-            .register(MinecraftId::from("minecraft:iron_ore"), fe_id(), 10.0, &catalog)
+            .register(
+                MinecraftId::from("minecraft:iron_ore"),
+                fe_id(),
+                10.0,
+                &catalog,
+            )
             .unwrap();
         let _err = registry
-            .register(MinecraftId::from("minecraft:iron_ore"), cu_id(), 5.0, &catalog)
+            .register(
+                MinecraftId::from("minecraft:iron_ore"),
+                cu_id(),
+                5.0,
+                &catalog,
+            )
             .unwrap_err();
 
         assert!(registry.contains_item("minecraft:iron_ore"));

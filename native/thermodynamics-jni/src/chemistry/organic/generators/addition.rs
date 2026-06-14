@@ -271,7 +271,8 @@ pub(crate) fn generate_chain_growth_polymerization(
         return Ok(None);
     };
     let product = resolver.resolve_substance(polymer)?;
-    let delta_v = crate::chemistry::polymer::estimate_polymerization_delta_v(site.participant.structure);
+    let delta_v =
+        crate::chemistry::polymer::estimate_polymerization_delta_v(site.participant.structure);
     let mut builder = Reaction::builder(generated_site_reaction_id(
         "chain_growth_polymerization",
         &site.participant,

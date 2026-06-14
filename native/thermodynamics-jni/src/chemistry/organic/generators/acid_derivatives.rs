@@ -264,7 +264,10 @@ pub(crate) fn generate_acid_anhydride_formation(
     // Canonical ordering: the bridge-oxygen donor is the lexicographically
     // smaller substance id (ties broken by acyl-carbon index for two sites on
     // one molecule), so the symmetric pair maps to a single reaction.
-    let first_key = (first_site.participant.substance.id.as_str(), first_site.carbon);
+    let first_key = (
+        first_site.participant.substance.id.as_str(),
+        first_site.carbon,
+    );
     let second_key = (
         second_site.participant.substance.id.as_str(),
         second_site.carbon,
@@ -325,7 +328,11 @@ pub(crate) fn generate_acid_anhydride_formation(
         SiteDescriptorBuilder::from_carboxylic_acid_site(bridge_site),
     ));
     builder = if self_condensation {
-        builder.reactant(bridge_site.participant.substance.id.clone(), acyl_coefficient, 1)
+        builder.reactant(
+            bridge_site.participant.substance.id.clone(),
+            acyl_coefficient,
+            1,
+        )
     } else {
         builder
             .reactant(bridge_site.participant.substance.id.clone(), 1, 1)

@@ -1582,8 +1582,8 @@ impl Mixture {
             if heat_capacity <= 0.0 {
                 continue;
             }
-            let latent_heat = registry.substance_properties().latent_heat_j_per_mol
-                [substance_index.as_usize()];
+            let latent_heat =
+                registry.substance_properties().latent_heat_j_per_mol[substance_index.as_usize()];
             if latent_heat <= 0.0 {
                 continue;
             }
@@ -1599,7 +1599,9 @@ impl Mixture {
             {
                 let max_evaporable =
                     ((self.temperature_kelvin - 1.0).max(0.0)) * heat_capacity / latent_heat;
-                let evaporated = ((desired_gas - current_gas).min(current_liquid).min(max_evaporable))
+                let evaporated = ((desired_gas - current_gas)
+                    .min(current_liquid)
+                    .min(max_evaporable))
                     * relaxation;
                 if evaporated > TRACE_CONCENTRATION_MOL_PER_BUCKET {
                     self.move_liquid_to_gas(substance_index, evaporated)?;

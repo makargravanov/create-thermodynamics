@@ -38,8 +38,6 @@ pub enum TransitionMode {
     },
 }
 
-
-
 #[derive(Debug, Clone)]
 pub struct ZoneTransition {
     pub from: ZoneId,
