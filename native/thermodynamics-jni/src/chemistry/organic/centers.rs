@@ -250,6 +250,13 @@ pub(crate) struct ArylHydrazoneCenter<'a> {
 }
 
 #[derive(Clone)]
+pub(crate) struct CyclizableHydrazoneAnnulationSite<'a> {
+    pub(crate) aryl_hydrazone: ArylHydrazoneCenter<'a>,
+    pub(crate) ortho_atom: usize,
+    pub(crate) ortho_hydrogen: usize,
+}
+
+#[derive(Clone)]
 pub(crate) struct BisNucleophileCenter<'a> {
     pub(crate) participant: SiteParticipant<'a>,
     pub(crate) first_nucleophile: usize,
@@ -1570,6 +1577,34 @@ impl<'a> DicarbonylElectrophileCenter<'a> {
     }
 }
 
+impl<'a> ArylHydrazoneCenter<'a> {
+    pub(crate) fn annulation_sites(&self) -> Vec<CyclizableHydrazoneAnnulationSite<'a>> {
+        if self.terminal_hydrogens.is_empty() {
+            return Vec::new();
+        }
+        self.participant
+            .structure
+            .neighbors(self.aryl_attachment_atom)
+            .into_iter()
+            .filter_map(|(neighbor, order)| {
+                (self.participant.structure.atoms[neighbor].element == "C"
+                    && crate::chemistry::molecule::bond_order_matches(order, 1.5)
+                    && is_aromatic_atom(self.participant.structure, neighbor))
+                .then_some(neighbor)
+            })
+            .filter_map(|ortho_atom| {
+                first_bonded_hydrogen(self.participant.structure, ortho_atom).map(|ortho_hydrogen| {
+                    CyclizableHydrazoneAnnulationSite {
+                        aryl_hydrazone: self.clone(),
+                        ortho_atom,
+                        ortho_hydrogen,
+                    }
+                })
+            })
+            .collect()
+    }
+}
+
 fn alpha_carbonyl_kind(
     structure: &crate::chemistry::molecule::MolecularStructure,
     carbonyl_carbon: usize,
@@ -1890,6 +1925,43 @@ mod tests {
         );
         assert_eq!(migration.ring_atoms.len(), 6);
         assert_eq!(migration.attachment_atoms, vec![0]);
+    }
+
+    #[test]
+    fn aryl_hydrazone_annulation_sites_require_explicit_ortho_hydrogens() {
+        let code = "destroy:graph:atoms=C.C.C.C.C.C.N.N.C.H.H.H.H.H.H.H.H;\
+             bonds=0-a-1,1-a-2,2-a-3,3-a-4,4-a-5,5-a-0,\
+             0-s-6,6-s-7,7-d-8,\
+             1-s-9,2-s-10,3-s-11,4-s-12,5-s-13,6-s-14,8-s-15,8-s-16";
+        let aryl_hydrazone = participant_for(code, ReactiveSiteKind::Hydrazone)
+            .aryl_hydrazone_center()
+            .unwrap();
+        let sites = aryl_hydrazone.annulation_sites();
+        let ortho_atoms = sites.iter().map(|site| site.ortho_atom).collect::<Vec<_>>();
+        let ortho_hydrogens = sites
+            .iter()
+            .map(|site| site.ortho_hydrogen)
+            .collect::<Vec<_>>();
+        assert_eq!(ortho_atoms, vec![1, 5]);
+        assert_eq!(ortho_hydrogens, vec![9, 13]);
+        assert!(sites
+            .iter()
+            .all(|site| site.aryl_hydrazone.carbon == aryl_hydrazone.carbon));
+    }
+
+    #[test]
+    fn aryl_hydrazone_annulation_skips_blocked_ortho_position() {
+        let code = "destroy:graph:atoms=C.C.C.C.C.C.N.N.C.C.H.H.H.H.H.H.H.H.H;\
+             bonds=0-a-1,1-a-2,2-a-3,3-a-4,4-a-5,5-a-0,\
+             0-s-6,6-s-7,7-d-8,1-s-9,\
+             2-s-10,3-s-11,4-s-12,5-s-13,6-s-14,8-s-15,8-s-16,9-s-17,9-s-18";
+        let aryl_hydrazone = participant_for(code, ReactiveSiteKind::Hydrazone)
+            .aryl_hydrazone_center()
+            .unwrap();
+        let sites = aryl_hydrazone.annulation_sites();
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].ortho_atom, 5);
+        assert_eq!(sites[0].ortho_hydrogen, 13);
     }
 
     #[test]
