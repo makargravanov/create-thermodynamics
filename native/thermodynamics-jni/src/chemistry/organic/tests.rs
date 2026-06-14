@@ -589,6 +589,59 @@ fn alpha_carbon_generators_create_halogenation_dehydration_enamine_and_alkylatio
 }
 
 #[test]
+fn activated_methylene_condenses_with_carbonyl_to_alkene() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let malonaldehyde = dynamic
+        .resolve_frowns(
+            "destroy:graph:atoms=C.O.C.C.O.H.H.H.H;\
+             bonds=0-d-1,0-s-2,2-s-3,3-d-4,0-s-5,2-s-6,2-s-7,3-s-8",
+        )
+        .unwrap();
+    let acetaldehyde = dynamic.resolve_frowns("CC=O").unwrap();
+
+    dynamic
+        .generate_reactions_for_substances([malonaldehyde.clone(), acetaldehyde.clone()], 1)
+        .unwrap();
+
+    let reaction = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("knoevenagel_condensation/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == malonaldehyde)
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == acetaldehyde)
+        })
+        .expect("activated methylene and carbonyl must condense");
+    assert!(reaction
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:water"));
+    let product_id = reaction
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("condensation must create an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap();
+    let product_sites = try_find_reactive_sites(product.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(product_sites.contains(&ReactiveSiteKind::Alkene));
+}
+
+#[test]
 fn scoped_generation_matches_full_static_generation() {
     let registry = super::super::destroy_registry_builder()
         .unwrap()

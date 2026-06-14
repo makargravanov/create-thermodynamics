@@ -1114,26 +1114,10 @@ impl<'a> SiteParticipant<'a> {
         self,
     ) -> ChemistryResult<ActivatedMethyleneCenter<'a>> {
         let center = self.dicarbonyl_electrophile_center()?;
-        if center.bridge_atoms.len() != 1 {
-            return Err(center
+        center.activated_methylene_center().ok_or_else(|| {
+            center
                 .participant
-                .site_error("activated methylene center must have one bridge carbon"));
-        }
-        let carbon = center.bridge_atoms[0];
-        let hydrogens = bonded_hydrogens(center.participant.structure, carbon);
-        if hydrogens.is_empty() {
-            return Err(center
-                .participant
-                .site_error("activated methylene center has no explicit hydrogen"));
-        }
-        Ok(ActivatedMethyleneCenter {
-            participant: center.participant,
-            carbon,
-            hydrogens,
-            electron_withdrawing_carbons: [
-                center.first_carbonyl_carbon,
-                center.second_carbonyl_carbon,
-            ],
+                .site_error("site is not an activated methylene center")
         })
     }
 
@@ -1497,7 +1481,21 @@ impl<'a> SiteParticipant<'a> {
     }
 }
 
-impl DicarbonylElectrophileCenter<'_> {
+impl<'a> DicarbonylElectrophileCenter<'a> {
+    pub(crate) fn activated_methylene_center(&self) -> Option<ActivatedMethyleneCenter<'a>> {
+        if self.bridge_atoms.len() != 1 {
+            return None;
+        }
+        let carbon = self.bridge_atoms[0];
+        let hydrogens = bonded_hydrogens(self.participant.structure, carbon);
+        (!hydrogens.is_empty()).then_some(ActivatedMethyleneCenter {
+            participant: self.participant.clone(),
+            carbon,
+            hydrogens,
+            electron_withdrawing_carbons: [self.first_carbonyl_carbon, self.second_carbonyl_carbon],
+        })
+    }
+
     pub(crate) fn condensation_topologies(&self) -> Vec<DicarbonylCondensationTopology> {
         if self.bridge_atoms.len() != 1 {
             return Vec::new();

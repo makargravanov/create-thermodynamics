@@ -997,6 +997,17 @@ fn generate_pair_reactions_for_seed(
                     }
                 }
             }
+            for dicarbonyl in space.sites_of(&ReactiveSiteKind::DicarbonylElectrophile) {
+                let dicarbonyl_center = dicarbonyl.dicarbonyl_electrophile_center()?;
+                let Some(activated) = dicarbonyl_center.activated_methylene_center() else {
+                    continue;
+                };
+                if let Some(reaction) =
+                    generate_knoevenagel_condensation(&activated, &carbonyl_site, resolver)?
+                {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
         }
         ReactiveSiteKind::BisNucleophile => {
             let nucleophile_site = seed.clone().bis_nucleophile_center()?;
@@ -1009,6 +1020,22 @@ fn generate_pair_reactions_for_seed(
                         resolver,
                         context,
                     )? {
+                        push_unique_reaction(reactions, reaction_ids, reaction)?;
+                    }
+                }
+            }
+        }
+        ReactiveSiteKind::DicarbonylElectrophile => {
+            let dicarbonyl_center = seed.clone().dicarbonyl_electrophile_center()?;
+            let Some(activated) = dicarbonyl_center.activated_methylene_center() else {
+                return Ok(());
+            };
+            for carbonyl_kind in carbonyl_site_kinds() {
+                for carbonyl in space.sites_of(&carbonyl_kind) {
+                    let carbonyl_site = carbonyl.carbonyl_site()?;
+                    if let Some(reaction) =
+                        generate_knoevenagel_condensation(&activated, &carbonyl_site, resolver)?
+                    {
                         push_unique_reaction(reactions, reaction_ids, reaction)?;
                     }
                 }

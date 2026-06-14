@@ -62,6 +62,69 @@ pub(crate) fn generate_aldol_addition(
     .build())
 }
 
+pub(crate) fn generate_knoevenagel_condensation(
+    activated: &ActivatedMethyleneCenter<'_>,
+    carbonyl_site: &CarbonylSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    if activated.hydrogens.len() < 2 {
+        return Ok(None);
+    }
+
+    let mut activated_editor = MolecularEditor::new(activated.participant.structure);
+    let activated_mapping =
+        activated_editor.remove_atoms(&[activated.hydrogens[0], activated.hydrogens[1]])?;
+    let activated_carbon = mapped_atom(
+        &activated_mapping,
+        activated.carbon,
+        "Knoevenagel activated methylene carbon",
+    )?;
+    let activated_fragment = activated_editor.finish()?;
+
+    let mut carbonyl_editor = MolecularEditor::new(carbonyl_site.participant.structure);
+    let carbonyl_mapping = carbonyl_editor.remove_atoms(&[carbonyl_site.oxygen])?;
+    let carbonyl_carbon = mapped_atom(
+        &carbonyl_mapping,
+        carbonyl_site.carbon,
+        "Knoevenagel carbonyl carbon",
+    )?;
+    let carbonyl_fragment = carbonyl_editor.finish()?;
+
+    let product = resolver.resolve(MolecularEditor::join_structures(
+        &carbonyl_fragment,
+        carbonyl_carbon,
+        &activated_fragment,
+        activated_carbon,
+        2.0,
+    )?)?;
+
+    Ok(Some(
+        Reaction::builder(generated_pair_site_reaction_id(
+            "knoevenagel_condensation",
+            &activated.participant,
+            &carbonyl_site.participant,
+        ))
+        .reactant(activated.participant.substance.id.clone(), 1, 1)
+        .reactant(carbonyl_site.participant.substance.id.clone(), 1, 1)
+        .product(product, 1)
+        .product("destroy:water", 1)
+        .catalyst_order("destroy:hydroxide", 1)
+        .condition(
+            ReactionCondition::new(
+                "Knoevenagel condensation requires basic activation of the methylene",
+            )
+            .acidity(AcidityCondition::Basic)
+            .max_water_activity(0.5),
+        )
+        .activation_energy_kj_per_mol(34.0)
+        .selectivity_profile(SelectivityProfile::new(
+            ReactionType::AldolAddition,
+            SiteDescriptorBuilder::from_carbonyl_site(carbonyl_site),
+        ))
+        .build(),
+    ))
+}
+
 pub(crate) fn generate_alpha_halogenation(
     center: &AlphaCarbonCenter<'_>,
     resolver: &mut DerivedSubstanceResolver,
