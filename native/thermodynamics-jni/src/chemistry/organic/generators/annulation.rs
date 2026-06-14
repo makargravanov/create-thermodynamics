@@ -19,8 +19,10 @@ pub(crate) fn generate_hydrazone_aryl_annulation(
         let center = &annulation_site.aryl_hydrazone;
         for sidechain_carbon in annulation_sidechain_carbons(center.participant.structure, center) {
             let original_sidechain_carbon = sidechain_carbon;
-            let sidechain_hydrogens =
-                center.participant.structure.bonded_atoms_by_element(sidechain_carbon, "H");
+            let sidechain_hydrogens = center
+                .participant
+                .structure
+                .bonded_atoms_by_element(sidechain_carbon, "H");
             if sidechain_hydrogens.len() < 2 {
                 continue;
             }
@@ -41,7 +43,11 @@ pub(crate) fn generate_hydrazone_aryl_annulation(
                 mapped_atom(&mapping, center.carbon, "annulation hydrazone carbon")?;
             let sidechain_carbon =
                 mapped_atom(&mapping, sidechain_carbon, "annulation sidechain carbon")?;
-            let ortho_atom = mapped_atom(&mapping, annulation_site.ortho_atom, "annulation ortho atom")?;
+            let ortho_atom = mapped_atom(
+                &mapping,
+                annulation_site.ortho_atom,
+                "annulation ortho atom",
+            )?;
             editor.add_bond(terminal_nitrogen, hydrazone_carbon, 1.0)?;
             editor.set_bond_order(hydrazone_carbon, sidechain_carbon, 2.0)?;
             editor.add_bond(sidechain_carbon, ortho_atom, 1.0)?;
@@ -50,10 +56,7 @@ pub(crate) fn generate_hydrazone_aryl_annulation(
             reactions.push(
                 Reaction::builder(format!(
                     "{}/ortho_{}_side_{}",
-                    generated_site_reaction_id(
-                        "hydrazone_aryl_annulation",
-                        &center.participant,
-                    ),
+                    generated_site_reaction_id("hydrazone_aryl_annulation", &center.participant,),
                     annulation_site.ortho_atom,
                     original_sidechain_carbon
                 ))
@@ -76,10 +79,7 @@ pub(crate) fn generate_hydrazone_aryl_annulation(
                         crate::chemistry::selectivity::types::SubstitutionDegree::Secondary,
                         0,
                         1,
-                        center
-                            .participant
-                            .structure
-                            .carbon_degree(center.carbon) as u32,
+                        center.participant.structure.carbon_degree(center.carbon) as u32,
                         true,
                         true,
                         true,

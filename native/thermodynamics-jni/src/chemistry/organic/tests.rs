@@ -70,28 +70,91 @@ const ORGANIC_MODEL_SOURCES: &[(&str, &str)] = &[
     ("organic/engine.rs", include_str!("engine.rs")),
     ("dynamic/mod.rs", include_str!("../dynamic/mod.rs")),
     ("synthesis.rs", include_str!("../synthesis.rs")),
-    ("generators/acid_derivatives.rs", include_str!("generators/acid_derivatives.rs")),
-    ("generators/addition.rs", include_str!("generators/addition.rs")),
-    ("generators/alcohol.rs", include_str!("generators/alcohol.rs")),
-    ("generators/aromatic.rs", include_str!("generators/aromatic.rs")),
+    (
+        "generators/acid_derivatives.rs",
+        include_str!("generators/acid_derivatives.rs"),
+    ),
+    (
+        "generators/addition.rs",
+        include_str!("generators/addition.rs"),
+    ),
+    (
+        "generators/alcohol.rs",
+        include_str!("generators/alcohol.rs"),
+    ),
+    (
+        "generators/aromatic.rs",
+        include_str!("generators/aromatic.rs"),
+    ),
     ("generators/boron.rs", include_str!("generators/boron.rs")),
-    ("generators/c1_nitrogen.rs", include_str!("generators/c1_nitrogen.rs")),
-    ("generators/carbonyl.rs", include_str!("generators/carbonyl.rs")),
-    ("generators/combustion.rs", include_str!("generators/combustion.rs")),
-    ("generators/cracking.rs", include_str!("generators/cracking.rs")),
-    ("generators/cyclization.rs", include_str!("generators/cyclization.rs")),
-    ("generators/enolate.rs", include_str!("generators/enolate.rs")),
-    ("generators/heteroatom.rs", include_str!("generators/heteroatom.rs")),
-    ("generators/heterocycle.rs", include_str!("generators/heterocycle.rs")),
-    ("generators/organic_redox.rs", include_str!("generators/organic_redox.rs")),
-    ("generators/organometallic.rs", include_str!("generators/organometallic.rs")),
-    ("generators/phosphorus.rs", include_str!("generators/phosphorus.rs")),
-    ("generators/polycondensation.rs", include_str!("generators/polycondensation.rs")),
-    ("generators/protecting_groups.rs", include_str!("generators/protecting_groups.rs")),
-    ("generators/radical.rs", include_str!("generators/radical.rs")),
-    ("generators/rearrangement.rs", include_str!("generators/rearrangement.rs")),
-    ("generators/ring_closure.rs", include_str!("generators/ring_closure.rs")),
-    ("generators/substitution.rs", include_str!("generators/substitution.rs")),
+    (
+        "generators/c1_nitrogen.rs",
+        include_str!("generators/c1_nitrogen.rs"),
+    ),
+    (
+        "generators/carbonyl.rs",
+        include_str!("generators/carbonyl.rs"),
+    ),
+    (
+        "generators/combustion.rs",
+        include_str!("generators/combustion.rs"),
+    ),
+    (
+        "generators/cracking.rs",
+        include_str!("generators/cracking.rs"),
+    ),
+    (
+        "generators/cyclization.rs",
+        include_str!("generators/cyclization.rs"),
+    ),
+    (
+        "generators/enolate.rs",
+        include_str!("generators/enolate.rs"),
+    ),
+    (
+        "generators/heteroatom.rs",
+        include_str!("generators/heteroatom.rs"),
+    ),
+    (
+        "generators/heterocycle.rs",
+        include_str!("generators/heterocycle.rs"),
+    ),
+    (
+        "generators/organic_redox.rs",
+        include_str!("generators/organic_redox.rs"),
+    ),
+    (
+        "generators/organometallic.rs",
+        include_str!("generators/organometallic.rs"),
+    ),
+    (
+        "generators/phosphorus.rs",
+        include_str!("generators/phosphorus.rs"),
+    ),
+    (
+        "generators/polycondensation.rs",
+        include_str!("generators/polycondensation.rs"),
+    ),
+    (
+        "generators/protecting_groups.rs",
+        include_str!("generators/protecting_groups.rs"),
+    ),
+    (
+        "generators/radical.rs",
+        include_str!("generators/radical.rs"),
+    ),
+    (
+        "generators/rearrangement.rs",
+        include_str!("generators/rearrangement.rs"),
+    ),
+    (
+        "generators/ring_closure.rs",
+        include_str!("generators/ring_closure.rs"),
+    ),
+    (
+        "generators/substitution.rs",
+        include_str!("generators/substitution.rs"),
+    ),
 ];
 
 const FORBIDDEN_TARGETED_ORGANIC_FRAGMENTS: &[&str] = &[

@@ -57,16 +57,25 @@ fn generate_organic_reactions_with_space(
             .map(|substance| substance.id.clone())
             .collect()
     });
-    generate_organic_reactions_for_seed_substances(space, &seed_ids, canonical_to_id, context)
+    let known_structures = known_structures_from_substances(space.all_substances.iter().copied());
+    generate_organic_reactions_for_seed_substances(
+        space,
+        &seed_ids,
+        canonical_to_id,
+        known_structures,
+        context,
+    )
 }
 
 pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
     space: &OrganicGenerationSpace<'a>,
     seed_participants: impl IntoIterator<Item = SiteParticipant<'a>>,
     canonical_to_id: BTreeMap<String, SubstanceId>,
+    known_structures: BTreeMap<SubstanceId, crate::chemistry::molecule::MolecularStructure>,
     context: &SelectivityContext,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
-    let mut resolver = DerivedSubstanceResolver::new_from_canonical_to_id(canonical_to_id);
+    let mut resolver =
+        DerivedSubstanceResolver::new_from_known_structures(canonical_to_id, known_structures);
     let mut reactions = Vec::new();
     let mut reaction_ids = BTreeSet::new();
 
@@ -394,6 +403,7 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
     space: &OrganicGenerationSpace<'a>,
     seeds: &BTreeSet<SubstanceId>,
     canonical_to_id: BTreeMap<String, SubstanceId>,
+    known_structures: BTreeMap<SubstanceId, crate::chemistry::molecule::MolecularStructure>,
     context: &SelectivityContext,
 ) -> ChemistryResult<GeneratedOrganicCatalog> {
     let seed_participants = space
@@ -405,10 +415,19 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
         space,
         seed_participants,
         canonical_to_id,
+        known_structures,
         context,
     )?;
     let canonical_to_id = canonical_to_id_from_generated(space, &generated)?;
-    let mut resolver = DerivedSubstanceResolver::new_from_canonical_to_id(canonical_to_id);
+    let known_structures = known_structures_from_substances(
+        space
+            .all_substances
+            .iter()
+            .copied()
+            .chain(generated.substances.iter()),
+    );
+    let mut resolver =
+        DerivedSubstanceResolver::new_from_known_structures(canonical_to_id, known_structures);
     let mut reaction_ids = generated
         .reactions
         .iter()
@@ -564,6 +583,20 @@ fn canonical_to_id_from_substances<'a>(
         }
     }
     Ok(canonical_to_id)
+}
+
+fn known_structures_from_substances<'a>(
+    substances: impl IntoIterator<Item = &'a Substance>,
+) -> BTreeMap<SubstanceId, crate::chemistry::molecule::MolecularStructure> {
+    let mut structures = BTreeMap::new();
+    for substance in substances {
+        if let Some(structure) = &substance.molecular_structure {
+            structures
+                .entry(substance.id.clone())
+                .or_insert_with(|| structure.clone());
+        }
+    }
+    structures
 }
 
 fn generate_pair_reactions_for_seed(

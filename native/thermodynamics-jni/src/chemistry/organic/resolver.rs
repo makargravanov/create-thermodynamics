@@ -10,17 +10,34 @@ const DEFAULT_DERIVED_LATENT_HEAT: f64 = 20_000.0;
 
 pub(crate) struct DerivedSubstanceResolver {
     canonical_to_id: BTreeMap<String, SubstanceId>,
+    known_structures_by_id: BTreeMap<SubstanceId, MolecularStructure>,
     generated_id_to_canonical: BTreeMap<SubstanceId, String>,
     pub(crate) substances: Vec<Substance>,
 }
 
 impl DerivedSubstanceResolver {
+    #[cfg(test)]
     pub(crate) fn new_from_canonical_to_id(canonical_to_id: BTreeMap<String, SubstanceId>) -> Self {
+        Self::new_from_known_structures(canonical_to_id, BTreeMap::new())
+    }
+
+    pub(crate) fn new_from_known_structures(
+        canonical_to_id: BTreeMap<String, SubstanceId>,
+        known_structures_by_id: BTreeMap<SubstanceId, MolecularStructure>,
+    ) -> Self {
         Self {
             canonical_to_id,
+            known_structures_by_id,
             generated_id_to_canonical: BTreeMap::new(),
             substances: Vec::new(),
         }
+    }
+
+    pub(crate) fn known_structure(
+        &self,
+        substance_id: &SubstanceId,
+    ) -> Option<&MolecularStructure> {
+        self.known_structures_by_id.get(substance_id)
     }
 
     pub(crate) fn resolve(

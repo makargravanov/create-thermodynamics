@@ -1082,12 +1082,13 @@ impl<'a> SiteParticipant<'a> {
                 .iter()
                 .copied()
                 .filter(|nitrogen| {
-                    self.structure.neighbors(bridge_atom).into_iter().any(
-                        |(neighbor, order)| {
+                    self.structure
+                        .neighbors(bridge_atom)
+                        .into_iter()
+                        .any(|(neighbor, order)| {
                             neighbor == *nitrogen
                                 && crate::chemistry::molecule::bond_order_matches(order, 1.0)
-                        },
-                    )
+                        })
                 })
                 .collect::<Vec<_>>()
         } else {
@@ -1600,13 +1601,13 @@ impl<'a> ArylHydrazoneCenter<'a> {
                 .then_some(neighbor)
             })
             .filter_map(|ortho_atom| {
-                first_bonded_hydrogen(self.participant.structure, ortho_atom).map(|ortho_hydrogen| {
-                    CyclizableHydrazoneAnnulationSite {
+                first_bonded_hydrogen(self.participant.structure, ortho_atom).map(
+                    |ortho_hydrogen| CyclizableHydrazoneAnnulationSite {
                         aryl_hydrazone: self.clone(),
                         ortho_atom,
                         ortho_hydrogen,
-                    }
-                })
+                    },
+                )
             })
             .collect()
     }

@@ -322,12 +322,8 @@ impl SynthesisPlanner {
             if starting_substances.is_empty() {
                 working_registry.generate_reactions(1)?;
             }
-            let direct_requirements = direct_target_requirements(
-                &working_registry,
-                self,
-                &starting_substances,
-                &target,
-            )?;
+            let direct_requirements =
+                direct_target_requirements(&working_registry, self, &starting_substances, &target)?;
             if direct_requirements.is_empty() {
                 if requested_max_steps.is_some_and(|requested| requested < self.max_steps) {
                     (
@@ -608,9 +604,11 @@ fn backward_routes_for_target(
         }
         let mut sub_steps = Vec::new();
         let mut requirements = Vec::new();
+        let mut denied_required_reactant = false;
         for reactant in step.missing_reactants.clone() {
             if !safety_policy.allows_substance(registry, &reactant)? {
-                continue;
+                denied_required_reactant = true;
+                break;
             }
             let nested = backward_routes_for_target(
                 registry,
@@ -631,6 +629,9 @@ fn backward_routes_for_target(
                     reason: format!("required reactant for planned step '{}'", step.reaction_id),
                 });
             }
+        }
+        if denied_required_reactant {
+            continue;
         }
         sub_steps.push(step);
         if sub_steps.len() > remaining_steps {
@@ -1141,7 +1142,10 @@ mod tests {
             .plan_report(&registry, SynthesisRequest::for_substance("destroy:argon"))
             .unwrap();
 
-        assert_eq!(report.status, SynthesisPlanStatus::UnsupportedByCurrentModel);
+        assert_eq!(
+            report.status,
+            SynthesisPlanStatus::UnsupportedByCurrentModel
+        );
         assert!(report.routes.is_empty());
         assert!(report.required_additions.is_empty());
         assert!(report
@@ -1287,6 +1291,22 @@ mod tests {
     }
 
     #[test]
+    fn safety_policy_filters_denied_missing_reactants_in_backward_search() {
+        let registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let policy = SynthesisSafetyPolicy::new()
+            .deny_substance("destroy:hydroxide", "test policy denies hydroxide input")
+            .unwrap();
+        let routes = SynthesisPlanner::new()
+            .with_safety_policy(policy)
+            .with_max_steps(1)
+            .allow_reaction_prefix("destroy:neutralization")
+            .plan_routes(&registry, SynthesisRequest::for_substance("destroy:water"))
+            .unwrap();
+
+        assert!(routes.is_empty());
+    }
+
+    #[test]
     fn planner_uses_tms_protection_as_synthesis_step() {
         let mut setup_registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
         setup_registry
@@ -1392,9 +1412,7 @@ mod tests {
     }
 
     #[test]
-    fn debug_methane_to_acetylene_without_prefixes() {
-        // Реестр = полный каталог (он задаёт ПРОСТРАНСТВО реакций),
-        // но "на складе" только метан. Цель — ацетилен. Без префиксов.
+    fn planner_finds_methane_to_acetylene_route_without_prefix_filters() {
         let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
         let routes = SynthesisPlanner::new()
             .with_max_steps(4)
@@ -1406,47 +1424,26 @@ mod tests {
             )
             .unwrap();
 
-        eprintln!("=== routes found: {} ===", routes.len());
-        for (i, route) in routes.iter().enumerate() {
-            eprintln!(
-                "--- route #{i}: {} step(s), yield={:.3}, score={:.3}",
-                route.steps.len(),
-                route.estimated_yield,
-                route.score
-            );
-            eprintln!("    explanation: {}", route.explanation);
-            for (s, step) in route.steps.iter().enumerate() {
-                eprintln!(
-                    "    step {s}: {}  [{}] -> [{}]",
-                    step.reaction_id.as_str(),
-                    step.reactants
-                        .iter()
-                        .map(|r| r.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" + "),
-                    step.products
-                        .iter()
-                        .map(|p| p.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" + "),
-                );
-                if !step.missing_reactants.is_empty() {
-                    eprintln!(
-                        "        missing: {}",
-                        step.missing_reactants
-                            .iter()
-                            .map(|m| m.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                }
-            }
-            if !route.required_additions.is_empty() {
-                eprintln!("    required additions:");
-                for req in &route.required_additions {
-                    eprintln!("        {} ({})", req.substance_id.as_str(), req.reason);
-                }
-            }
-        }
+        assert!(!routes.is_empty());
+        let best = &routes[0];
+        assert_eq!(best.steps.len(), 3);
+        assert!(best.required_additions.is_empty());
+        assert!(best
+            .explanation
+            .contains("route can be run from the available substances"));
+
+        let reaction_ids = best
+            .steps
+            .iter()
+            .map(|step| step.reaction_id.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            reaction_ids[0].starts_with("dehydrogenative_coupling/destroy_methane/destroy_methane")
+        );
+        assert!(reaction_ids[1].starts_with("pyrolysis/destroy_linear_C_C_"));
+        assert!(reaction_ids[2].starts_with("pyrolysis/destroy_ethene/"));
+        assert!(best.steps.last().is_some_and(|step| step
+            .products
+            .contains(&SubstanceId::from("destroy:acetylene"))));
     }
 }

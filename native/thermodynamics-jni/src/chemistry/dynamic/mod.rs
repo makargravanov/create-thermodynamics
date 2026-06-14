@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use super::complex::{ComplexGeometry, ComplexLigand, ComplexSpec, LigandExchangeLability};
 use super::error::{ChemistryError, ChemistryResult};
@@ -37,14 +37,17 @@ enum KnownSubstanceIndex {
     Dynamic(usize),
 }
 
+#[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum OrganicGeneratorKind {
     HalideHydroxideSubstitution,
     HalideAmmoniaSubstitution,
     HalideCyanideSubstitution,
     HalideAmineSubstitution,
+    HalideDehydrohalogenation,
     AlcoholOxidation,
     AlcoholDehydration,
+    KetoEnolTautomerization,
     ThionylChlorideSubstitution,
     CarboxylicAcidEsterification,
     AcylChlorideEsterification,
@@ -52,15 +55,23 @@ enum OrganicGeneratorKind {
     NitrileHydrolysis,
     NitrileHydrogenation,
     NitroHydrogenation,
+    BeckmannRearrangement,
     AcylChlorideHydrolysis,
+    AcidAnhydrideHydrolysis,
     AcylChlorideFormation,
     AldehydeOxidation,
+    BaeyerVilligerRearrangement,
     CyanideNucleophilicAddition,
+    BorohydrideCarbonylReduction,
     WolffKishnerReduction,
     AmideHydrolysis,
+    EsterHydrolysis,
+    LahEsterReduction,
     AminePhosgenation,
     CyanamideAddition,
     IsocyanateHydrolysis,
+    IsocyanateAmmonolysis,
+    IsocyanateAmineAddition,
     BoraneOxidation,
     BorateEsterHydrolysis,
     AlkeneChlorination,
@@ -71,6 +82,11 @@ enum OrganicGeneratorKind {
     AlkeneHydrogenation,
     AlkeneHydroiodination,
     AlkeneIodination,
+    AlkenePhotoisomerization,
+    AlkeneEpoxidation,
+    ChainGrowthPolymerization,
+    DielsAlder,
+    RetroDielsAlder,
     AlkyneChlorination,
     AlkyneChlorohydrination,
     AlkyneHydrolysis,
@@ -80,6 +96,9 @@ enum OrganicGeneratorKind {
     AlkyneHydroiodination,
     AlkyneIodination,
     AromaticNitration,
+    AromaticChlorination,
+    AromaticBromination,
+    AromaticSulfonation,
     EpoxideHydrolysis,
     OrganometallicFormation,
     OrganometallicCarbonylAddition,
@@ -92,8 +111,10 @@ enum OrganicGeneratorKind {
     EnolateAlkylation,
     MichaelAddition,
     ClaisenCondensation,
+    KnoevenagelCondensation,
     PhosphoniumSaltFormation,
     PhosphoniumYlideFormation,
+    NucleophilicPhosphorusAlkylation,
     WittigOlefination,
     HornerWadsworthEmmonsOlefination,
     JuliaOlefination,
@@ -105,11 +126,37 @@ enum OrganicGeneratorKind {
     AmineCbzProtection,
     CbzDeprotection,
     OrganicCombustion,
-    AlkeneEpoxidation,
     RadicalHalogenation,
-    AlkenePhotoisomerization,
-    RetroDielsAlder,
-    KnoevenagelCondensation,
+    Cracking,
+    Pyrolysis,
+    DehydrogenativeCoupling,
+    Polycondensation,
+    P4Hydrolysis,
+    AcidAnhydrideFormation,
+    Lactonization,
+    Lactamization,
+    Amidation,
+    AcetalFormation,
+    AcylChlorideAmidation,
+    AcylChlorideThioesterification,
+    FriedelCraftsAcylation,
+    FriedelCraftsAlkylation,
+    AnhydrideAlcoholAcylation,
+    AnhydrideAmineAcylation,
+    AnhydrideThiolAcylation,
+    AmideNAlkylation,
+    IntramolecularNAlkylation,
+    AmineFormylation,
+    PaalKnorrFuran,
+    PaalKnorrPyrrole,
+    PaalKnorrThiophene,
+    ImineFormation,
+    HydrazoneFormation,
+    AmidineCyclization,
+    ArylHalideHydroxideSubstitution,
+    ArylHalideAmmoniaSubstitution,
+    SulfideOxidation,
+    SulfoxideOxidation,
     BisNucleophileDicarbonylCondensation,
     HydrazoneArylAnnulation,
 }
@@ -120,81 +167,7 @@ impl OrganicGeneratorKind {
     }
 
     fn ordinal(self) -> u32 {
-        match self {
-            OrganicGeneratorKind::HalideHydroxideSubstitution => 0,
-            OrganicGeneratorKind::HalideAmmoniaSubstitution => 1,
-            OrganicGeneratorKind::HalideCyanideSubstitution => 2,
-            OrganicGeneratorKind::HalideAmineSubstitution => 3,
-            OrganicGeneratorKind::AlcoholOxidation => 4,
-            OrganicGeneratorKind::AlcoholDehydration => 5,
-            OrganicGeneratorKind::ThionylChlorideSubstitution => 6,
-            OrganicGeneratorKind::CarboxylicAcidEsterification => 7,
-            OrganicGeneratorKind::AcylChlorideEsterification => 8,
-            OrganicGeneratorKind::AlkoxideProtonation => 9,
-            OrganicGeneratorKind::NitrileHydrolysis => 10,
-            OrganicGeneratorKind::NitrileHydrogenation => 11,
-            OrganicGeneratorKind::NitroHydrogenation => 12,
-            OrganicGeneratorKind::AcylChlorideHydrolysis => 13,
-            OrganicGeneratorKind::AcylChlorideFormation => 14,
-            OrganicGeneratorKind::AldehydeOxidation => 15,
-            OrganicGeneratorKind::CyanideNucleophilicAddition => 16,
-            OrganicGeneratorKind::WolffKishnerReduction => 17,
-            OrganicGeneratorKind::AmideHydrolysis => 18,
-            OrganicGeneratorKind::AminePhosgenation => 19,
-            OrganicGeneratorKind::CyanamideAddition => 20,
-            OrganicGeneratorKind::IsocyanateHydrolysis => 21,
-            OrganicGeneratorKind::BoraneOxidation => 22,
-            OrganicGeneratorKind::BorateEsterHydrolysis => 23,
-            OrganicGeneratorKind::AlkeneChlorination => 24,
-            OrganicGeneratorKind::AlkeneChlorohydrination => 25,
-            OrganicGeneratorKind::AlkeneHydrolysis => 26,
-            OrganicGeneratorKind::AlkeneHydroborationWithBorane => 27,
-            OrganicGeneratorKind::AlkeneHydrochlorination => 28,
-            OrganicGeneratorKind::AlkeneHydrogenation => 29,
-            OrganicGeneratorKind::AlkeneHydroiodination => 30,
-            OrganicGeneratorKind::AlkeneIodination => 31,
-            OrganicGeneratorKind::AlkyneChlorination => 32,
-            OrganicGeneratorKind::AlkyneChlorohydrination => 33,
-            OrganicGeneratorKind::AlkyneHydrolysis => 34,
-            OrganicGeneratorKind::AlkyneHydroborationWithBorane => 35,
-            OrganicGeneratorKind::AlkyneHydrochlorination => 36,
-            OrganicGeneratorKind::AlkyneHydrogenation => 37,
-            OrganicGeneratorKind::AlkyneHydroiodination => 38,
-            OrganicGeneratorKind::AlkyneIodination => 39,
-            OrganicGeneratorKind::AromaticNitration => 40,
-            OrganicGeneratorKind::EpoxideHydrolysis => 41,
-            OrganicGeneratorKind::OrganometallicFormation => 42,
-            OrganicGeneratorKind::OrganometallicCarbonylAddition => 43,
-            OrganicGeneratorKind::OrganometallicNitrileAddition => 44,
-            OrganicGeneratorKind::OrganometallicEpoxideOpening => 45,
-            OrganicGeneratorKind::AldolAddition => 46,
-            OrganicGeneratorKind::AlphaHalogenation => 47,
-            OrganicGeneratorKind::AldolDehydration => 48,
-            OrganicGeneratorKind::EnamineFormation => 49,
-            OrganicGeneratorKind::EnolateAlkylation => 50,
-            OrganicGeneratorKind::MichaelAddition => 51,
-            OrganicGeneratorKind::ClaisenCondensation => 52,
-            OrganicGeneratorKind::PhosphoniumSaltFormation => 53,
-            OrganicGeneratorKind::PhosphoniumYlideFormation => 54,
-            OrganicGeneratorKind::WittigOlefination => 55,
-            OrganicGeneratorKind::HornerWadsworthEmmonsOlefination => 56,
-            OrganicGeneratorKind::JuliaOlefination => 57,
-            OrganicGeneratorKind::AlcoholSilylProtection => 58,
-            OrganicGeneratorKind::SilylEtherDeprotection => 59,
-            OrganicGeneratorKind::AcetalDeprotection => 60,
-            OrganicGeneratorKind::AmineBocProtection => 61,
-            OrganicGeneratorKind::BocDeprotection => 62,
-            OrganicGeneratorKind::AmineCbzProtection => 63,
-            OrganicGeneratorKind::CbzDeprotection => 64,
-            OrganicGeneratorKind::OrganicCombustion => 65,
-            OrganicGeneratorKind::AlkeneEpoxidation => 66,
-            OrganicGeneratorKind::RadicalHalogenation => 67,
-            OrganicGeneratorKind::AlkenePhotoisomerization => 68,
-            OrganicGeneratorKind::RetroDielsAlder => 69,
-            OrganicGeneratorKind::KnoevenagelCondensation => 70,
-            OrganicGeneratorKind::BisNucleophileDicarbonylCondensation => 71,
-            OrganicGeneratorKind::HydrazoneArylAnnulation => 72,
-        }
+        self as u32
     }
 }
 
@@ -224,8 +197,7 @@ pub struct DynamicChemistryRegistry {
     site_index: Vec<SiteBucket>,
     site_handles_by_substance: Vec<Vec<SiteHandle>>,
     processed_generation_masks: BTreeMap<(usize, ReactiveSiteKey), u128>,
-    processed_combustion_slots: BTreeSet<usize>,
-    processed_radical_slots: BTreeSet<usize>,
+    processed_substance_generation_masks: BTreeMap<usize, u128>,
     dynamic_acid_base_specs: Vec<AcidBaseSpec>,
     dynamic_precipitation_specs: Vec<PrecipitationSpec>,
     dynamic_complex_specs: Vec<ComplexSpec>,
@@ -264,8 +236,7 @@ impl DynamicChemistryRegistry {
             site_index: Vec::new(),
             site_handles_by_substance: vec![Vec::new(); static_substance_count],
             processed_generation_masks: BTreeMap::new(),
-            processed_combustion_slots: BTreeSet::new(),
-            processed_radical_slots: BTreeSet::new(),
+            processed_substance_generation_masks: BTreeMap::new(),
             dynamic_acid_base_specs: Vec::new(),
             dynamic_precipitation_specs: Vec::new(),
             dynamic_complex_specs: Vec::new(),
@@ -506,8 +477,7 @@ impl DynamicChemistryRegistry {
             let mut inorganic_seeds = Vec::new();
             let mut unprocessed_seeds = Vec::new();
             let mut pending_generation_mask_updates = Vec::new();
-            let mut pending_combustion_slots = Vec::new();
-            let mut pending_radical_slots = Vec::new();
+            let mut pending_substance_generation_mask_updates = Vec::new();
             for _ in 0..batch_len {
                 let seed = queue.pop_front().expect("batch length was measured");
                 self.mark_known_substance(&mut queued, seed, false);
@@ -516,18 +486,15 @@ impl DynamicChemistryRegistry {
                     processed_work_items += 1;
                 }
                 let mask_updates = self.generation_mask_updates_for_substance(seed)?;
-                let combustion_slot = self.combustion_generation_update_for_substance(seed)?;
-                let radical_slot = self.radical_generation_update_for_substance(seed, &scope)?;
-                if mask_updates.is_empty() && combustion_slot.is_none() && radical_slot.is_none() {
+                let substance_mask_update =
+                    self.substance_generation_mask_update_for_substance(seed, &scope)?;
+                if mask_updates.is_empty() && substance_mask_update.is_none() {
                     skipped_duplicates += 1;
                     continue;
                 }
                 pending_generation_mask_updates.extend(mask_updates);
-                if let Some(slot) = combustion_slot {
-                    pending_combustion_slots.push(slot);
-                }
-                if let Some(slot) = radical_slot {
-                    pending_radical_slots.push(slot);
+                if let Some(update) = substance_mask_update {
+                    pending_substance_generation_mask_updates.push(update);
                 }
                 unprocessed_seeds.push(seed);
                 processed_work_items += 1;
@@ -568,8 +535,9 @@ impl DynamicChemistryRegistry {
 
             let mut staged = self.clone();
             staged.apply_generation_mask_updates(&pending_generation_mask_updates);
-            staged.apply_combustion_generation_updates(&pending_combustion_slots);
-            staged.apply_radical_generation_updates(&pending_radical_slots);
+            staged.apply_substance_generation_mask_updates(
+                &pending_substance_generation_mask_updates,
+            );
             let mut generated_id_remap = BTreeMap::new();
             let mut new_substance_ids = Vec::new();
             for substance in generated.substances {
@@ -1518,39 +1486,33 @@ impl DynamicChemistryRegistry {
         }
     }
 
-    fn combustion_generation_update_for_substance(
-        &self,
-        substance_index: KnownSubstanceIndex,
-    ) -> ChemistryResult<Option<usize>> {
-        let _generator = OrganicGeneratorKind::OrganicCombustion;
-        let substance = self.substance_by_known_index(substance_index)?;
-        if substance.molecular_structure.is_none() {
-            return Ok(None);
-        }
-        let slot = known_substance_slot(self.static_registry.substance_count(), substance_index);
-        Ok((!self.processed_combustion_slots.contains(&slot)).then_some(slot))
-    }
-
-    fn apply_combustion_generation_updates(&mut self, slots: &[usize]) {
-        self.processed_combustion_slots
-            .extend(slots.iter().copied());
-    }
-
-    fn radical_generation_update_for_substance(
+    fn substance_generation_mask_update_for_substance(
         &self,
         substance_index: KnownSubstanceIndex,
         scope: &[bool],
-    ) -> ChemistryResult<Option<usize>> {
-        let _generator = OrganicGeneratorKind::RadicalHalogenation;
+    ) -> ChemistryResult<Option<(usize, u128)>> {
         let substance = self.substance_by_known_index(substance_index)?;
-        if substance.molecular_structure.is_none() {
-            return Ok(None);
-        }
-        if !self.radical_halogen_available_in_scope(scope) {
+        let generators = substance_generators_for_substance(substance, scope, self);
+        if generators.is_empty() {
             return Ok(None);
         }
         let slot = known_substance_slot(self.static_registry.substance_count(), substance_index);
-        Ok((!self.processed_radical_slots.contains(&slot)).then_some(slot))
+        let current_mask = self
+            .processed_substance_generation_masks
+            .get(&slot)
+            .copied()
+            .unwrap_or(0);
+        let next_mask = generators
+            .into_iter()
+            .fold(current_mask, |mask, generator| mask | generator.bit());
+        Ok((next_mask != current_mask).then_some((slot, next_mask)))
+    }
+
+    fn apply_substance_generation_mask_updates(&mut self, updates: &[(usize, u128)]) {
+        for (slot, mask) in updates {
+            self.processed_substance_generation_masks
+                .insert(*slot, *mask);
+        }
     }
 
     fn radical_halogen_available_in_scope(&self, scope: &[bool]) -> bool {
@@ -1562,10 +1524,6 @@ impl DynamicChemistryRegistry {
                 })
                 .unwrap_or(false)
         })
-    }
-
-    fn apply_radical_generation_updates(&mut self, slots: &[usize]) {
-        self.processed_radical_slots.extend(slots.iter().copied());
     }
 
     fn generation_site_keys_for_substance(
@@ -1607,6 +1565,7 @@ impl DynamicChemistryRegistry {
             &space,
             &seed_ids,
             self.canonical_to_id.clone(),
+            self.known_structures_by_id()?,
             &crate::chemistry::selectivity::types::SelectivityContext::default(),
         )
         .map_err(|error| ChemistryError::GenerationInvariantViolation {
@@ -1647,6 +1606,19 @@ impl DynamicChemistryRegistry {
             push_site_handle(&mut self.site_index, site_kind, handle);
         }
         Ok(())
+    }
+
+    fn known_structures_by_id(&self) -> ChemistryResult<BTreeMap<SubstanceId, MolecularStructure>> {
+        let mut structures = BTreeMap::new();
+        for substance in self.all_known_substance_indices() {
+            let substance = self.substance_by_known_index(substance)?;
+            if let Some(structure) = &substance.molecular_structure {
+                structures
+                    .entry(substance.id.clone())
+                    .or_insert_with(|| structure.clone());
+            }
+        }
+        Ok(structures)
     }
 
     fn all_known_substance_indices(&self) -> Vec<KnownSubstanceIndex> {
@@ -1776,60 +1748,115 @@ fn generators_for_site(
             OrganicGeneratorKind::HalideAmmoniaSubstitution,
             OrganicGeneratorKind::HalideCyanideSubstitution,
             OrganicGeneratorKind::HalideAmineSubstitution,
+            OrganicGeneratorKind::HalideDehydrohalogenation,
             OrganicGeneratorKind::EnolateAlkylation,
             OrganicGeneratorKind::OrganometallicFormation,
+            OrganicGeneratorKind::FriedelCraftsAlkylation,
+            OrganicGeneratorKind::NucleophilicPhosphorusAlkylation,
+            OrganicGeneratorKind::AmideNAlkylation,
+            OrganicGeneratorKind::IntramolecularNAlkylation,
         ],
         ReactiveSiteKind::Alcohol => &[
             OrganicGeneratorKind::AlcoholOxidation,
             OrganicGeneratorKind::AlcoholDehydration,
+            OrganicGeneratorKind::KetoEnolTautomerization,
             OrganicGeneratorKind::ThionylChlorideSubstitution,
             OrganicGeneratorKind::AlcoholSilylProtection,
             OrganicGeneratorKind::CarboxylicAcidEsterification,
             OrganicGeneratorKind::AcylChlorideEsterification,
+            OrganicGeneratorKind::Lactonization,
+            OrganicGeneratorKind::AcetalFormation,
+            OrganicGeneratorKind::AnhydrideAlcoholAcylation,
         ],
         ReactiveSiteKind::SilylEther => &[OrganicGeneratorKind::SilylEtherDeprotection],
         ReactiveSiteKind::Acetal | ReactiveSiteKind::Ketal => {
             &[OrganicGeneratorKind::AcetalDeprotection]
         }
         ReactiveSiteKind::Alkoxide => &[OrganicGeneratorKind::AlkoxideProtonation],
-        ReactiveSiteKind::Ester => &[OrganicGeneratorKind::ClaisenCondensation],
         ReactiveSiteKind::Nitrile => &[
             OrganicGeneratorKind::NitrileHydrolysis,
             OrganicGeneratorKind::NitrileHydrogenation,
             OrganicGeneratorKind::OrganometallicNitrileAddition,
         ],
         ReactiveSiteKind::Nitro => &[OrganicGeneratorKind::NitroHydrogenation],
+        ReactiveSiteKind::Oxime => &[OrganicGeneratorKind::BeckmannRearrangement],
         ReactiveSiteKind::AcylChloride => &[
             OrganicGeneratorKind::AcylChlorideHydrolysis,
             OrganicGeneratorKind::AcylChlorideEsterification,
+            OrganicGeneratorKind::AcylChlorideAmidation,
+            OrganicGeneratorKind::AcylChlorideThioesterification,
+            OrganicGeneratorKind::FriedelCraftsAcylation,
+        ],
+        ReactiveSiteKind::AcidAnhydride => &[
+            OrganicGeneratorKind::AcidAnhydrideHydrolysis,
+            OrganicGeneratorKind::AnhydrideAlcoholAcylation,
+            OrganicGeneratorKind::AnhydrideAmineAcylation,
+            OrganicGeneratorKind::AnhydrideThiolAcylation,
         ],
         ReactiveSiteKind::CarboxylicAcid => &[
             OrganicGeneratorKind::AcylChlorideFormation,
             OrganicGeneratorKind::CarboxylicAcidEsterification,
+            OrganicGeneratorKind::AcidAnhydrideFormation,
+            OrganicGeneratorKind::Lactonization,
+            OrganicGeneratorKind::Lactamization,
+            OrganicGeneratorKind::Amidation,
         ],
         ReactiveSiteKind::Aldehyde => &[
             OrganicGeneratorKind::AldehydeOxidation,
+            OrganicGeneratorKind::BaeyerVilligerRearrangement,
             OrganicGeneratorKind::CyanideNucleophilicAddition,
+            OrganicGeneratorKind::BorohydrideCarbonylReduction,
             OrganicGeneratorKind::WolffKishnerReduction,
             OrganicGeneratorKind::OrganometallicCarbonylAddition,
             OrganicGeneratorKind::AldolAddition,
             OrganicGeneratorKind::EnamineFormation,
             OrganicGeneratorKind::KnoevenagelCondensation,
+            OrganicGeneratorKind::AcetalFormation,
+            OrganicGeneratorKind::ImineFormation,
+            OrganicGeneratorKind::HydrazoneFormation,
+            OrganicGeneratorKind::PaalKnorrFuran,
+            OrganicGeneratorKind::PaalKnorrPyrrole,
+            OrganicGeneratorKind::PaalKnorrThiophene,
         ],
         ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl => &[
+            OrganicGeneratorKind::BaeyerVilligerRearrangement,
             OrganicGeneratorKind::CyanideNucleophilicAddition,
+            OrganicGeneratorKind::BorohydrideCarbonylReduction,
             OrganicGeneratorKind::WolffKishnerReduction,
             OrganicGeneratorKind::OrganometallicCarbonylAddition,
             OrganicGeneratorKind::AldolAddition,
             OrganicGeneratorKind::EnamineFormation,
             OrganicGeneratorKind::KnoevenagelCondensation,
+            OrganicGeneratorKind::AcetalFormation,
+            OrganicGeneratorKind::ImineFormation,
+            OrganicGeneratorKind::HydrazoneFormation,
+            OrganicGeneratorKind::PaalKnorrFuran,
+            OrganicGeneratorKind::PaalKnorrPyrrole,
+            OrganicGeneratorKind::PaalKnorrThiophene,
         ],
         ReactiveSiteKind::Amide => &[OrganicGeneratorKind::AmideHydrolysis],
+        ReactiveSiteKind::Ester => &[
+            OrganicGeneratorKind::EsterHydrolysis,
+            OrganicGeneratorKind::LahEsterReduction,
+            OrganicGeneratorKind::ClaisenCondensation,
+        ],
         ReactiveSiteKind::PrimaryAmine => &[
             OrganicGeneratorKind::AminePhosgenation,
             OrganicGeneratorKind::AmineBocProtection,
             OrganicGeneratorKind::AmineCbzProtection,
+            OrganicGeneratorKind::ImineFormation,
+            OrganicGeneratorKind::Lactamization,
+            OrganicGeneratorKind::Amidation,
+            OrganicGeneratorKind::AcylChlorideAmidation,
+            OrganicGeneratorKind::AnhydrideAmineAcylation,
+            OrganicGeneratorKind::IsocyanateAmineAddition,
+            OrganicGeneratorKind::AmineFormylation,
+            OrganicGeneratorKind::PaalKnorrPyrrole,
+            OrganicGeneratorKind::AmidineCyclization,
         ],
+        ReactiveSiteKind::NucleophilicPhosphorus => {
+            &[OrganicGeneratorKind::NucleophilicPhosphorusAlkylation]
+        }
         ReactiveSiteKind::Phosphine => &[OrganicGeneratorKind::PhosphoniumSaltFormation],
         ReactiveSiteKind::PhosphoniumSalt => &[OrganicGeneratorKind::PhosphoniumYlideFormation],
         ReactiveSiteKind::PhosphorusYlide => &[OrganicGeneratorKind::WittigOlefination],
@@ -1843,10 +1870,21 @@ fn generators_for_site(
             OrganicGeneratorKind::EnamineFormation,
             OrganicGeneratorKind::AmineBocProtection,
             OrganicGeneratorKind::AmineCbzProtection,
+            OrganicGeneratorKind::Lactamization,
+            OrganicGeneratorKind::Amidation,
+            OrganicGeneratorKind::AcylChlorideAmidation,
+            OrganicGeneratorKind::AnhydrideAmineAcylation,
+            OrganicGeneratorKind::IsocyanateAmineAddition,
+            OrganicGeneratorKind::AmineFormylation,
         ],
+        ReactiveSiteKind::FormylationDonor => &[OrganicGeneratorKind::AmineFormylation],
         ReactiveSiteKind::BocCarbamate => &[OrganicGeneratorKind::BocDeprotection],
         ReactiveSiteKind::CbzCarbamate => &[OrganicGeneratorKind::CbzDeprotection],
-        ReactiveSiteKind::Isocyanate => &[OrganicGeneratorKind::IsocyanateHydrolysis],
+        ReactiveSiteKind::Isocyanate => &[
+            OrganicGeneratorKind::IsocyanateHydrolysis,
+            OrganicGeneratorKind::IsocyanateAmmonolysis,
+            OrganicGeneratorKind::IsocyanateAmineAddition,
+        ],
         ReactiveSiteKind::Borane => &[OrganicGeneratorKind::BoraneOxidation],
         ReactiveSiteKind::BorateEster => &[OrganicGeneratorKind::BorateEsterHydrolysis],
         ReactiveSiteKind::Alkene => &[
@@ -1861,6 +1899,8 @@ fn generators_for_site(
             OrganicGeneratorKind::AlkeneEpoxidation,
             OrganicGeneratorKind::MichaelAddition,
             OrganicGeneratorKind::AlkenePhotoisomerization,
+            OrganicGeneratorKind::ChainGrowthPolymerization,
+            OrganicGeneratorKind::DielsAlder,
             OrganicGeneratorKind::RetroDielsAlder,
         ],
         ReactiveSiteKind::Alkyne => &[
@@ -1873,7 +1913,14 @@ fn generators_for_site(
             OrganicGeneratorKind::AlkyneHydroiodination,
             OrganicGeneratorKind::AlkyneIodination,
         ],
-        ReactiveSiteKind::AromaticRing => &[OrganicGeneratorKind::AromaticNitration],
+        ReactiveSiteKind::AromaticRing => &[
+            OrganicGeneratorKind::AromaticNitration,
+            OrganicGeneratorKind::AromaticChlorination,
+            OrganicGeneratorKind::AromaticBromination,
+            OrganicGeneratorKind::AromaticSulfonation,
+            OrganicGeneratorKind::FriedelCraftsAlkylation,
+            OrganicGeneratorKind::FriedelCraftsAcylation,
+        ],
         ReactiveSiteKind::Epoxide => &[
             OrganicGeneratorKind::EpoxideHydrolysis,
             OrganicGeneratorKind::OrganometallicEpoxideOpening,
@@ -1904,11 +1951,45 @@ fn generators_for_site(
             OrganicGeneratorKind::BisNucleophileDicarbonylCondensation,
         ],
         ReactiveSiteKind::BisNucleophile | ReactiveSiteKind::UreaLike => {
-            &[OrganicGeneratorKind::BisNucleophileDicarbonylCondensation]
+            &[
+                OrganicGeneratorKind::BisNucleophileDicarbonylCondensation,
+                OrganicGeneratorKind::HydrazoneFormation,
+            ]
         }
         ReactiveSiteKind::Hydrazone => &[OrganicGeneratorKind::HydrazoneArylAnnulation],
+        ReactiveSiteKind::ArylHalide => &[
+            OrganicGeneratorKind::ArylHalideHydroxideSubstitution,
+            OrganicGeneratorKind::ArylHalideAmmoniaSubstitution,
+        ],
+        ReactiveSiteKind::Sulfide => &[OrganicGeneratorKind::SulfideOxidation],
+        ReactiveSiteKind::Sulfoxide => &[OrganicGeneratorKind::SulfoxideOxidation],
         _ => &[],
     }
+}
+
+fn substance_generators_for_substance(
+    substance: &Substance,
+    scope: &[bool],
+    registry: &DynamicChemistryRegistry,
+) -> Vec<OrganicGeneratorKind> {
+    if substance.molecular_structure.is_none() {
+        return Vec::new();
+    }
+
+    let mut generators = vec![
+        OrganicGeneratorKind::OrganicCombustion,
+        OrganicGeneratorKind::Cracking,
+        OrganicGeneratorKind::Pyrolysis,
+        OrganicGeneratorKind::DehydrogenativeCoupling,
+        OrganicGeneratorKind::Polycondensation,
+    ];
+    if registry.radical_halogen_available_in_scope(scope) {
+        generators.push(OrganicGeneratorKind::RadicalHalogenation);
+    }
+    if substance.id.as_str() == "destroy:white_phosphorus" {
+        generators.push(OrganicGeneratorKind::P4Hydrolysis);
+    }
+    generators
 }
 
 fn index_dynamic_reaction(
@@ -2669,7 +2750,31 @@ mod tests {
     #[test]
     fn generation_tracking_uses_dense_generator_masks() {
         assert!(std::mem::size_of::<OrganicGeneratorKind>() <= 1);
-        assert!(OrganicGeneratorKind::AlkeneEpoxidation.ordinal() < u128::BITS);
+        assert!(OrganicGeneratorKind::HydrazoneArylAnnulation.ordinal() < u128::BITS);
+    }
+
+    #[test]
+    fn substance_generation_tracking_records_each_substance_level_generator() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let methane = registry.resolve_frowns("C").unwrap();
+        registry.generate_reactions_for(&methane, 1).unwrap();
+
+        let substance_index = registry.known_substance_index(&methane).unwrap();
+        let slot = known_substance_slot(registry.static_registry.substance_count(), substance_index);
+        let mask = registry.processed_substance_generation_masks[&slot];
+
+        for generator in [
+            OrganicGeneratorKind::OrganicCombustion,
+            OrganicGeneratorKind::Cracking,
+            OrganicGeneratorKind::Pyrolysis,
+            OrganicGeneratorKind::DehydrogenativeCoupling,
+            OrganicGeneratorKind::Polycondensation,
+        ] {
+            assert!(
+                mask & generator.bit() != 0,
+                "missing substance-level generation bit for {generator:?}"
+            );
+        }
     }
 
     #[test]
