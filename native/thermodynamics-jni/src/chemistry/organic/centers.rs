@@ -258,6 +258,17 @@ pub(crate) struct DicarbonylElectrophileCenter<'a> {
     pub(crate) bridge_atoms: Vec<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DicarbonylCondensationTopology {
+    pub(crate) retained_carbonyl_carbon: usize,
+    pub(crate) retained_carbonyl_oxygen: usize,
+    pub(crate) imine_carbon: usize,
+    pub(crate) imine_oxygen: usize,
+    pub(crate) bridge_carbon: usize,
+    pub(crate) bridge_hydrogens: Vec<usize>,
+    pub(crate) imine_carbon_hydrogens: Vec<usize>,
+}
+
 #[derive(Clone)]
 pub(crate) struct UreaLikeCenter<'a> {
     pub(crate) participant: SiteParticipant<'a>,
@@ -1346,6 +1357,49 @@ impl<'a> SiteParticipant<'a> {
     }
 }
 
+impl DicarbonylElectrophileCenter<'_> {
+    pub(crate) fn condensation_topologies(&self) -> Vec<DicarbonylCondensationTopology> {
+        if self.bridge_atoms.len() != 1 {
+            return Vec::new();
+        }
+        let bridge_carbon = self.bridge_atoms[0];
+        [
+            (
+                self.first_carbonyl_carbon,
+                self.first_carbonyl_oxygen,
+                self.second_carbonyl_carbon,
+                self.second_carbonyl_oxygen,
+            ),
+            (
+                self.second_carbonyl_carbon,
+                self.second_carbonyl_oxygen,
+                self.first_carbonyl_carbon,
+                self.first_carbonyl_oxygen,
+            ),
+        ]
+        .into_iter()
+        .filter_map(
+            |(retained_carbonyl_carbon, retained_carbonyl_oxygen, imine_carbon, imine_oxygen)| {
+                let bridge_hydrogens = bonded_hydrogens(self.participant.structure, bridge_carbon);
+                let imine_carbon_hydrogens =
+                    bonded_hydrogens(self.participant.structure, imine_carbon);
+                (!bridge_hydrogens.is_empty() && !imine_carbon_hydrogens.is_empty()).then_some(
+                    DicarbonylCondensationTopology {
+                        retained_carbonyl_carbon,
+                        retained_carbonyl_oxygen,
+                        imine_carbon,
+                        imine_oxygen,
+                        bridge_carbon,
+                        bridge_hydrogens,
+                        imine_carbon_hydrogens,
+                    },
+                )
+            },
+        )
+        .collect()
+    }
+}
+
 fn alpha_carbonyl_kind(
     structure: &crate::chemistry::molecule::MolecularStructure,
     carbonyl_carbon: usize,
@@ -1611,5 +1665,40 @@ mod tests {
         assert_eq!(formyl.carbon, 0);
         assert_eq!(formyl.oxygen, 1);
         assert_eq!(formyl.hydrogen, 3);
+    }
+
+    #[test]
+    fn dicarbonyl_condensation_topology_keeps_one_carbonyl_explicit() {
+        let center = participant_for(
+            "destroy:graph:atoms=C.O.C.C.O.H.H.H.H;\
+             bonds=0-d-1,0-s-2,2-s-3,3-d-4,0-s-5,2-s-6,2-s-7,3-s-8",
+            ReactiveSiteKind::DicarbonylElectrophile,
+        )
+        .dicarbonyl_electrophile_center()
+        .unwrap();
+        let topologies = center.condensation_topologies();
+        assert_eq!(topologies.len(), 2);
+        assert!(topologies.iter().any(|topology| {
+            topology.retained_carbonyl_carbon == 0
+                && topology.retained_carbonyl_oxygen == 1
+                && topology.imine_carbon == 3
+                && topology.imine_oxygen == 4
+                && topology.bridge_carbon == 2
+        }));
+        assert!(topologies.iter().all(|topology| {
+            !topology.bridge_hydrogens.is_empty() && !topology.imine_carbon_hydrogens.is_empty()
+        }));
+    }
+
+    #[test]
+    fn one_four_dicarbonyl_is_not_a_pyrimidine_condensation_topology() {
+        let center = participant_for(
+            "destroy:graph:atoms=C.O.C.C.C.O.H.H.H.H.H.H;\
+             bonds=0-d-1,0-s-2,2-s-3,3-s-4,4-d-5,0-s-6,2-s-7,2-s-8,3-s-9,3-s-10,4-s-11",
+            ReactiveSiteKind::DicarbonylElectrophile,
+        )
+        .dicarbonyl_electrophile_center()
+        .unwrap();
+        assert!(center.condensation_topologies().is_empty());
     }
 }
