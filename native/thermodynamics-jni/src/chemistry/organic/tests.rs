@@ -201,6 +201,34 @@ fn isocyanate_amine_addition_creates_urea_like_product() {
 }
 
 #[test]
+fn isocyanate_ammonolysis_creates_urea_like_product() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let methyl_isocyanate = dynamic.resolve_frowns("CN=C=O").unwrap();
+
+    dynamic
+        .generate_reactions_for_substances([methyl_isocyanate.clone()], 1)
+        .unwrap();
+
+    let reaction = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("isocyanate_ammonolysis/"))
+        .expect("isocyanate must react with ammonia into a urea-like product");
+    assert!(reaction
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:ammonia"));
+    let product_id = reaction.products[0].substance_id.clone();
+    let product = dynamic.substance(&product_id).unwrap();
+    let product_sites = try_find_reactive_sites(product.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(product_sites.contains(&ReactiveSiteKind::UreaLike));
+}
+
+#[test]
 fn organic_redox_generates_graph_based_oxidation_paths() {
     let registry = generated_registry();
     let alcohol = reaction_with_prefix(&registry, "alcohol_oxidation/destroy_ethanol/");

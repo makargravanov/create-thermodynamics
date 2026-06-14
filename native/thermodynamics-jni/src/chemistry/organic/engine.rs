@@ -260,6 +260,8 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 let site = participant.clone().isocyanate_site()?;
                 let reaction = generate_isocyanate_hydrolysis(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                let reaction = generate_isocyanate_ammonolysis(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
             }
             ReactiveSiteKind::Borane => {
                 let site = participant.clone().borane_site()?;
