@@ -49,6 +49,24 @@ pub struct SynthesisRoute {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SynthesisPlanReport {
+    pub target: SubstanceId,
+    pub status: SynthesisPlanStatus,
+    pub routes: Vec<SynthesisRoute>,
+    pub required_additions: Vec<SynthesisRequirement>,
+    pub condition_hints: Vec<SynthesisConditionHint>,
+    pub unsupported_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SynthesisPlanStatus {
+    TargetAlreadyAvailable,
+    RoutesFound,
+    RequiresAdditionalInputs,
+    UnsupportedByCurrentModel,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SynthesisStep {
     pub reaction_id: ReactionId,
     pub reactants: Vec<SubstanceId>,
@@ -275,6 +293,62 @@ impl SynthesisPlanner {
             request.max_steps.unwrap_or(self.max_steps),
             request.max_routes.unwrap_or(self.max_routes),
         )
+    }
+
+    pub fn plan_report(
+        &self,
+        registry: &DynamicChemistryRegistry,
+        request: SynthesisRequest,
+    ) -> ChemistryResult<SynthesisPlanReport> {
+        let mut working_registry = registry.clone();
+        let target = resolve_target(&mut working_registry, request.target.clone())?;
+        let starting_substances = request.available_substances.clone();
+        let max_steps = request.max_steps.unwrap_or(self.max_steps);
+        let max_routes = request.max_routes.unwrap_or(self.max_routes);
+        let routes = self.find_routes_in_working_registry(
+            &mut working_registry,
+            request.available_substances,
+            target.clone(),
+            max_steps,
+            max_routes,
+        )?;
+        let mut required_additions = route_required_additions(&routes);
+        let condition_hints = routes_condition_hints(&routes);
+        let (status, unsupported_reason) = if starting_substances.contains(&target) {
+            (SynthesisPlanStatus::TargetAlreadyAvailable, None)
+        } else if routes.is_empty() {
+            let direct_requirements = direct_target_requirements(
+                &working_registry,
+                self,
+                &starting_substances,
+                &target,
+            )?;
+            if direct_requirements.is_empty() {
+                (
+                    SynthesisPlanStatus::UnsupportedByCurrentModel,
+                    Some(format!(
+                        "no known reaction in the current model produces '{}'",
+                        target.as_str()
+                    )),
+                )
+            } else {
+                required_additions = direct_requirements;
+                (SynthesisPlanStatus::RequiresAdditionalInputs, None)
+            }
+        } else if required_additions.is_empty() {
+            (SynthesisPlanStatus::RoutesFound, None)
+        } else {
+            (SynthesisPlanStatus::RequiresAdditionalInputs, None)
+        };
+
+        Ok(SynthesisPlanReport {
+            target,
+            status,
+            routes,
+            required_additions,
+            condition_hints,
+            unsupported_reason,
+        })
     }
 
     pub fn find_routes(
@@ -666,6 +740,74 @@ fn build_route(
     }
 }
 
+fn route_required_additions(routes: &[SynthesisRoute]) -> Vec<SynthesisRequirement> {
+    let mut required = routes
+        .iter()
+        .flat_map(|route| route.required_additions.iter().cloned())
+        .collect::<Vec<_>>();
+    deduplicate_requirements(&mut required);
+    required
+}
+
+fn routes_condition_hints(routes: &[SynthesisRoute]) -> Vec<SynthesisConditionHint> {
+    let mut by_description = BTreeMap::<String, f64>::new();
+    for route in routes {
+        for hint in &route.condition_hints {
+            *by_description
+                .entry(hint.description.clone())
+                .or_insert(0.0) += hint.penalty;
+        }
+    }
+    by_description
+        .into_iter()
+        .map(|(description, penalty)| SynthesisConditionHint {
+            description,
+            penalty,
+        })
+        .collect()
+}
+
+fn direct_target_requirements(
+    registry: &DynamicChemistryRegistry,
+    planner: &SynthesisPlanner,
+    starting_substances: &BTreeSet<SubstanceId>,
+    target: &SubstanceId,
+) -> ChemistryResult<Vec<SynthesisRequirement>> {
+    let mut requirements = Vec::new();
+    for reaction in registry
+        .reactions()
+        .filter(|reaction| planner.reaction_allowed(reaction))
+        .filter(|reaction| reaction_can_produce(reaction, target))
+    {
+        for reactant in term_ids(&reaction.reactants) {
+            if starting_substances.contains(&reactant) {
+                continue;
+            }
+            if !planner
+                .safety_policy
+                .allows_substance(registry, &reactant)?
+            {
+                continue;
+            }
+            requirements.push(SynthesisRequirement {
+                substance_id: reactant,
+                reason: format!("required by reaction '{}'", reaction.id),
+            });
+        }
+    }
+    deduplicate_requirements(&mut requirements);
+    Ok(requirements)
+}
+
+fn deduplicate_requirements(requirements: &mut Vec<SynthesisRequirement>) {
+    requirements.sort_by(|left, right| {
+        left.substance_id
+            .cmp(&right.substance_id)
+            .then_with(|| left.reason.cmp(&right.reason))
+    });
+    requirements.dedup_by(|left, right| left.substance_id == right.substance_id);
+}
+
 fn route_score(
     steps: &[SynthesisStep],
     estimated_yield: f64,
@@ -915,6 +1057,58 @@ mod tests {
             .unwrap();
         assert!(!routes.is_empty());
         assert!(!routes[0].required_additions.is_empty());
+    }
+
+    #[test]
+    fn planner_report_marks_found_route_without_mutating_registry() {
+        let registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let before = registry.reactions().count();
+        let report = SynthesisPlanner::new()
+            .with_max_steps(2)
+            .plan_report(
+                &registry,
+                SynthesisRequest::for_frowns("CCO")
+                    .with_available_substance("destroy:chloroethane")
+                    .with_available_substance("destroy:hydroxide"),
+            )
+            .unwrap();
+
+        assert_eq!(report.status, SynthesisPlanStatus::RoutesFound);
+        assert!(!report.routes.is_empty());
+        assert!(report.required_additions.is_empty());
+        assert!(report.unsupported_reason.is_none());
+        assert_eq!(registry.reactions().count(), before);
+    }
+
+    #[test]
+    fn planner_report_marks_known_route_with_missing_inputs() {
+        let registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let report = SynthesisPlanner::new()
+            .with_max_steps(1)
+            .plan_report(&registry, SynthesisRequest::for_substance("destroy:water"))
+            .unwrap();
+
+        assert_eq!(report.status, SynthesisPlanStatus::RequiresAdditionalInputs);
+        assert!(!report.routes.is_empty());
+        assert!(!report.required_additions.is_empty());
+        assert!(report.unsupported_reason.is_none());
+    }
+
+    #[test]
+    fn planner_report_marks_target_without_known_producer() {
+        let registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let report = SynthesisPlanner::new()
+            .with_max_steps(2)
+            .plan_report(&registry, SynthesisRequest::for_substance("destroy:argon"))
+            .unwrap();
+
+        assert_eq!(report.status, SynthesisPlanStatus::UnsupportedByCurrentModel);
+        assert!(report.routes.is_empty());
+        assert!(report.required_additions.is_empty());
+        assert!(report
+            .unsupported_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("destroy:argon")));
     }
 
     #[test]
