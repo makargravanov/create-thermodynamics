@@ -240,6 +240,16 @@ pub(crate) struct HydrazoneCenter<'a> {
 }
 
 #[derive(Clone)]
+pub(crate) struct ArylHydrazoneCenter<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) carbon: usize,
+    pub(crate) imine_nitrogen: usize,
+    pub(crate) terminal_nitrogen: usize,
+    pub(crate) aryl_attachment_atom: usize,
+    pub(crate) terminal_hydrogens: Vec<usize>,
+}
+
+#[derive(Clone)]
 pub(crate) struct BisNucleophileCenter<'a> {
     pub(crate) participant: SiteParticipant<'a>,
     pub(crate) first_nucleophile: usize,
@@ -270,11 +280,27 @@ pub(crate) struct DicarbonylCondensationTopology {
 }
 
 #[derive(Clone)]
+pub(crate) struct ActivatedMethyleneCenter<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) carbon: usize,
+    pub(crate) hydrogens: Vec<usize>,
+    pub(crate) electron_withdrawing_carbons: [usize; 2],
+}
+
+#[derive(Clone)]
 pub(crate) struct UreaLikeCenter<'a> {
     pub(crate) participant: SiteParticipant<'a>,
     pub(crate) carbon: usize,
     pub(crate) hetero_atom: usize,
     pub(crate) nitrogens: Vec<usize>,
+}
+
+#[derive(Clone)]
+pub(crate) struct AmidinoCenter<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) carbon: usize,
+    pub(crate) imine_nitrogen: usize,
+    pub(crate) amino_nitrogens: Vec<usize>,
 }
 
 #[derive(Clone)]
@@ -320,6 +346,13 @@ pub(crate) struct ArylHalideSite<'a> {
     pub(crate) participant: SiteParticipant<'a>,
     pub(crate) carbon: usize,
     pub(crate) halogen: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct ArylMigrationSite<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) ring_atoms: Vec<usize>,
+    pub(crate) attachment_atoms: Vec<usize>,
 }
 
 // Protecting group center types
@@ -966,6 +999,35 @@ impl<'a> SiteParticipant<'a> {
         })
     }
 
+    pub(crate) fn aryl_hydrazone_center(self) -> ChemistryResult<ArylHydrazoneCenter<'a>> {
+        let center = self.hydrazone_center()?;
+        let aryl_attachment_atom = center
+            .participant
+            .structure
+            .neighbors(center.terminal_nitrogen)
+            .into_iter()
+            .find_map(|(neighbor, order)| {
+                (neighbor != center.imine_nitrogen
+                    && !center.terminal_hydrogens.contains(&neighbor)
+                    && crate::chemistry::molecule::bond_order_matches(order, 1.0)
+                    && is_aromatic_atom(center.participant.structure, neighbor))
+                .then_some(neighbor)
+            })
+            .ok_or_else(|| {
+                center
+                    .participant
+                    .site_error("hydrazone has no aryl N-substituent")
+            })?;
+        Ok(ArylHydrazoneCenter {
+            participant: center.participant,
+            carbon: center.carbon,
+            imine_nitrogen: center.imine_nitrogen,
+            terminal_nitrogen: center.terminal_nitrogen,
+            aryl_attachment_atom,
+            terminal_hydrogens: center.terminal_hydrogens,
+        })
+    }
+
     pub(crate) fn bis_nucleophile_center(self) -> ChemistryResult<BisNucleophileCenter<'a>> {
         if !matches!(
             self.site.kind,
@@ -1048,6 +1110,33 @@ impl<'a> SiteParticipant<'a> {
         })
     }
 
+    pub(crate) fn activated_methylene_center(
+        self,
+    ) -> ChemistryResult<ActivatedMethyleneCenter<'a>> {
+        let center = self.dicarbonyl_electrophile_center()?;
+        if center.bridge_atoms.len() != 1 {
+            return Err(center
+                .participant
+                .site_error("activated methylene center must have one bridge carbon"));
+        }
+        let carbon = center.bridge_atoms[0];
+        let hydrogens = bonded_hydrogens(center.participant.structure, carbon);
+        if hydrogens.is_empty() {
+            return Err(center
+                .participant
+                .site_error("activated methylene center has no explicit hydrogen"));
+        }
+        Ok(ActivatedMethyleneCenter {
+            participant: center.participant,
+            carbon,
+            hydrogens,
+            electron_withdrawing_carbons: [
+                center.first_carbonyl_carbon,
+                center.second_carbonyl_carbon,
+            ],
+        })
+    }
+
     pub(crate) fn urea_like_center(self) -> ChemistryResult<UreaLikeCenter<'a>> {
         self.require_kind(ReactiveSiteKind::UreaLike)?;
         let carbon = self.site_atom_by_element("C", "urea-like carbon")?;
@@ -1084,6 +1173,21 @@ impl<'a> SiteParticipant<'a> {
             carbon,
             hetero_atom,
             nitrogens,
+        })
+    }
+
+    pub(crate) fn amidino_center(self) -> ChemistryResult<AmidinoCenter<'a>> {
+        let center = self.urea_like_center()?;
+        if center.participant.structure.atoms[center.hetero_atom].element != "N" {
+            return Err(center
+                .participant
+                .site_error("amidino center must have a double-bonded nitrogen"));
+        }
+        Ok(AmidinoCenter {
+            participant: center.participant,
+            carbon: center.carbon,
+            imine_nitrogen: center.hetero_atom,
+            amino_nitrogens: center.nitrogens,
         })
     }
 
@@ -1187,6 +1291,42 @@ impl<'a> SiteParticipant<'a> {
             participant: self,
             carbon,
             halogen,
+        })
+    }
+
+    pub(crate) fn aryl_migration_site(self) -> ChemistryResult<ArylMigrationSite<'a>> {
+        self.require_kind(ReactiveSiteKind::AromaticRing)?;
+        let ring_atoms = self
+            .site
+            .atoms
+            .iter()
+            .copied()
+            .filter(|atom| is_aromatic_atom(self.structure, *atom))
+            .collect::<Vec<_>>();
+        if ring_atoms.is_empty() {
+            return Err(self.site_error("aryl migration site has no aromatic atoms"));
+        }
+        let attachment_atoms = ring_atoms
+            .iter()
+            .copied()
+            .filter(|atom| {
+                self.structure
+                    .neighbors(*atom)
+                    .into_iter()
+                    .any(|(neighbor, order)| {
+                        !ring_atoms.contains(&neighbor)
+                            && self.structure.atoms[neighbor].element != "H"
+                            && crate::chemistry::molecule::bond_order_matches(order, 1.0)
+                    })
+            })
+            .collect::<Vec<_>>();
+        if attachment_atoms.is_empty() {
+            return Err(self.site_error("aryl migration site has no external attachment atom"));
+        }
+        Ok(ArylMigrationSite {
+            participant: self,
+            ring_atoms,
+            attachment_atoms,
         })
     }
 
@@ -1562,6 +1702,16 @@ fn directly_bonded(
         .any(|(neighbor, _)| neighbor == second)
 }
 
+fn is_aromatic_atom(
+    structure: &crate::chemistry::molecule::MolecularStructure,
+    atom: usize,
+) -> bool {
+    structure
+        .neighbors(atom)
+        .into_iter()
+        .any(|(_, order)| crate::chemistry::molecule::bond_order_matches(order, 1.5))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1665,6 +1815,69 @@ mod tests {
         assert_eq!(formyl.carbon, 0);
         assert_eq!(formyl.oxygen, 1);
         assert_eq!(formyl.hydrogen, 3);
+    }
+
+    #[test]
+    fn aryl_hydrazone_and_aryl_migration_centers_are_typed() {
+        let code = "destroy:graph:atoms=C.C.C.C.C.C.N.N.C.H.H.H.H.H.H.H.H;\
+             bonds=0-a-1,1-a-2,2-a-3,3-a-4,4-a-5,5-a-0,\
+             0-s-6,6-s-7,7-d-8,\
+             1-s-9,2-s-10,3-s-11,4-s-12,5-s-13,6-s-14,8-s-15,8-s-16";
+        let aryl_hydrazone = participant_for(code, ReactiveSiteKind::Hydrazone)
+            .aryl_hydrazone_center()
+            .unwrap();
+        assert_eq!(
+            aryl_hydrazone.participant.substance.id.as_str(),
+            "test:typed_center"
+        );
+        assert_eq!(aryl_hydrazone.carbon, 8);
+        assert_eq!(aryl_hydrazone.imine_nitrogen, 7);
+        assert_eq!(aryl_hydrazone.terminal_nitrogen, 6);
+        assert_eq!(aryl_hydrazone.aryl_attachment_atom, 0);
+        assert_eq!(aryl_hydrazone.terminal_hydrogens, vec![14]);
+
+        let migration = participant_for(code, ReactiveSiteKind::AromaticRing)
+            .aryl_migration_site()
+            .unwrap();
+        assert_eq!(
+            migration.participant.substance.id.as_str(),
+            "test:typed_center"
+        );
+        assert_eq!(migration.ring_atoms.len(), 6);
+        assert_eq!(migration.attachment_atoms, vec![0]);
+    }
+
+    #[test]
+    fn activated_methylene_and_amidino_centers_are_typed() {
+        let activated_methylene = participant_for(
+            "destroy:graph:atoms=C.O.C.C.O.H.H.H.H;\
+             bonds=0-d-1,0-s-2,2-s-3,3-d-4,0-s-5,2-s-6,2-s-7,3-s-8",
+            ReactiveSiteKind::DicarbonylElectrophile,
+        )
+        .activated_methylene_center()
+        .unwrap();
+        assert_eq!(
+            activated_methylene.participant.substance.id.as_str(),
+            "test:typed_center"
+        );
+        assert_eq!(activated_methylene.carbon, 2);
+        assert_eq!(activated_methylene.hydrogens, vec![6, 7]);
+        assert_eq!(activated_methylene.electron_withdrawing_carbons, [0, 3]);
+
+        let amidino = participant_for(
+            "destroy:graph:atoms=C.N.N.N.H.H.H.H.H;\
+             bonds=0-d-1,0-s-2,0-s-3,1-s-4,2-s-5,2-s-6,3-s-7,3-s-8",
+            ReactiveSiteKind::UreaLike,
+        )
+        .amidino_center()
+        .unwrap();
+        assert_eq!(
+            amidino.participant.substance.id.as_str(),
+            "test:typed_center"
+        );
+        assert_eq!(amidino.carbon, 0);
+        assert_eq!(amidino.imine_nitrogen, 1);
+        assert_eq!(amidino.amino_nitrogens, vec![2, 3]);
     }
 
     #[test]
