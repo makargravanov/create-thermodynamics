@@ -5,7 +5,7 @@ use create_thermodynamics_jni::chemistry::dynamic::DynamicChemistryRegistry;
 use create_thermodynamics_jni::chemistry::frowns::{parse_frowns, write_frowns};
 use create_thermodynamics_jni::chemistry::mixture::Mixture;
 use create_thermodynamics_jni::chemistry::molecule::{
-    MolecularAtom, MolecularBond, MolecularStructure,
+    MolecularAtom, MolecularBond, MolecularStructure, ValenceSaturation,
 };
 use create_thermodynamics_jni::chemistry::simulation::react_for_tick;
 use create_thermodynamics_jni::chemistry::{
@@ -220,6 +220,7 @@ fn large_carbon_cycle(atom_count: usize) -> MolecularStructure {
                 element: "C".to_string(),
                 charge: 0.0,
                 r_group_number: 0,
+                valence_saturation: ValenceSaturation::UnsaturatedAllowed,
             })
             .collect(),
         bonds: (0..atom_count)
@@ -229,5 +230,6 @@ fn large_carbon_cycle(atom_count: usize) -> MolecularStructure {
                 order: 1.0,
             })
             .collect(),
+        stereochemistry: Vec::new(),
     }
 }
