@@ -1029,11 +1029,18 @@ impl<'a> SiteParticipant<'a> {
     }
 
     pub(crate) fn bis_nucleophile_center(self) -> ChemistryResult<BisNucleophileCenter<'a>> {
+        let error = self.site_error("site is not a bis-nucleophile center");
+        self.try_bis_nucleophile_center()?.ok_or(error)
+    }
+
+    pub(crate) fn try_bis_nucleophile_center(
+        self,
+    ) -> ChemistryResult<Option<BisNucleophileCenter<'a>>> {
         if !matches!(
             self.site.kind,
             ReactiveSiteKind::BisNucleophile | ReactiveSiteKind::UreaLike
         ) {
-            return Err(self.site_error("site is not a bis-nucleophile center"));
+            return Ok(None);
         }
         let nitrogens = self
             .site
@@ -1043,20 +1050,45 @@ impl<'a> SiteParticipant<'a> {
             .filter(|atom| self.structure.atoms[*atom].element == "N")
             .collect::<Vec<_>>();
         if nitrogens.len() < 2 {
-            return Err(self.site_error("bis-nucleophile center has fewer than two nitrogens"));
+            return Ok(None);
         }
         let bridge_atom = self.site.atoms.iter().copied().find(|atom| {
             !nitrogens.contains(atom)
                 && matches!(self.structure.atoms[*atom].element.as_str(), "C" | "N")
         });
         let class = bis_nucleophile_class(self.structure, bridge_atom, &nitrogens);
-        Ok(BisNucleophileCenter {
+        let nucleophilic_nitrogens = if matches!(
+            class,
+            BisNucleophileClass::UreaLike | BisNucleophileClass::GuanidineLike
+        ) {
+            let Some(bridge_atom) = bridge_atom else {
+                return Ok(None);
+            };
+            nitrogens
+                .iter()
+                .copied()
+                .filter(|nitrogen| {
+                    self.structure.neighbors(bridge_atom).into_iter().any(
+                        |(neighbor, order)| {
+                            neighbor == *nitrogen
+                                && crate::chemistry::molecule::bond_order_matches(order, 1.0)
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+        } else {
+            nitrogens
+        };
+        if nucleophilic_nitrogens.len() < 2 {
+            return Ok(None);
+        }
+        Ok(Some(BisNucleophileCenter {
             participant: self,
-            first_nucleophile: nitrogens[0],
-            second_nucleophile: nitrogens[1],
+            first_nucleophile: nucleophilic_nitrogens[0],
+            second_nucleophile: nucleophilic_nitrogens[1],
             bridge_atom,
             class,
-        })
+        }))
     }
 
     pub(crate) fn dicarbonyl_electrophile_center(
@@ -1778,6 +1810,21 @@ mod tests {
         assert_eq!(bis_nucleophile.second_nucleophile, 3);
         assert_eq!(bis_nucleophile.bridge_atom, Some(0));
         assert_eq!(bis_nucleophile.class, BisNucleophileClass::UreaLike);
+    }
+
+    #[test]
+    fn guanidine_like_center_uses_single_bonded_amino_nitrogens() {
+        let bis_nucleophile = participant_for(
+            "destroy:graph:atoms=C.N.N.N.H.H.H.H.H;\
+             bonds=0-d-1,0-s-2,0-s-3,1-s-4,2-s-5,2-s-6,3-s-7,3-s-8",
+            ReactiveSiteKind::UreaLike,
+        )
+        .bis_nucleophile_center()
+        .unwrap();
+        assert_eq!(bis_nucleophile.class, BisNucleophileClass::GuanidineLike);
+        assert_eq!(bis_nucleophile.first_nucleophile, 2);
+        assert_eq!(bis_nucleophile.second_nucleophile, 3);
+        assert_eq!(bis_nucleophile.bridge_atom, Some(0));
     }
 
     #[test]

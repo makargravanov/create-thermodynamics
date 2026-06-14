@@ -970,7 +970,9 @@ fn generate_pair_reactions_for_seed(
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
             for bis_nucleophile in space.sites_of(&ReactiveSiteKind::BisNucleophile) {
-                let nucleophile_site = bis_nucleophile.bis_nucleophile_center()?;
+                let Some(nucleophile_site) = bis_nucleophile.try_bis_nucleophile_center()? else {
+                    continue;
+                };
                 if let Some(reaction) = generate_hydrazone_formation(
                     &carbonyl_site,
                     &nucleophile_site,
@@ -1003,7 +1005,10 @@ fn generate_pair_reactions_for_seed(
                     [ReactiveSiteKind::BisNucleophile, ReactiveSiteKind::UreaLike]
                 {
                     for nucleophile in space.sites_of(&nucleophile_kind) {
-                        let nucleophile_site = nucleophile.bis_nucleophile_center()?;
+                        let Some(nucleophile_site) = nucleophile.try_bis_nucleophile_center()?
+                        else {
+                            continue;
+                        };
                         for reaction in generate_bis_nucleophile_dicarbonyl_condensation(
                             &nucleophile_site,
                             &dicarbonyl_center,
@@ -1024,7 +1029,9 @@ fn generate_pair_reactions_for_seed(
             }
         }
         ReactiveSiteKind::BisNucleophile | ReactiveSiteKind::UreaLike => {
-            let nucleophile_site = seed.clone().bis_nucleophile_center()?;
+            let Some(nucleophile_site) = seed.clone().try_bis_nucleophile_center()? else {
+                return Ok(());
+            };
             for dicarbonyl in space.sites_of(&ReactiveSiteKind::DicarbonylElectrophile) {
                 let dicarbonyl_site = dicarbonyl.dicarbonyl_electrophile_center()?;
                 for reaction in generate_bis_nucleophile_dicarbonyl_condensation(
@@ -1053,7 +1060,9 @@ fn generate_pair_reactions_for_seed(
             let dicarbonyl_center = seed.clone().dicarbonyl_electrophile_center()?;
             for nucleophile_kind in [ReactiveSiteKind::BisNucleophile, ReactiveSiteKind::UreaLike] {
                 for nucleophile in space.sites_of(&nucleophile_kind) {
-                    let nucleophile_site = nucleophile.bis_nucleophile_center()?;
+                    let Some(nucleophile_site) = nucleophile.try_bis_nucleophile_center()? else {
+                        continue;
+                    };
                     for reaction in generate_bis_nucleophile_dicarbonyl_condensation(
                         &nucleophile_site,
                         &dicarbonyl_center,

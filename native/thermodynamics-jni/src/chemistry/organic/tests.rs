@@ -803,6 +803,101 @@ fn bis_nucleophile_and_dicarbonyl_condense_to_n_heterocycle() {
 }
 
 #[test]
+fn guanidine_like_bis_nucleophile_uses_same_dicarbonyl_condensation() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let guanidine_like = dynamic
+        .resolve_frowns(
+            "destroy:graph:atoms=C.N.N.N.H.H.H.H.H;\
+             bonds=0-d-1,0-s-2,0-s-3,1-s-4,2-s-5,2-s-6,3-s-7,3-s-8",
+        )
+        .unwrap();
+    let dicarbonyl = dynamic
+        .resolve_frowns(
+            "destroy:graph:atoms=C.O.C.C.O.H.H.H.H;\
+             bonds=0-d-1,0-s-2,2-s-3,3-d-4,0-s-5,2-s-6,2-s-7,3-s-8",
+        )
+        .unwrap();
+
+    let report = dynamic
+        .generate_reactions_for_substances([guanidine_like.clone(), dicarbonyl.clone()], 1)
+        .unwrap();
+    assert!(
+        report.generator_errors.is_empty(),
+        "generation errors: {:?}",
+        report.generator_errors
+    );
+
+    let reaction = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("bis_nucleophile_dicarbonyl_condensation/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == guanidine_like)
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == dicarbonyl)
+        })
+        .expect("guanidine-like and activated 1,3-dicarbonyl must condense");
+    assert_eq!(
+        reaction
+            .products
+            .iter()
+            .filter(|term| term.substance_id.as_str() == "destroy:water")
+            .map(|term| term.coefficient)
+            .sum::<u32>(),
+        2
+    );
+}
+
+#[test]
+fn bis_nucleophile_dicarbonyl_condensation_requires_explicit_bridge_hydrogens() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let urea_like = dynamic
+        .resolve_frowns(
+            "destroy:graph:atoms=C.O.N.N.H.H.H.H;\
+             bonds=0-d-1,0-s-2,0-s-3,2-s-4,2-s-5,3-s-6,3-s-7",
+        )
+        .unwrap();
+    let substituted_dicarbonyl = dynamic
+        .resolve_frowns(
+            "destroy:graph:atoms=C.O.C.C.O.H.H.C.H.H.H.H;\
+             bonds=0-d-1,0-s-2,2-s-3,3-d-4,0-s-5,2-s-6,2-s-7,7-s-8,7-s-9,7-s-10,3-s-11",
+        )
+        .unwrap();
+
+    let report = dynamic
+        .generate_reactions_for_substances([urea_like.clone(), substituted_dicarbonyl.clone()], 1)
+        .unwrap();
+    assert!(
+        report.generator_errors.is_empty(),
+        "generation errors: {:?}",
+        report.generator_errors
+    );
+    assert!(!dynamic.reactions().any(|reaction| {
+        reaction
+            .id
+            .as_str()
+            .starts_with("bis_nucleophile_dicarbonyl_condensation/")
+            && reaction
+                .reactants
+                .iter()
+                .any(|term| term.substance_id == urea_like)
+            && reaction
+                .reactants
+                .iter()
+                .any(|term| term.substance_id == substituted_dicarbonyl)
+    }));
+}
+
+#[test]
 fn scoped_generation_matches_full_static_generation() {
     let registry = super::super::destroy_registry_builder()
         .unwrap()
