@@ -526,7 +526,7 @@ impl MolecularEditor {
         let offset = self.atoms.len();
         self.atoms.extend(group.atoms.iter().cloned());
         self.bonds
-            .extend(group.bonds.iter().cloned().map(|bond| MolecularBond {
+            .extend(group.bonds.iter().map(|bond| MolecularBond {
                 from: bond.from + offset,
                 to: bond.to + offset,
                 order: bond.order,
