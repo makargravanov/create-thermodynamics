@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
 use std::collections::BTreeMap;
+use std::collections::VecDeque;
 
 use super::complex::{ComplexGeometry, ComplexLigand, ComplexSpec, LigandExchangeLability};
 use super::error::{ChemistryError, ChemistryResult};
@@ -1950,12 +1950,10 @@ fn generators_for_site(
             OrganicGeneratorKind::KnoevenagelCondensation,
             OrganicGeneratorKind::BisNucleophileDicarbonylCondensation,
         ],
-        ReactiveSiteKind::BisNucleophile | ReactiveSiteKind::UreaLike => {
-            &[
-                OrganicGeneratorKind::BisNucleophileDicarbonylCondensation,
-                OrganicGeneratorKind::HydrazoneFormation,
-            ]
-        }
+        ReactiveSiteKind::BisNucleophile | ReactiveSiteKind::UreaLike => &[
+            OrganicGeneratorKind::BisNucleophileDicarbonylCondensation,
+            OrganicGeneratorKind::HydrazoneFormation,
+        ],
         ReactiveSiteKind::Hydrazone => &[OrganicGeneratorKind::HydrazoneArylAnnulation],
         ReactiveSiteKind::ArylHalide => &[
             OrganicGeneratorKind::ArylHalideHydroxideSubstitution,
@@ -2760,7 +2758,8 @@ mod tests {
         registry.generate_reactions_for(&methane, 1).unwrap();
 
         let substance_index = registry.known_substance_index(&methane).unwrap();
-        let slot = known_substance_slot(registry.static_registry.substance_count(), substance_index);
+        let slot =
+            known_substance_slot(registry.static_registry.substance_count(), substance_index);
         let mask = registry.processed_substance_generation_masks[&slot];
 
         for generator in [
