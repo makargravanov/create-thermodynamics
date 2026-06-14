@@ -868,6 +868,25 @@ fn generate_pair_reactions_for_seed(
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
+            for isocyanate in space.sites_of(&ReactiveSiteKind::Isocyanate) {
+                let isocyanate_site = isocyanate.isocyanate_site()?;
+                if let Some(reaction) =
+                    generate_isocyanate_amine_addition(&isocyanate_site, &amine_site, resolver)?
+                {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
+        }
+        ReactiveSiteKind::Isocyanate => {
+            let isocyanate_site = seed.clone().isocyanate_site()?;
+            for amine in space.sites_of(&ReactiveSiteKind::NonTertiaryAmine) {
+                let amine_site = amine.amine_site()?;
+                if let Some(reaction) =
+                    generate_isocyanate_amine_addition(&isocyanate_site, &amine_site, resolver)?
+                {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
         }
         ReactiveSiteKind::Ester => {
             let ester_site = seed.clone().ester_site()?;

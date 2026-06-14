@@ -165,6 +165,42 @@ fn reactive_site_generators_add_aromatic_nitration_and_epoxide_hydrolysis() {
 }
 
 #[test]
+fn isocyanate_amine_addition_creates_urea_like_product() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let methyl_isocyanate = dynamic.resolve_frowns("CN=C=O").unwrap();
+    let methylamine = dynamic.resolve_frowns("CN").unwrap();
+
+    dynamic
+        .generate_reactions_for_substances([methyl_isocyanate.clone(), methylamine.clone()], 1)
+        .unwrap();
+
+    let reaction = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("isocyanate_amine_addition/")
+        })
+        .expect("isocyanate and amine must add to a urea-like product");
+    let product_id = reaction
+        .products
+        .iter()
+        .find(|term| term.substance_id != methyl_isocyanate && term.substance_id != methylamine)
+        .expect("addition must create an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap();
+    let product_sites = try_find_reactive_sites(product.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(product_sites.contains(&ReactiveSiteKind::UreaLike));
+}
+
+#[test]
 fn organic_redox_generates_graph_based_oxidation_paths() {
     let registry = generated_registry();
     let alcohol = reaction_with_prefix(&registry, "alcohol_oxidation/destroy_ethanol/");
