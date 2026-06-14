@@ -501,6 +501,16 @@ impl MolecularEditor {
         group_root: usize,
         bond_order: f64,
     ) -> ChemistryResult<usize> {
+        Ok(self.add_group_with_mapping(parent, group, group_root, bond_order)?[group_root])
+    }
+
+    pub fn add_group_with_mapping(
+        &mut self,
+        parent: usize,
+        group: &MolecularStructure,
+        group_root: usize,
+        bond_order: f64,
+    ) -> ChemistryResult<Vec<usize>> {
         if parent >= self.atoms.len() || group_root >= group.atoms.len() {
             return Err(invalid_structure(
                 &self.source_code,
@@ -533,7 +543,7 @@ impl MolecularEditor {
         self.clear_stereo_at_atom(parent);
         self.clear_stereo_at_atom(group_root + offset);
         self.modified = true;
-        Ok(group_root + offset)
+        Ok((0..group.atoms.len()).map(|index| index + offset).collect())
     }
 
     pub fn add_bond(&mut self, first: usize, second: usize, order: f64) -> ChemistryResult<()> {
@@ -2001,6 +2011,18 @@ mod tests {
             MolecularEditor::new(&parse_legacy_structure("destroy:linear:C").unwrap());
         invalid.add_atom(0, "H", 0.0, 1.0).unwrap();
         assert!(invalid.finish().is_err());
+    }
+
+    #[test]
+    fn editor_add_group_with_mapping_exposes_added_atom_indexes() {
+        let methane = parse_legacy_structure("destroy:linear:C").unwrap();
+        let hydroxyl = parse_legacy_structure("destroy:linear:O").unwrap();
+        let mut editor = MolecularEditor::new(&methane);
+        editor.remove_atom(1).unwrap();
+        let mapping = editor.add_group_with_mapping(0, &hydroxyl, 0, 1.0).unwrap();
+        assert_eq!(mapping.len(), hydroxyl.atoms.len());
+        assert_eq!(mapping[0], methane.atoms.len() - 1);
+        assert_eq!(editor.structure().atoms[mapping[0]].element, "O");
     }
 
     #[test]
