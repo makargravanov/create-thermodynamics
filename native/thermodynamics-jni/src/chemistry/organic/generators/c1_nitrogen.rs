@@ -3,7 +3,7 @@ use super::super::resolver::DerivedSubstanceResolver;
 use super::common::*;
 use crate::chemistry::condition::ReactionCondition;
 use crate::chemistry::error::{ChemistryError, ChemistryResult};
-use crate::chemistry::molecule::MolecularEditor;
+use crate::chemistry::molecule::{bond_order_matches, MolecularEditor};
 use crate::chemistry::reaction::Reaction;
 
 pub(crate) fn generate_amine_phosgenation(
@@ -173,6 +173,83 @@ pub(crate) fn generate_isocyanate_amine_addition(
                 .max_water_activity(0.1),
         )
         .activation_energy_kj_per_mol(18.0)
+        .build(),
+    ))
+}
+
+pub(crate) fn generate_amine_formylation(
+    amine_site: &AmineSite<'_>,
+    donor_site: &FormylationDonorCenter<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    if amine_site.participant.substance.id == donor_site.participant.substance.id {
+        return Ok(None);
+    }
+    let Some(amine_hydrogen) = amine_site.hydrogens.first().copied() else {
+        return Ok(None);
+    };
+    let leaving_atom = donor_site
+        .participant
+        .structure
+        .neighbors(donor_site.carbon)
+        .into_iter()
+        .find_map(|(neighbor, order)| {
+            (neighbor != donor_site.oxygen
+                && neighbor != donor_site.hydrogen
+                && bond_order_matches(order, 1.0)
+                && matches!(
+                    donor_site.participant.structure.atoms[neighbor]
+                        .element
+                        .as_str(),
+                    "O" | "N" | "Cl"
+                ))
+            .then_some(neighbor)
+        });
+    let Some(leaving_atom) = leaving_atom else {
+        return Ok(None);
+    };
+
+    let mut amine_editor = MolecularEditor::new(amine_site.participant.structure);
+    let amine_mapping = amine_editor.remove_atoms(&[amine_hydrogen])?;
+    let nitrogen = mapped_atom(
+        &amine_mapping,
+        amine_site.nitrogen,
+        "formylated amine nitrogen",
+    )?;
+    let formyl_carbon = amine_editor.add_atom(nitrogen, "C", 0.0, 1.0)?;
+    amine_editor.add_atom(formyl_carbon, "O", 0.0, 2.0)?;
+    amine_editor.add_atom(formyl_carbon, "H", 0.0, 1.0)?;
+    let formamide = resolver.resolve(amine_editor.finish()?)?;
+
+    let leaving_product = if donor_site.participant.structure.atoms[leaving_atom].element == "Cl" {
+        "destroy:hydrochloric_acid".into()
+    } else {
+        let mut donor_editor = MolecularEditor::new(donor_site.participant.structure);
+        let donor_mapping = donor_editor.remove_atoms(&[
+            donor_site.carbon,
+            donor_site.oxygen,
+            donor_site.hydrogen,
+        ])?;
+        let leaving_atom = mapped_atom(&donor_mapping, leaving_atom, "formyl leaving atom")?;
+        donor_editor.add_atom(leaving_atom, "H", 0.0, 1.0)?;
+        resolver.resolve(donor_editor.finish()?)?
+    };
+
+    Ok(Some(
+        Reaction::builder(generated_pair_site_reaction_id(
+            "amine_formylation",
+            &amine_site.participant,
+            &donor_site.participant,
+        ))
+        .reactant(amine_site.participant.substance.id.clone(), 1, 1)
+        .reactant(donor_site.participant.substance.id.clone(), 1, 1)
+        .product(formamide, 1)
+        .product(leaving_product, 1)
+        .condition(
+            ReactionCondition::new("amine formylation requires removal of excess water")
+                .max_water_activity(0.2),
+        )
+        .activation_energy_kj_per_mol(35.0)
         .build(),
     ))
 }

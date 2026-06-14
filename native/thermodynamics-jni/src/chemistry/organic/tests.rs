@@ -229,6 +229,41 @@ fn isocyanate_ammonolysis_creates_urea_like_product() {
 }
 
 #[test]
+fn amine_formylation_transfers_formyl_group_from_real_donor() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let methylamine = dynamic.resolve_frowns("CN").unwrap();
+    let formic_acid = dynamic.resolve_frowns("O=CO").unwrap();
+
+    dynamic
+        .generate_reactions_for_substances([methylamine.clone(), formic_acid.clone()], 1)
+        .unwrap();
+
+    let reaction = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("amine_formylation/"))
+        .expect("amine and formyl donor must form a formamide");
+    assert!(reaction
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:water"));
+    let product_id = reaction
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("formylation must create an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap();
+    let product_sites = try_find_reactive_sites(product.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(product_sites.contains(&ReactiveSiteKind::Amide));
+}
+
+#[test]
 fn organic_redox_generates_graph_based_oxidation_paths() {
     let registry = generated_registry();
     let alcohol = reaction_with_prefix(&registry, "alcohol_oxidation/destroy_ethanol/");

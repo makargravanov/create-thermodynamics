@@ -878,6 +878,14 @@ fn generate_pair_reactions_for_seed(
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
             }
+            for donor in space.sites_of(&ReactiveSiteKind::FormylationDonor) {
+                let donor_site = donor.formylation_donor_center()?;
+                if let Some(reaction) =
+                    generate_amine_formylation(&amine_site, &donor_site, resolver)?
+                {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
         }
         ReactiveSiteKind::Isocyanate => {
             let isocyanate_site = seed.clone().isocyanate_site()?;
@@ -885,6 +893,17 @@ fn generate_pair_reactions_for_seed(
                 let amine_site = amine.amine_site()?;
                 if let Some(reaction) =
                     generate_isocyanate_amine_addition(&isocyanate_site, &amine_site, resolver)?
+                {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
+        }
+        ReactiveSiteKind::FormylationDonor => {
+            let donor_site = seed.clone().formylation_donor_center()?;
+            for amine in space.sites_of(&ReactiveSiteKind::NonTertiaryAmine) {
+                let amine_site = amine.amine_site()?;
+                if let Some(reaction) =
+                    generate_amine_formylation(&amine_site, &donor_site, resolver)?
                 {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
