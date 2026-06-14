@@ -999,6 +999,20 @@ fn generate_pair_reactions_for_seed(
             }
             for dicarbonyl in space.sites_of(&ReactiveSiteKind::DicarbonylElectrophile) {
                 let dicarbonyl_center = dicarbonyl.dicarbonyl_electrophile_center()?;
+                for nucleophile_kind in
+                    [ReactiveSiteKind::BisNucleophile, ReactiveSiteKind::UreaLike]
+                {
+                    for nucleophile in space.sites_of(&nucleophile_kind) {
+                        let nucleophile_site = nucleophile.bis_nucleophile_center()?;
+                        for reaction in generate_bis_nucleophile_dicarbonyl_condensation(
+                            &nucleophile_site,
+                            &dicarbonyl_center,
+                            resolver,
+                        )? {
+                            push_unique_reaction(reactions, reaction_ids, reaction)?;
+                        }
+                    }
+                }
                 let Some(activated) = dicarbonyl_center.activated_methylene_center() else {
                     continue;
                 };
@@ -1009,8 +1023,18 @@ fn generate_pair_reactions_for_seed(
                 }
             }
         }
-        ReactiveSiteKind::BisNucleophile => {
+        ReactiveSiteKind::BisNucleophile | ReactiveSiteKind::UreaLike => {
             let nucleophile_site = seed.clone().bis_nucleophile_center()?;
+            for dicarbonyl in space.sites_of(&ReactiveSiteKind::DicarbonylElectrophile) {
+                let dicarbonyl_site = dicarbonyl.dicarbonyl_electrophile_center()?;
+                for reaction in generate_bis_nucleophile_dicarbonyl_condensation(
+                    &nucleophile_site,
+                    &dicarbonyl_site,
+                    resolver,
+                )? {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
             for carbonyl_kind in carbonyl_site_kinds() {
                 for carbonyl in space.sites_of(&carbonyl_kind) {
                     let carbonyl_site = carbonyl.carbonyl_site()?;
@@ -1027,6 +1051,18 @@ fn generate_pair_reactions_for_seed(
         }
         ReactiveSiteKind::DicarbonylElectrophile => {
             let dicarbonyl_center = seed.clone().dicarbonyl_electrophile_center()?;
+            for nucleophile_kind in [ReactiveSiteKind::BisNucleophile, ReactiveSiteKind::UreaLike] {
+                for nucleophile in space.sites_of(&nucleophile_kind) {
+                    let nucleophile_site = nucleophile.bis_nucleophile_center()?;
+                    for reaction in generate_bis_nucleophile_dicarbonyl_condensation(
+                        &nucleophile_site,
+                        &dicarbonyl_center,
+                        resolver,
+                    )? {
+                        push_unique_reaction(reactions, reaction_ids, reaction)?;
+                    }
+                }
+            }
             let Some(activated) = dicarbonyl_center.activated_methylene_center() else {
                 return Ok(());
             };

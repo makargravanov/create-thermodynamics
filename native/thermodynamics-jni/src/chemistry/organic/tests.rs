@@ -642,6 +642,116 @@ fn activated_methylene_condenses_with_carbonyl_to_alkene() {
 }
 
 #[test]
+fn bis_nucleophile_and_dicarbonyl_condense_to_n_heterocycle() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let urea_like = dynamic
+        .resolve_frowns(
+            "destroy:graph:atoms=C.O.N.N.H.H.H.H;\
+             bonds=0-d-1,0-s-2,0-s-3,2-s-4,2-s-5,3-s-6,3-s-7",
+        )
+        .unwrap();
+    let dicarbonyl = dynamic
+        .resolve_frowns(
+            "destroy:graph:atoms=C.O.C.C.O.H.H.H.H;\
+             bonds=0-d-1,0-s-2,2-s-3,3-d-4,0-s-5,2-s-6,2-s-7,3-s-8",
+        )
+        .unwrap();
+    let urea_like_sites = try_find_reactive_sites(
+        dynamic
+            .substance(&urea_like)
+            .unwrap()
+            .molecular_structure
+            .as_ref()
+            .unwrap(),
+    )
+    .unwrap()
+    .into_iter()
+    .map(|site| site.kind)
+    .collect::<Vec<_>>();
+    let dicarbonyl_sites = try_find_reactive_sites(
+        dynamic
+            .substance(&dicarbonyl)
+            .unwrap()
+            .molecular_structure
+            .as_ref()
+            .unwrap(),
+    )
+    .unwrap()
+    .into_iter()
+    .map(|site| site.kind)
+    .collect::<Vec<_>>();
+    assert!(urea_like_sites.contains(&ReactiveSiteKind::UreaLike));
+    assert!(dicarbonyl_sites.contains(&ReactiveSiteKind::DicarbonylElectrophile));
+    let urea_substance = dynamic.substance(&urea_like).unwrap();
+    let urea_structure = urea_substance.molecular_structure.as_ref().unwrap();
+    let urea_site = try_find_reactive_sites(urea_structure)
+        .unwrap()
+        .into_iter()
+        .find(|site| site.kind == ReactiveSiteKind::UreaLike)
+        .unwrap();
+    let urea_center = SiteParticipant {
+        substance: urea_substance,
+        structure: urea_structure,
+        site: urea_site,
+    }
+    .bis_nucleophile_center()
+    .unwrap();
+    assert_eq!(urea_center.class, BisNucleophileClass::UreaLike);
+
+    let report = dynamic
+        .generate_reactions_for_substances([urea_like.clone(), dicarbonyl.clone()], 1)
+        .unwrap();
+    assert!(
+        report.generator_errors.is_empty(),
+        "generation errors: {:?}",
+        report.generator_errors
+    );
+
+    let reaction = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("bis_nucleophile_dicarbonyl_condensation/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == urea_like)
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == dicarbonyl)
+        })
+        .expect("bis-nucleophile and activated 1,3-dicarbonyl must condense");
+    assert_eq!(
+        reaction
+            .products
+            .iter()
+            .filter(|term| term.substance_id.as_str() == "destroy:water")
+            .map(|term| term.coefficient)
+            .sum::<u32>(),
+        2
+    );
+    let product_id = reaction
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("condensation must create an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap();
+    let product_sites = try_find_reactive_sites(product.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(product_sites.contains(&ReactiveSiteKind::UreaLike));
+    assert!(product_sites.contains(&ReactiveSiteKind::Alkene));
+}
+
+#[test]
 fn scoped_generation_matches_full_static_generation() {
     let registry = super::super::destroy_registry_builder()
         .unwrap()

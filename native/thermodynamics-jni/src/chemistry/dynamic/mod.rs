@@ -109,6 +109,8 @@ enum OrganicGeneratorKind {
     RadicalHalogenation,
     AlkenePhotoisomerization,
     RetroDielsAlder,
+    KnoevenagelCondensation,
+    BisNucleophileDicarbonylCondensation,
 }
 
 impl OrganicGeneratorKind {
@@ -188,6 +190,8 @@ impl OrganicGeneratorKind {
             OrganicGeneratorKind::RadicalHalogenation => 67,
             OrganicGeneratorKind::AlkenePhotoisomerization => 68,
             OrganicGeneratorKind::RetroDielsAlder => 69,
+            OrganicGeneratorKind::KnoevenagelCondensation => 70,
+            OrganicGeneratorKind::BisNucleophileDicarbonylCondensation => 71,
         }
     }
 }
@@ -1808,6 +1812,7 @@ fn generators_for_site(
             OrganicGeneratorKind::OrganometallicCarbonylAddition,
             OrganicGeneratorKind::AldolAddition,
             OrganicGeneratorKind::EnamineFormation,
+            OrganicGeneratorKind::KnoevenagelCondensation,
         ],
         ReactiveSiteKind::Ketone | ReactiveSiteKind::Carbonyl => &[
             OrganicGeneratorKind::CyanideNucleophilicAddition,
@@ -1815,6 +1820,7 @@ fn generators_for_site(
             OrganicGeneratorKind::OrganometallicCarbonylAddition,
             OrganicGeneratorKind::AldolAddition,
             OrganicGeneratorKind::EnamineFormation,
+            OrganicGeneratorKind::KnoevenagelCondensation,
         ],
         ReactiveSiteKind::Amide => &[OrganicGeneratorKind::AmideHydrolysis],
         ReactiveSiteKind::PrimaryAmine => &[
@@ -1891,6 +1897,13 @@ fn generators_for_site(
             OrganicGeneratorKind::MichaelAddition,
             OrganicGeneratorKind::ClaisenCondensation,
         ],
+        ReactiveSiteKind::DicarbonylElectrophile => &[
+            OrganicGeneratorKind::KnoevenagelCondensation,
+            OrganicGeneratorKind::BisNucleophileDicarbonylCondensation,
+        ],
+        ReactiveSiteKind::BisNucleophile | ReactiveSiteKind::UreaLike => {
+            &[OrganicGeneratorKind::BisNucleophileDicarbonylCondensation]
+        }
         _ => &[],
     }
 }
