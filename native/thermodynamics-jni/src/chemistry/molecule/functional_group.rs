@@ -43,6 +43,11 @@ pub enum FunctionalGroupType {
     BocCarbamate,
     CbzCarbamate,
     Oxime,
+    Hydrazone,
+    BisNucleophile,
+    DicarbonylElectrophile,
+    UreaLike,
+    FormylationDonor,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -485,8 +490,216 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
 
     // Add protecting group detection
     add_protecting_groups(structure, &mut groups);
+    add_generalized_cn_groups(structure, &mut groups);
 
     groups
+}
+
+fn add_generalized_cn_groups(structure: &MolecularStructure, groups: &mut Vec<FunctionalGroup>) {
+    add_hydrazone_groups(structure, groups);
+    add_bis_nucleophile_groups(structure, groups);
+    add_dicarbonyl_electrophiles(structure, groups);
+    add_urea_like_groups(structure, groups);
+    add_formylation_donors(structure, groups);
+}
+
+fn add_hydrazone_groups(structure: &MolecularStructure, groups: &mut Vec<FunctionalGroup>) {
+    for carbon in 0..structure.atoms.len() {
+        if structure.atoms[carbon].element != "C" {
+            continue;
+        }
+        for imine_nitrogen in bonded(structure, carbon, "N", Some(2.0)) {
+            for terminal_nitrogen in bonded(structure, imine_nitrogen, "N", Some(1.0)) {
+                let mut atoms = vec![carbon, imine_nitrogen, terminal_nitrogen];
+                atoms.extend(bonded(structure, terminal_nitrogen, "H", Some(1.0)));
+                groups.push(FunctionalGroup::new(FunctionalGroupType::Hydrazone, atoms));
+            }
+        }
+    }
+}
+
+fn add_bis_nucleophile_groups(structure: &MolecularStructure, groups: &mut Vec<FunctionalGroup>) {
+    for first in 0..structure.atoms.len() {
+        if structure.atoms[first].element != "N" {
+            continue;
+        }
+        for second in bonded(structure, first, "N", Some(1.0)) {
+            if second <= first {
+                continue;
+            }
+            let mut atoms = vec![first, second];
+            atoms.extend(bonded(structure, first, "H", Some(1.0)));
+            atoms.extend(bonded(structure, second, "H", Some(1.0)));
+            groups.push(FunctionalGroup::new(
+                FunctionalGroupType::BisNucleophile,
+                atoms,
+            ));
+        }
+    }
+
+    for bridge in 0..structure.atoms.len() {
+        if !matches!(structure.atoms[bridge].element.as_str(), "C" | "N") {
+            continue;
+        }
+        let nitrogens = structure
+            .neighbors(bridge)
+            .into_iter()
+            .filter_map(|(neighbor, order)| {
+                (structure.atoms[neighbor].element == "N" && order >= 1.0 && order <= 2.0)
+                    .then_some(neighbor)
+            })
+            .collect::<Vec<_>>();
+        if nitrogens.len() < 2 {
+            continue;
+        }
+        for first_index in 0..nitrogens.len() {
+            for second_index in (first_index + 1)..nitrogens.len() {
+                let mut atoms = vec![bridge, nitrogens[first_index], nitrogens[second_index]];
+                atoms.extend(bonded(structure, nitrogens[first_index], "H", Some(1.0)));
+                atoms.extend(bonded(structure, nitrogens[second_index], "H", Some(1.0)));
+                groups.push(FunctionalGroup::new(
+                    FunctionalGroupType::BisNucleophile,
+                    atoms,
+                ));
+            }
+        }
+    }
+}
+
+fn add_dicarbonyl_electrophiles(structure: &MolecularStructure, groups: &mut Vec<FunctionalGroup>) {
+    let carbonyls = carbonyl_carbons(structure);
+    for first_index in 0..carbonyls.len() {
+        for second_index in (first_index + 1)..carbonyls.len() {
+            let first = carbonyls[first_index];
+            let second = carbonyls[second_index];
+            let Some((bridge, distance)) = carbonyl_carbon_chain_distance(structure, first, second)
+            else {
+                continue;
+            };
+            if !(2..=3).contains(&distance) {
+                continue;
+            }
+            let mut atoms = vec![
+                first,
+                second,
+                carbonyl_oxygen(structure, first).unwrap_or(first),
+                carbonyl_oxygen(structure, second).unwrap_or(second),
+            ];
+            atoms.extend(bridge);
+            groups.push(FunctionalGroup::new(
+                FunctionalGroupType::DicarbonylElectrophile,
+                atoms,
+            ));
+        }
+    }
+}
+
+fn add_urea_like_groups(structure: &MolecularStructure, groups: &mut Vec<FunctionalGroup>) {
+    for carbon in 0..structure.atoms.len() {
+        if structure.atoms[carbon].element != "C" {
+            continue;
+        }
+        let nitrogens = bonded(structure, carbon, "N", Some(1.0));
+        if nitrogens.len() < 2 {
+            continue;
+        }
+        let hetero = bonded(structure, carbon, "O", Some(2.0))
+            .into_iter()
+            .chain(bonded(structure, carbon, "S", Some(2.0)))
+            .chain(bonded(structure, carbon, "N", Some(2.0)))
+            .next();
+        let Some(hetero) = hetero else {
+            continue;
+        };
+        let mut atoms = vec![carbon, hetero];
+        atoms.extend(nitrogens);
+        groups.push(FunctionalGroup::new(FunctionalGroupType::UreaLike, atoms));
+    }
+}
+
+fn add_formylation_donors(structure: &MolecularStructure, groups: &mut Vec<FunctionalGroup>) {
+    for carbon in carbonyl_carbons(structure) {
+        if bonded(structure, carbon, "H", Some(1.0)).is_empty() {
+            continue;
+        }
+        let Some(oxygen) = carbonyl_oxygen(structure, carbon) else {
+            continue;
+        };
+        if structure
+            .neighbors(carbon)
+            .into_iter()
+            .any(|(neighbor, order)| {
+                neighbor != oxygen
+                    && bond_order_matches(order, 1.0)
+                    && matches!(structure.atoms[neighbor].element.as_str(), "O" | "N" | "Cl")
+            })
+        {
+            let mut atoms = vec![carbon, oxygen];
+            atoms.extend(bonded(structure, carbon, "H", Some(1.0)));
+            groups.push(FunctionalGroup::new(
+                FunctionalGroupType::FormylationDonor,
+                atoms,
+            ));
+        }
+    }
+}
+
+fn carbonyl_carbons(structure: &MolecularStructure) -> Vec<usize> {
+    (0..structure.atoms.len())
+        .filter(|&atom| {
+            structure.atoms[atom].element == "C" && carbonyl_oxygen(structure, atom).is_some()
+        })
+        .collect()
+}
+
+fn carbonyl_oxygen(structure: &MolecularStructure, carbon: usize) -> Option<usize> {
+    bonded(structure, carbon, "O", Some(2.0)).into_iter().next()
+}
+
+fn carbonyl_carbon_chain_distance(
+    structure: &MolecularStructure,
+    first: usize,
+    second: usize,
+) -> Option<(Vec<usize>, usize)> {
+    for (middle, first_order) in structure.neighbors(first) {
+        if middle == second
+            || structure.atoms[middle].element != "C"
+            || !bond_order_matches(first_order, 1.0)
+        {
+            continue;
+        }
+        if structure
+            .neighbors(middle)
+            .into_iter()
+            .any(|(neighbor, order)| {
+                neighbor == second
+                    && structure.atoms[neighbor].element == "C"
+                    && bond_order_matches(order, 1.0)
+            })
+        {
+            return Some((vec![middle], 2));
+        }
+        for (second_middle, middle_order) in structure.neighbors(middle) {
+            if second_middle == first
+                || structure.atoms[second_middle].element != "C"
+                || !bond_order_matches(middle_order, 1.0)
+            {
+                continue;
+            }
+            if structure
+                .neighbors(second_middle)
+                .into_iter()
+                .any(|(neighbor, order)| {
+                    neighbor == second
+                        && structure.atoms[neighbor].element == "C"
+                        && bond_order_matches(order, 1.0)
+                })
+            {
+                return Some((vec![middle, second_middle], 3));
+            }
+        }
+    }
+    None
 }
 
 fn add_protecting_groups(structure: &MolecularStructure, groups: &mut Vec<FunctionalGroup>) {

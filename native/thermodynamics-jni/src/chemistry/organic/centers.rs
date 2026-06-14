@@ -221,6 +221,59 @@ pub(crate) struct OximeSite<'a> {
     pub(crate) hydrogen: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BisNucleophileClass {
+    UreaLike,
+    GuanidineLike,
+    HydrazineLike,
+    DiamineLike,
+    AmidrazoneLike,
+}
+
+#[derive(Clone)]
+pub(crate) struct HydrazoneCenter<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) carbon: usize,
+    pub(crate) imine_nitrogen: usize,
+    pub(crate) terminal_nitrogen: usize,
+    pub(crate) terminal_hydrogens: Vec<usize>,
+}
+
+#[derive(Clone)]
+pub(crate) struct BisNucleophileCenter<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) first_nucleophile: usize,
+    pub(crate) second_nucleophile: usize,
+    pub(crate) bridge_atom: Option<usize>,
+    pub(crate) class: BisNucleophileClass,
+}
+
+#[derive(Clone)]
+pub(crate) struct DicarbonylElectrophileCenter<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) first_carbonyl_carbon: usize,
+    pub(crate) first_carbonyl_oxygen: usize,
+    pub(crate) second_carbonyl_carbon: usize,
+    pub(crate) second_carbonyl_oxygen: usize,
+    pub(crate) bridge_atoms: Vec<usize>,
+}
+
+#[derive(Clone)]
+pub(crate) struct UreaLikeCenter<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) carbon: usize,
+    pub(crate) hetero_atom: usize,
+    pub(crate) nitrogens: Vec<usize>,
+}
+
+#[derive(Clone)]
+pub(crate) struct FormylationDonorCenter<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) carbon: usize,
+    pub(crate) oxygen: usize,
+    pub(crate) hydrogen: usize,
+}
+
 #[derive(Clone)]
 pub(crate) struct UnsaturatedBondSite<'a> {
     pub(crate) participant: SiteParticipant<'a>,
@@ -887,6 +940,156 @@ impl<'a> SiteParticipant<'a> {
         })
     }
 
+    pub(crate) fn hydrazone_center(self) -> ChemistryResult<HydrazoneCenter<'a>> {
+        self.require_kind(ReactiveSiteKind::Hydrazone)?;
+        let carbon = self.site_atom_by_element("C", "hydrazone carbon")?;
+        let imine_nitrogen = self.bonded_site_atom(carbon, "N", 2.0, "hydrazone imine nitrogen")?;
+        let terminal_nitrogen =
+            self.bonded_site_atom(imine_nitrogen, "N", 1.0, "hydrazone terminal nitrogen")?;
+        Ok(HydrazoneCenter {
+            terminal_hydrogens: bonded_hydrogens(self.structure, terminal_nitrogen),
+            participant: self,
+            carbon,
+            imine_nitrogen,
+            terminal_nitrogen,
+        })
+    }
+
+    pub(crate) fn bis_nucleophile_center(self) -> ChemistryResult<BisNucleophileCenter<'a>> {
+        if !matches!(
+            self.site.kind,
+            ReactiveSiteKind::BisNucleophile | ReactiveSiteKind::UreaLike
+        ) {
+            return Err(self.site_error("site is not a bis-nucleophile center"));
+        }
+        let nitrogens = self
+            .site
+            .atoms
+            .iter()
+            .copied()
+            .filter(|atom| self.structure.atoms[*atom].element == "N")
+            .collect::<Vec<_>>();
+        if nitrogens.len() < 2 {
+            return Err(self.site_error("bis-nucleophile center has fewer than two nitrogens"));
+        }
+        let bridge_atom = self.site.atoms.iter().copied().find(|atom| {
+            !nitrogens.contains(atom)
+                && matches!(self.structure.atoms[*atom].element.as_str(), "C" | "N")
+        });
+        let class = bis_nucleophile_class(self.structure, bridge_atom, &nitrogens);
+        Ok(BisNucleophileCenter {
+            participant: self,
+            first_nucleophile: nitrogens[0],
+            second_nucleophile: nitrogens[1],
+            bridge_atom,
+            class,
+        })
+    }
+
+    pub(crate) fn dicarbonyl_electrophile_center(
+        self,
+    ) -> ChemistryResult<DicarbonylElectrophileCenter<'a>> {
+        self.require_kind(ReactiveSiteKind::DicarbonylElectrophile)?;
+        let carbonyl_carbons = self
+            .site
+            .atoms
+            .iter()
+            .copied()
+            .filter(|atom| {
+                self.structure.atoms[*atom].element == "C"
+                    && self
+                        .structure
+                        .neighbors(*atom)
+                        .into_iter()
+                        .any(|(neighbor, order)| {
+                            self.site.atoms.contains(&neighbor)
+                                && self.structure.atoms[neighbor].element == "O"
+                                && crate::chemistry::molecule::bond_order_matches(order, 2.0)
+                        })
+            })
+            .collect::<Vec<_>>();
+        if carbonyl_carbons.len() != 2 {
+            return Err(self.site_error("dicarbonyl center must have two carbonyl carbons"));
+        }
+        let first_oxygen =
+            self.bonded_site_atom(carbonyl_carbons[0], "O", 2.0, "first dicarbonyl oxygen")?;
+        let second_oxygen =
+            self.bonded_site_atom(carbonyl_carbons[1], "O", 2.0, "second dicarbonyl oxygen")?;
+        let bridge_atoms = self
+            .site
+            .atoms
+            .iter()
+            .copied()
+            .filter(|atom| {
+                !carbonyl_carbons.contains(atom)
+                    && *atom != first_oxygen
+                    && *atom != second_oxygen
+                    && self.structure.atoms[*atom].element == "C"
+            })
+            .collect::<Vec<_>>();
+        Ok(DicarbonylElectrophileCenter {
+            participant: self,
+            first_carbonyl_carbon: carbonyl_carbons[0],
+            first_carbonyl_oxygen: first_oxygen,
+            second_carbonyl_carbon: carbonyl_carbons[1],
+            second_carbonyl_oxygen: second_oxygen,
+            bridge_atoms,
+        })
+    }
+
+    pub(crate) fn urea_like_center(self) -> ChemistryResult<UreaLikeCenter<'a>> {
+        self.require_kind(ReactiveSiteKind::UreaLike)?;
+        let carbon = self.site_atom_by_element("C", "urea-like carbon")?;
+        let hetero_atom = self
+            .structure
+            .neighbors(carbon)
+            .into_iter()
+            .find_map(|(neighbor, order)| {
+                (self.site.atoms.contains(&neighbor)
+                    && matches!(
+                        self.structure.atoms[neighbor].element.as_str(),
+                        "O" | "S" | "N"
+                    )
+                    && crate::chemistry::molecule::bond_order_matches(order, 2.0))
+                .then_some(neighbor)
+            })
+            .ok_or_else(|| self.site_error("urea-like center has no double-bonded hetero atom"))?;
+        let nitrogens = self
+            .structure
+            .neighbors(carbon)
+            .into_iter()
+            .filter_map(|(neighbor, order)| {
+                (self.site.atoms.contains(&neighbor)
+                    && self.structure.atoms[neighbor].element == "N"
+                    && crate::chemistry::molecule::bond_order_matches(order, 1.0))
+                .then_some(neighbor)
+            })
+            .collect::<Vec<_>>();
+        if nitrogens.len() < 2 {
+            return Err(self.site_error("urea-like center has fewer than two nitrogens"));
+        }
+        Ok(UreaLikeCenter {
+            participant: self,
+            carbon,
+            hetero_atom,
+            nitrogens,
+        })
+    }
+
+    pub(crate) fn formylation_donor_center(self) -> ChemistryResult<FormylationDonorCenter<'a>> {
+        self.require_kind(ReactiveSiteKind::FormylationDonor)?;
+        let carbon = self.site_atom_by_element("C", "formyl donor carbon")?;
+        let oxygen = self.bonded_site_atom(carbon, "O", 2.0, "formyl donor oxygen")?;
+        let hydrogen = first_bonded_hydrogen(self.structure, carbon)
+            .ok_or_else(|| self.site_error("formyl donor carbon has no explicit hydrogen"))?;
+        Ok(FormylationDonorCenter {
+            participant: self,
+            carbon,
+            oxygen,
+            hydrogen,
+        })
+    }
+
     pub(crate) fn unsaturated_bond_site(self) -> ChemistryResult<UnsaturatedBondSite<'a>> {
         let is_alkyne = match self.site.kind {
             ReactiveSiteKind::Alkene => false,
@@ -1249,4 +1452,164 @@ fn phosphorus_ylide_stability(
         return YlideStability::SemiStabilized;
     }
     YlideStability::Unstabilized
+}
+
+fn bis_nucleophile_class(
+    structure: &crate::chemistry::molecule::MolecularStructure,
+    bridge_atom: Option<usize>,
+    nitrogens: &[usize],
+) -> BisNucleophileClass {
+    let Some(bridge_atom) = bridge_atom else {
+        return if nitrogens.len() >= 2 && directly_bonded(structure, nitrogens[0], nitrogens[1]) {
+            BisNucleophileClass::HydrazineLike
+        } else {
+            BisNucleophileClass::DiamineLike
+        };
+    };
+    if structure.atoms[bridge_atom].element == "C" {
+        if structure
+            .neighbors(bridge_atom)
+            .into_iter()
+            .any(|(neighbor, order)| {
+                matches!(structure.atoms[neighbor].element.as_str(), "O" | "S")
+                    && crate::chemistry::molecule::bond_order_matches(order, 2.0)
+            })
+        {
+            return BisNucleophileClass::UreaLike;
+        }
+        if structure
+            .neighbors(bridge_atom)
+            .into_iter()
+            .any(|(neighbor, order)| {
+                structure.atoms[neighbor].element == "N"
+                    && crate::chemistry::molecule::bond_order_matches(order, 2.0)
+            })
+        {
+            return BisNucleophileClass::GuanidineLike;
+        }
+    }
+    if nitrogens.len() >= 2 && directly_bonded(structure, nitrogens[0], nitrogens[1]) {
+        BisNucleophileClass::HydrazineLike
+    } else if structure.atoms[bridge_atom].element == "N" {
+        BisNucleophileClass::AmidrazoneLike
+    } else {
+        BisNucleophileClass::DiamineLike
+    }
+}
+
+fn directly_bonded(
+    structure: &crate::chemistry::molecule::MolecularStructure,
+    first: usize,
+    second: usize,
+) -> bool {
+    structure
+        .neighbors(first)
+        .into_iter()
+        .any(|(neighbor, _)| neighbor == second)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chemistry::frowns::parse_frowns;
+    use crate::chemistry::reactive_site::try_find_reactive_sites;
+    use crate::chemistry::substance::Substance;
+
+    fn participant_for(code: &str, kind: ReactiveSiteKind) -> SiteParticipant<'static> {
+        let structure = Box::leak(Box::new(parse_frowns(code).unwrap()));
+        let substance = Box::leak(Box::new({
+            let mut substance =
+                Substance::new("test:typed_center", 0, 1.0, 1000.0, 500.0, 100.0, 20_000.0);
+            substance.molecular_structure = Some(structure.clone());
+            substance
+        }));
+        let site = try_find_reactive_sites(structure)
+            .unwrap()
+            .into_iter()
+            .find(|site| site.kind == kind)
+            .unwrap_or_else(|| panic!("missing reactive site {kind:?}"));
+        SiteParticipant {
+            substance,
+            structure,
+            site,
+        }
+    }
+
+    #[test]
+    fn hydrazone_center_is_typed_from_graph_atoms() {
+        let center = participant_for(
+            "destroy:graph:atoms=C.N.N.H.H.H.H;\
+             bonds=0-d-1,1-s-2,0-s-3,0-s-4,2-s-5,2-s-6",
+            ReactiveSiteKind::Hydrazone,
+        )
+        .hydrazone_center()
+        .unwrap();
+        assert_eq!(
+            center.participant.substance.id.as_str(),
+            "test:typed_center"
+        );
+        assert_eq!(center.carbon, 0);
+        assert_eq!(center.imine_nitrogen, 1);
+        assert_eq!(center.terminal_nitrogen, 2);
+        assert_eq!(center.terminal_hydrogens.len(), 2);
+    }
+
+    #[test]
+    fn urea_like_center_is_a_bis_nucleophile() {
+        let participant = participant_for(
+            "destroy:graph:atoms=C.O.N.N.H.H.H.H;\
+             bonds=0-d-1,0-s-2,0-s-3,2-s-4,2-s-5,3-s-6,3-s-7",
+            ReactiveSiteKind::UreaLike,
+        );
+        let urea = participant.clone().urea_like_center().unwrap();
+        assert_eq!(urea.participant.substance.id.as_str(), "test:typed_center");
+        assert_eq!(urea.carbon, 0);
+        assert_eq!(urea.hetero_atom, 1);
+        assert_eq!(urea.nitrogens.len(), 2);
+
+        let bis_nucleophile = participant.bis_nucleophile_center().unwrap();
+        assert_eq!(
+            bis_nucleophile.participant.substance.id.as_str(),
+            "test:typed_center"
+        );
+        assert_eq!(bis_nucleophile.first_nucleophile, 2);
+        assert_eq!(bis_nucleophile.second_nucleophile, 3);
+        assert_eq!(bis_nucleophile.bridge_atom, Some(0));
+        assert_eq!(bis_nucleophile.class, BisNucleophileClass::UreaLike);
+    }
+
+    #[test]
+    fn dicarbonyl_and_formyl_donor_centers_are_typed() {
+        let dicarbonyl = participant_for(
+            "destroy:graph:atoms=C.O.C.C.O.H.H.H.H;\
+             bonds=0-d-1,0-s-2,2-s-3,3-d-4,0-s-5,2-s-6,2-s-7,3-s-8",
+            ReactiveSiteKind::DicarbonylElectrophile,
+        )
+        .dicarbonyl_electrophile_center()
+        .unwrap();
+        assert_eq!(
+            dicarbonyl.participant.substance.id.as_str(),
+            "test:typed_center"
+        );
+        assert_eq!(dicarbonyl.first_carbonyl_carbon, 0);
+        assert_eq!(dicarbonyl.first_carbonyl_oxygen, 1);
+        assert_eq!(dicarbonyl.second_carbonyl_carbon, 3);
+        assert_eq!(dicarbonyl.second_carbonyl_oxygen, 4);
+        assert_eq!(dicarbonyl.bridge_atoms, vec![2]);
+
+        let formyl = participant_for(
+            "destroy:graph:atoms=C.O.N.H.H.H;\
+             bonds=0-d-1,0-s-2,0-s-3,2-s-4,2-s-5",
+            ReactiveSiteKind::FormylationDonor,
+        )
+        .formylation_donor_center()
+        .unwrap();
+        assert_eq!(
+            formyl.participant.substance.id.as_str(),
+            "test:typed_center"
+        );
+        assert_eq!(formyl.carbon, 0);
+        assert_eq!(formyl.oxygen, 1);
+        assert_eq!(formyl.hydrogen, 3);
+    }
 }

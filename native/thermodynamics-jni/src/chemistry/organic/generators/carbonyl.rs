@@ -164,6 +164,83 @@ pub(crate) fn generate_imine_formation(
     .build())
 }
 
+pub(crate) fn generate_hydrazone_formation(
+    carbonyl_site: &CarbonylSite<'_>,
+    nucleophile_site: &BisNucleophileCenter<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+    _context: &SelectivityContext,
+) -> ChemistryResult<Option<Reaction>> {
+    if nucleophile_site.class != BisNucleophileClass::HydrazineLike {
+        return Ok(None);
+    }
+
+    let nucleophile_structure = nucleophile_site.participant.structure;
+    let imine_nitrogen = [
+        nucleophile_site.first_nucleophile,
+        nucleophile_site.second_nucleophile,
+    ]
+    .into_iter()
+    .find(|nitrogen| bonded_hydrogens(nucleophile_structure, *nitrogen).len() >= 2);
+    let Some(imine_nitrogen) = imine_nitrogen else {
+        return Ok(None);
+    };
+    let hydrogens = bonded_hydrogens(nucleophile_structure, imine_nitrogen);
+
+    let carbonyl_desc = SiteDescriptorBuilder::from_carbonyl_site(carbonyl_site);
+    let carbonyl = carbonyl_site.participant.substance;
+    let nucleophile = nucleophile_site.participant.substance;
+
+    let mut carbonyl_editor = MolecularEditor::new(carbonyl_site.participant.structure);
+    let carbonyl_mapping = carbonyl_editor.remove_atoms(&[carbonyl_site.oxygen])?;
+    let carbonyl_carbon = mapped_atom(
+        &carbonyl_mapping,
+        carbonyl_site.carbon,
+        "hydrazone carbonyl carbon",
+    )?;
+    let carbonyl_fragment = carbonyl_editor.finish()?;
+
+    let mut nucleophile_editor = MolecularEditor::new(nucleophile_structure);
+    let nucleophile_mapping = nucleophile_editor.remove_atoms(&[hydrogens[0], hydrogens[1]])?;
+    let imine_nitrogen = mapped_atom(
+        &nucleophile_mapping,
+        imine_nitrogen,
+        "hydrazone imine nitrogen",
+    )?;
+    let nucleophile_fragment = nucleophile_editor.finish()?;
+
+    let product = resolver.resolve(MolecularEditor::join_structures(
+        &carbonyl_fragment,
+        carbonyl_carbon,
+        &nucleophile_fragment,
+        imine_nitrogen,
+        2.0,
+    )?)?;
+
+    Ok(Some(
+        Reaction::builder(generated_pair_site_reaction_id(
+            "hydrazone_formation",
+            &carbonyl_site.participant,
+            &nucleophile_site.participant,
+        ))
+        .reactant(carbonyl.id.clone(), 1, 1)
+        .reactant(nucleophile.id.clone(), 1, 1)
+        .product(product, 1)
+        .product("destroy:water", 1)
+        .catalyst_order("destroy:proton", 1)
+        .condition(
+            ReactionCondition::new("hydrazone formation requires acidic, water-poor conditions")
+                .acidity(AcidityCondition::Acidic)
+                .max_water_activity(0.5),
+        )
+        .activation_energy_kj_per_mol(26.0)
+        .selectivity_profile(
+            SelectivityProfile::new(ReactionType::CarbonylAddition, carbonyl_desc)
+                .with_nucleophile_strength(NucleophileStrength::Moderate),
+        )
+        .build(),
+    ))
+}
+
 pub(crate) fn generate_organometallic_carbonyl_addition(
     carbonyl: SiteParticipant<'_>,
     organometallic: SiteParticipant<'_>,

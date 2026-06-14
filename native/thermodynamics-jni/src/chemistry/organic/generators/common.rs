@@ -316,6 +316,11 @@ pub(crate) fn site_kind_suffix(kind: &ReactiveSiteKind) -> &'static str {
         ReactiveSiteKind::Ketal => "ketal",
         ReactiveSiteKind::BocCarbamate => "boc_carbamate",
         ReactiveSiteKind::CbzCarbamate => "cbz_carbamate",
+        ReactiveSiteKind::Hydrazone => "hydrazone",
+        ReactiveSiteKind::BisNucleophile => "bis_nucleophile",
+        ReactiveSiteKind::DicarbonylElectrophile => "dicarbonyl_electrophile",
+        ReactiveSiteKind::UreaLike => "urea_like",
+        ReactiveSiteKind::FormylationDonor => "formylation_donor",
     }
 }
 

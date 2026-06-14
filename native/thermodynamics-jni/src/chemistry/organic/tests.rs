@@ -2897,6 +2897,41 @@ fn amidine_cyclization_closes_xanthine_imidazole_onto_the_pyrimidinedione() {
     dynamic.to_registry().unwrap();
 }
 
+#[test]
+fn carbonyl_and_hydrazine_like_bis_nucleophile_form_hydrazone() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let acetone = dynamic.resolve_frowns("CC(=O)C").unwrap();
+    let hydrazine = SubstanceId::from("destroy:hydrazine");
+    dynamic
+        .generate_reactions_for_substances([acetone.clone(), hydrazine], 1)
+        .unwrap();
+
+    let reaction = dynamic
+        .reactions()
+        .find(|reaction| reaction.id.as_str().starts_with("hydrazone_formation/"))
+        .expect("carbonyl plus hydrazine-like bis-nucleophile must form a hydrazone");
+    assert!(reaction
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:water"));
+
+    let product_id = reaction
+        .products
+        .iter()
+        .find(|term| term.substance_id.as_str() != "destroy:water")
+        .expect("hydrazone formation must have an organic product")
+        .substance_id
+        .clone();
+    let product = dynamic.substance(&product_id).unwrap();
+    let site_kinds = try_find_reactive_sites(product.molecular_structure.as_ref().unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|site| site.kind)
+        .collect::<Vec<_>>();
+    assert!(site_kinds.contains(&ReactiveSiteKind::Hydrazone));
+}
+
 /// Uracil: pyrimidine-2,4-dione. Ring N1 sits between C2=O and C6... (N1 is bonded
 /// to C2=O and to C6; N3 sits between C2=O and C4=O). Both ring nitrogens are imide
 /// N-H. Graph: 0 N1(H) 1 C2 2 O 3 N3(H) 4 C4 5 O 6 C5(H) 7 C6(H).

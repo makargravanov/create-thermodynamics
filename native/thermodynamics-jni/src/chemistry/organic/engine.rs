@@ -348,7 +348,8 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
             }
             ReactiveSiteKind::Sulfide => {
                 let site = participant.clone().sulfide_site()?;
-                if let Some(reaction) = generate_sulfide_oxidation_to_sulfoxide(&site, &mut resolver)?
+                if let Some(reaction) =
+                    generate_sulfide_oxidation_to_sulfoxide(&site, &mut resolver)?
                 {
                     push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 }
@@ -453,11 +454,7 @@ pub(crate) fn generate_organic_reactions_for_seed_substances<'a>(
             // White phosphorus hydrolysis: P4 + OH⁻ + H2O → PH3 + hypophosphite
             if substance.id.as_str() == "destroy:white_phosphorus" {
                 if let Some(reaction) = generate_p4_hydrolysis(substance, &mut resolver)? {
-                    push_unique_reaction(
-                        &mut generated.reactions,
-                        &mut reaction_ids,
-                        reaction,
-                    )?;
+                    push_unique_reaction(&mut generated.reactions, &mut reaction_ids, reaction)?;
                 }
             }
         }
@@ -932,6 +929,17 @@ fn generate_pair_reactions_for_seed(
                     generate_imine_formation(&carbonyl_site, &amine_site, resolver, context)?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
+            for bis_nucleophile in space.sites_of(&ReactiveSiteKind::BisNucleophile) {
+                let nucleophile_site = bis_nucleophile.bis_nucleophile_center()?;
+                if let Some(reaction) = generate_hydrazone_formation(
+                    &carbonyl_site,
+                    &nucleophile_site,
+                    resolver,
+                    context,
+                )? {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
             for alpha in space
                 .sites_of(&ReactiveSiteKind::Enol)
                 .filter(|site| site.substance.id == carbonyl_site.participant.substance.id)
@@ -944,6 +952,22 @@ fn generate_pair_reactions_for_seed(
                         &amine_site,
                         &alpha_center,
                         resolver,
+                    )? {
+                        push_unique_reaction(reactions, reaction_ids, reaction)?;
+                    }
+                }
+            }
+        }
+        ReactiveSiteKind::BisNucleophile => {
+            let nucleophile_site = seed.clone().bis_nucleophile_center()?;
+            for carbonyl_kind in carbonyl_site_kinds() {
+                for carbonyl in space.sites_of(&carbonyl_kind) {
+                    let carbonyl_site = carbonyl.carbonyl_site()?;
+                    if let Some(reaction) = generate_hydrazone_formation(
+                        &carbonyl_site,
+                        &nucleophile_site,
+                        resolver,
+                        context,
                     )? {
                         push_unique_reaction(reactions, reaction_ids, reaction)?;
                     }

@@ -17,6 +17,7 @@ pub(super) mod polycondensation;
 pub(super) mod protecting_groups;
 pub(super) mod radical;
 pub(super) mod rearrangement;
+pub(super) mod ring_closure;
 pub(super) mod substitution;
 
 pub(super) use acid_derivatives::*;

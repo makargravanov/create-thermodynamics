@@ -59,6 +59,11 @@ pub enum ReactiveSiteKind {
     Ketal,
     BocCarbamate,
     CbzCarbamate,
+    Hydrazone,
+    BisNucleophile,
+    DicarbonylElectrophile,
+    UreaLike,
+    FormylationDonor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -334,6 +339,26 @@ pub fn try_find_reactive_sites(
             FunctionalGroupType::Oxime => (
                 ReactiveSiteKind::Oxime,
                 vec![ReactiveRole::Electrophile, ReactiveRole::LeavingGroup],
+            ),
+            FunctionalGroupType::Hydrazone => (
+                ReactiveSiteKind::Hydrazone,
+                vec![ReactiveRole::Electrophile, ReactiveRole::Nucleophile],
+            ),
+            FunctionalGroupType::BisNucleophile => (
+                ReactiveSiteKind::BisNucleophile,
+                vec![ReactiveRole::Nucleophile],
+            ),
+            FunctionalGroupType::DicarbonylElectrophile => (
+                ReactiveSiteKind::DicarbonylElectrophile,
+                vec![ReactiveRole::Electrophile],
+            ),
+            FunctionalGroupType::UreaLike => (
+                ReactiveSiteKind::UreaLike,
+                vec![ReactiveRole::Nucleophile, ReactiveRole::Electrophile],
+            ),
+            FunctionalGroupType::FormylationDonor => (
+                ReactiveSiteKind::FormylationDonor,
+                vec![ReactiveRole::Electrophile],
             ),
         };
         sites.push(ReactiveSite::new(kind, group.atoms, roles));
@@ -752,6 +777,11 @@ fn primary_atom_for_site(site: &ReactiveSite) -> Option<usize> {
         | ReactiveSiteKind::Enol
         | ReactiveSiteKind::AromaticCarbon
         | ReactiveSiteKind::ArylHalide => site.atoms.first().copied(),
+        ReactiveSiteKind::Hydrazone
+        | ReactiveSiteKind::BisNucleophile
+        | ReactiveSiteKind::DicarbonylElectrophile
+        | ReactiveSiteKind::UreaLike
+        | ReactiveSiteKind::FormylationDonor => site.atoms.first().copied(),
         ReactiveSiteKind::AromaticRing => None,
         ReactiveSiteKind::SilylEther => site.atoms.first().copied(),
         ReactiveSiteKind::Acetal | ReactiveSiteKind::Ketal => site.atoms.first().copied(),
@@ -770,7 +800,9 @@ fn anchor_atoms_for_site(site: &ReactiveSite) -> Vec<usize> {
         | ReactiveSiteKind::Organomagnesium
         | ReactiveSiteKind::Organolithium
         | ReactiveSiteKind::Organocopper
-        | ReactiveSiteKind::Oxime => site.atoms.iter().copied().take(2).collect(),
+        | ReactiveSiteKind::Oxime
+        | ReactiveSiteKind::Hydrazone
+        | ReactiveSiteKind::DicarbonylElectrophile => site.atoms.iter().copied().take(2).collect(),
         ReactiveSiteKind::Epoxide => site.atoms.clone(),
         _ => site
             .primary_atom
@@ -844,5 +876,33 @@ mod tests {
             "destroy:graph:atoms=C.C.O.H.H.H.H;bonds=0-s-1,0-s-2,1-s-2,0-s-3,0-s-4,1-s-5,1-s-6",
         );
         assert!(epoxide.contains(&ReactiveSiteKind::Epoxide));
+    }
+
+    #[test]
+    fn detects_generalized_cn_heterocycle_building_sites() {
+        let hydrazone = site_kinds(
+            "destroy:graph:atoms=C.N.N.H.H.H.H;\
+             bonds=0-d-1,1-s-2,0-s-3,0-s-4,2-s-5,2-s-6",
+        );
+        assert!(hydrazone.contains(&ReactiveSiteKind::Hydrazone));
+
+        let urea = site_kinds(
+            "destroy:graph:atoms=C.O.N.N.H.H.H.H;\
+             bonds=0-d-1,0-s-2,0-s-3,2-s-4,2-s-5,3-s-6,3-s-7",
+        );
+        assert!(urea.contains(&ReactiveSiteKind::UreaLike));
+        assert!(urea.contains(&ReactiveSiteKind::BisNucleophile));
+
+        let dicarbonyl = site_kinds(
+            "destroy:graph:atoms=C.O.C.C.O.H.H.H.H;\
+             bonds=0-d-1,0-s-2,2-s-3,3-d-4,0-s-5,2-s-6,2-s-7,3-s-8",
+        );
+        assert!(dicarbonyl.contains(&ReactiveSiteKind::DicarbonylElectrophile));
+
+        let formamide = site_kinds(
+            "destroy:graph:atoms=C.O.N.H.H.H;\
+             bonds=0-d-1,0-s-2,0-s-3,2-s-4,2-s-5",
+        );
+        assert!(formamide.contains(&ReactiveSiteKind::FormylationDonor));
     }
 }
