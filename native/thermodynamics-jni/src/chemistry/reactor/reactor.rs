@@ -269,7 +269,7 @@ impl Reactor {
             )?;
         }
         for zone in &mut self.zones {
-            zone.tick(registry, dt_seconds);
+            zone.tick(registry, dt_seconds)?;
         }
         for _ in 0..self.vle_iterations {
             for zone in &mut self.zones {
@@ -320,7 +320,7 @@ impl Reactor {
             let energy = energy_to_equilibrium.clamp(-max_energy, max_energy);
 
             if energy.abs() > 1.0e-12 {
-                let _ = zone.mixture_mut().heat(registry, energy);
+                zone.mixture_mut().heat(registry, energy)?;
                 total_energy_j += energy;
             }
         }
@@ -415,8 +415,14 @@ impl Reactor {
                     let max_amount = entry.rate_mol_per_second * dt_seconds;
                     let take = available.min(max_amount);
                     if take > 0.0 {
-                        io::extract_substance(&mut self.zones[from.0], registry, &entry.id, take)?;
-                        io::insert_substance(&mut self.zones[to.0], registry, &entry.id, take)?;
+                        if let Some(stream) = io::extract_substance_stream(
+                            &mut self.zones[from.0],
+                            registry,
+                            &entry.id,
+                            take,
+                        )? {
+                            io::insert_stream(&mut self.zones[to.0], registry, &stream)?;
+                        }
                     }
                 }
             }
@@ -426,15 +432,15 @@ impl Reactor {
                     if max_amount <= 0.0 {
                         continue;
                     }
-                    io::extract_from_phase(
+                    io::extract_from_phase_streams(
                         &mut self.zones[from.0],
                         registry,
                         entry.phase,
                         max_amount,
                     )?
                     .into_iter()
-                    .try_for_each(|(id, amount)| -> ChemistryResult<()> {
-                        io::insert_substance(&mut self.zones[to.0], registry, &id, amount)?;
+                    .try_for_each(|stream| -> ChemistryResult<()> {
+                        io::insert_stream(&mut self.zones[to.0], registry, &stream)?;
                         Ok(())
                     })?;
                 }
@@ -459,19 +465,13 @@ impl Reactor {
                 for component in &snapshot.substances {
                     let take = component.total_mol_per_bucket * scale;
                     if take > 0.0 {
-                        let amount = io::extract_substance(
+                        if let Some(stream) = io::extract_substance_stream(
                             &mut self.zones[from.0],
                             registry,
                             &component.id,
                             take,
-                        )?;
-                        if amount > 0.0 {
-                            io::insert_substance(
-                                &mut self.zones[to.0],
-                                registry,
-                                &component.id,
-                                amount,
-                            )?;
+                        )? {
+                            io::insert_stream(&mut self.zones[to.0], registry, &stream)?;
                         }
                     }
                 }
@@ -489,8 +489,14 @@ impl Reactor {
                     let max_amount = entry.rate_mol_per_second * dt_seconds;
                     let take = excess.min(max_amount);
                     if take > 0.0 {
-                        io::extract_substance(&mut self.zones[from.0], registry, &entry.id, take)?;
-                        io::insert_substance(&mut self.zones[to.0], registry, &entry.id, take)?;
+                        if let Some(stream) = io::extract_substance_stream(
+                            &mut self.zones[from.0],
+                            registry,
+                            &entry.id,
+                            take,
+                        )? {
+                            io::insert_stream(&mut self.zones[to.0], registry, &stream)?;
+                        }
                     }
                 }
             }

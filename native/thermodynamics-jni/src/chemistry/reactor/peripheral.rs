@@ -1,3 +1,4 @@
+use crate::chemistry::error::ChemistryResult;
 use crate::chemistry::registry::ChemistryRegistry;
 
 use super::zone::ReactorZone;
@@ -188,14 +189,19 @@ impl Peripheral {
         }
     }
 
-    pub fn apply(&mut self, zone: &mut ReactorZone, registry: &ChemistryRegistry, dt_seconds: f64) {
+    pub fn apply(
+        &mut self,
+        zone: &mut ReactorZone,
+        registry: &ChemistryRegistry,
+        dt_seconds: f64,
+    ) -> ChemistryResult<()> {
         match self {
             Peripheral::Heater { power_kw } => {
                 let energy = *power_kw * 1000.0 * dt_seconds;
-                let _ = zone.mixture_mut().heat(registry, energy);
+                zone.mixture_mut().heat(registry, energy)?;
             }
             Peripheral::SmartHeater(state) => {
-                apply_smart_heater(zone, registry, state, dt_seconds);
+                apply_smart_heater(zone, registry, state, dt_seconds)?;
             }
             Peripheral::HeatExchanger {
                 coolant_temperature_kelvin,
@@ -207,13 +213,14 @@ impl Peripheral {
                     *coolant_temperature_kelvin,
                     *u_kw_per_kelvin,
                     dt_seconds,
-                );
+                )?;
             }
             Peripheral::UVLamp { intensity: _ } => {}
             Peripheral::Electrode(state) => {
-                apply_electrode(zone, registry, state, dt_seconds);
+                apply_electrode(zone, registry, state, dt_seconds)?;
             }
         }
+        Ok(())
     }
 
     pub fn uv_intensity(&self) -> f64 {
@@ -242,12 +249,12 @@ fn apply_heat_exchanger(
     coolant_temperature_kelvin: f64,
     u_kw_per_kelvin: f64,
     dt_seconds: f64,
-) {
+) -> ChemistryResult<()> {
     let mixture_temperature = zone.temperature_kelvin();
     let delta_t = coolant_temperature_kelvin - mixture_temperature;
 
     if delta_t.abs() < 0.01 {
-        return;
+        return Ok(());
     }
 
     let heat_capacity = match zone
@@ -255,14 +262,14 @@ fn apply_heat_exchanger(
         .volumetric_heat_capacity_j_per_bucket_kelvin(registry)
     {
         Ok(hc) if hc > 0.0 => hc,
-        _ => return,
+        _ => return Ok(()),
     };
 
     let max_energy = u_kw_per_kelvin * 1000.0 * delta_t.abs() * dt_seconds;
     let energy_to_equilibrium = delta_t * heat_capacity;
     let energy = energy_to_equilibrium.clamp(-max_energy, max_energy);
 
-    let _ = zone.mixture_mut().heat(registry, energy);
+    zone.mixture_mut().heat(registry, energy)
 }
 
 fn apply_smart_heater(
@@ -270,11 +277,11 @@ fn apply_smart_heater(
     registry: &ChemistryRegistry,
     state: &mut SmartHeaterState,
     dt_seconds: f64,
-) {
+) -> ChemistryResult<()> {
     if state.failed {
         state.last_electrical_draw_w = 0.0;
         state.last_heating_power_w = 0.0;
-        return;
+        return Ok(());
     }
 
     let mixture_temperature = zone.temperature_kelvin();
@@ -283,7 +290,7 @@ fn apply_smart_heater(
         state.failed = true;
         state.last_electrical_draw_w = 0.0;
         state.last_heating_power_w = 0.0;
-        return;
+        return Ok(());
     }
 
     let resistance = state.resistance_at(mixture_temperature);
@@ -293,7 +300,7 @@ fn apply_smart_heater(
         state.failed = true;
         state.last_electrical_draw_w = 0.0;
         state.last_heating_power_w = 0.0;
-        return;
+        return Ok(());
     }
 
     let electrical_power_w = state.voltage * state.voltage / resistance;
@@ -305,10 +312,10 @@ fn apply_smart_heater(
         state.prev_error = error;
         state.last_electrical_draw_w = 0.0;
         state.last_heating_power_w = 0.0;
-        return;
+        return Ok(());
     }
 
-    let heat_capacity = match zone
+    let _heat_capacity = match zone
         .mixture()
         .volumetric_heat_capacity_j_per_bucket_kelvin(registry)
     {
@@ -316,7 +323,7 @@ fn apply_smart_heater(
         _ => {
             state.last_electrical_draw_w = 0.0;
             state.last_heating_power_w = 0.0;
-            return;
+            return Ok(());
         }
     };
 
@@ -355,7 +362,7 @@ fn apply_smart_heater(
     state.last_heating_power_w = actual_electrical_w;
 
     let energy = actual_electrical_w * dt_seconds;
-    let _ = zone.mixture_mut().heat(registry, energy);
+    zone.mixture_mut().heat(registry, energy)
 }
 
 fn apply_electrode(
@@ -363,11 +370,11 @@ fn apply_electrode(
     registry: &ChemistryRegistry,
     state: &mut ElectrodeState,
     dt_seconds: f64,
-) {
+) -> ChemistryResult<()> {
     if state.failed || state.current_a <= 0.0 {
         state.last_electrical_draw_w = 0.0;
         state.last_energy_delivered_j = 0.0;
-        return;
+        return Ok(());
     }
 
     let current = state.current_a.min(state.max_current_a);
@@ -377,5 +384,5 @@ fn apply_electrode(
     state.last_electrical_draw_w = electrical_w;
     state.last_energy_delivered_j = energy_j;
 
-    let _ = zone.mixture_mut().heat(registry, energy_j);
+    zone.mixture_mut().heat(registry, energy_j)
 }

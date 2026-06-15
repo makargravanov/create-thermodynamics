@@ -3,14 +3,15 @@ use crate::chemistry::reactor::peripheral::{
     ControlMode, ElectrodeState, Peripheral, SmartHeaterState,
 };
 use crate::chemistry::reactor::reactor::{
-    Input, Output, PhaseEntry, Reactor, SubstanceEntry, TransitionMode, ZoneId, ZoneTransition,
+    PhaseEntry, Reactor, SubstanceEntry, TransitionMode, ZoneId, ZoneTransition,
 };
 use crate::chemistry::reactor::zone::ReactorZone;
 use crate::chemistry::substance::SubstanceId;
+use crate::chemistry::ChemistryResult;
 
-pub fn batch_reactor(volume_m3: f64, target_kelvin: f64) -> Reactor {
+pub fn batch_reactor(volume_m3: f64, target_kelvin: f64) -> ChemistryResult<Reactor> {
     let mut reactor = Reactor::new();
-    let zone = ReactorZone::new(volume_m3).with_peripheral(Peripheral::SmartHeater(
+    let zone = ReactorZone::new(volume_m3)?.with_peripheral(Peripheral::SmartHeater(
         SmartHeaterState::new(
             target_kelvin,
             10.0,
@@ -22,14 +23,14 @@ pub fn batch_reactor(volume_m3: f64, target_kelvin: f64) -> Reactor {
         ),
     ));
     reactor.add_zone(zone);
-    reactor
+    Ok(reactor)
 }
 
-pub fn cstr(volume_m3: f64, target_kelvin: f64) -> Reactor {
+pub fn cstr(volume_m3: f64, target_kelvin: f64) -> ChemistryResult<Reactor> {
     let mut reactor = Reactor::new();
 
-    let input = reactor.add_zone(ReactorZone::new(volume_m3));
-    let reaction = reactor.add_zone(ReactorZone::new(volume_m3).with_peripheral(
+    let input = reactor.add_zone(ReactorZone::new(volume_m3)?);
+    let reaction = reactor.add_zone(ReactorZone::new(volume_m3)?.with_peripheral(
         Peripheral::SmartHeater(SmartHeaterState::new(
             target_kelvin,
             10.0,
@@ -40,7 +41,7 @@ pub fn cstr(volume_m3: f64, target_kelvin: f64) -> Reactor {
             ControlMode::PID,
         )),
     ));
-    let output = reactor.add_zone(ReactorZone::new(volume_m3));
+    let output = reactor.add_zone(ReactorZone::new(volume_m3)?);
 
     reactor.add_transition(ZoneTransition::new(
         input,
@@ -57,14 +58,14 @@ pub fn cstr(volume_m3: f64, target_kelvin: f64) -> Reactor {
         },
     ));
 
-    reactor
+    Ok(reactor)
 }
 
-pub fn electrolysis_cell(volume_m3: f64) -> Reactor {
+pub fn electrolysis_cell(volume_m3: f64) -> ChemistryResult<Reactor> {
     let mut reactor = Reactor::new();
 
     let electrolyte = reactor.add_zone(
-        ReactorZone::new(volume_m3)
+        ReactorZone::new(volume_m3)?
             .with_peripheral(Peripheral::SmartHeater(SmartHeaterState::new(
                 353.0,
                 5.0,
@@ -76,7 +77,7 @@ pub fn electrolysis_cell(volume_m3: f64) -> Reactor {
             )))
             .with_peripheral(Peripheral::Electrode(ElectrodeState::new(12.0, 50.0, 1.23))),
     );
-    let product = reactor.add_zone(ReactorZone::new(volume_m3));
+    let product = reactor.add_zone(ReactorZone::new(volume_m3)?);
 
     reactor.add_transition(ZoneTransition::new(
         electrolyte,
@@ -95,10 +96,15 @@ pub fn electrolysis_cell(volume_m3: f64) -> Reactor {
         },
     ));
 
-    reactor
+    Ok(reactor)
 }
 
-pub fn distillation_column(stages: usize, volume_per_stage_m3: f64) -> Reactor {
+pub fn distillation_column(stages: usize, volume_per_stage_m3: f64) -> ChemistryResult<Reactor> {
+    if stages == 0 {
+        return Err(crate::chemistry::ChemistryError::InvalidMixtureState(
+            "distillation column must have at least one stage".to_string(),
+        ));
+    }
     let mut reactor = Reactor::new();
     reactor.set_vle_iterations(2);
     reactor.set_vle_relaxation(1.0);
@@ -106,7 +112,7 @@ pub fn distillation_column(stages: usize, volume_per_stage_m3: f64) -> Reactor {
     let mut zone_ids: Vec<ZoneId> = Vec::new();
     for _ in 0..stages {
         let zone =
-            ReactorZone::new(volume_per_stage_m3).with_peripheral(Peripheral::HeatExchanger {
+            ReactorZone::new(volume_per_stage_m3)?.with_peripheral(Peripheral::HeatExchanger {
                 coolant_temperature_kelvin: 373.0,
                 u_kw_per_kelvin: 0.5,
             });
@@ -136,14 +142,14 @@ pub fn distillation_column(stages: usize, volume_per_stage_m3: f64) -> Reactor {
         ));
     }
 
-    reactor
+    Ok(reactor)
 }
 
-pub fn arc_furnace(volume_m3: f64) -> Reactor {
+pub fn arc_furnace(volume_m3: f64) -> ChemistryResult<Reactor> {
     let mut reactor = Reactor::new();
 
     let chamber = reactor.add_zone(
-        ReactorZone::new(volume_m3)
+        ReactorZone::new(volume_m3)?
             .with_peripheral(Peripheral::Electrode(ElectrodeState::new(80.0, 500.0, 0.0)))
             .with_peripheral(Peripheral::HeatExchanger {
                 coolant_temperature_kelvin: 293.0,
@@ -151,7 +157,7 @@ pub fn arc_furnace(volume_m3: f64) -> Reactor {
             }),
     );
 
-    let output = reactor.add_zone(ReactorZone::new(volume_m3));
+    let output = reactor.add_zone(ReactorZone::new(volume_m3)?);
 
     reactor.add_transition(ZoneTransition::new(
         chamber,
@@ -164,7 +170,7 @@ pub fn arc_furnace(volume_m3: f64) -> Reactor {
         },
     ));
 
-    reactor
+    Ok(reactor)
 }
 
 #[cfg(test)]
@@ -182,7 +188,7 @@ mod tests {
         let temps = [298.0, 353.0, 373.0, 400.0];
 
         for &temp in &temps {
-            let mut reactor = distillation_column(5, 0.001);
+            let mut reactor = distillation_column(5, 0.001).unwrap();
 
             // Fill zone 0 with 60% water, 40% ethanol
             {
@@ -302,7 +308,7 @@ mod tests {
         let water_id = SubstanceId::from("destroy:water");
 
         let mut reactor = Reactor::new();
-        let zone = reactor.add_zone(ReactorZone::new(0.001));
+        let zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
 
         let input_idx = reactor.add_input(Input::new(
             zone,
@@ -349,13 +355,13 @@ mod tests {
 
     #[test]
     fn disabled_input_does_nothing() {
-        use crate::chemistry::reactor::reactor::{Input, Output};
+        use crate::chemistry::reactor::reactor::Input;
 
         let registry = destroy_registry_builder().unwrap().build().unwrap();
         let water_id = SubstanceId::from("destroy:water");
 
         let mut reactor = Reactor::new();
-        let zone = reactor.add_zone(ReactorZone::new(0.001));
+        let zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
 
         let input_idx = reactor.add_input(
             Input::new(
@@ -386,8 +392,8 @@ mod tests {
         let ethanol_id = SubstanceId::from("destroy:ethanol");
 
         let mut reactor = Reactor::new();
-        let from_zone = reactor.add_zone(ReactorZone::new(0.001));
-        let to_zone = reactor.add_zone(ReactorZone::new(0.001));
+        let from_zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
+        let to_zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
 
         {
             let mixture = reactor.zone_mut(&from_zone).unwrap().mixture_mut();
@@ -439,8 +445,8 @@ mod tests {
         let oxygen_id = SubstanceId::from("destroy:oxygen");
 
         let mut reactor = Reactor::new();
-        let from_zone = reactor.add_zone(ReactorZone::new(0.001));
-        let to_zone = reactor.add_zone(ReactorZone::new(0.001));
+        let from_zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
+        let to_zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
 
         {
             let mixture = reactor.zone_mut(&from_zone).unwrap().mixture_mut();
@@ -488,8 +494,8 @@ mod tests {
         let water_id = SubstanceId::from("destroy:water");
 
         let mut reactor = Reactor::new();
-        let from_zone = reactor.add_zone(ReactorZone::new(0.001));
-        let to_zone = reactor.add_zone(ReactorZone::new(0.001));
+        let from_zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
+        let to_zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
 
         {
             let mixture = reactor.zone_mut(&from_zone).unwrap().mixture_mut();
@@ -529,6 +535,61 @@ mod tests {
     }
 
     #[test]
+    fn reactor_zone_rejects_invalid_volume() {
+        assert!(ReactorZone::new(0.0).is_err());
+        assert!(ReactorZone::new(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn transition_transfers_thermal_energy_with_substance() {
+        use crate::chemistry::reactor::reactor::SubstanceEntry;
+
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let water_id = SubstanceId::from("destroy:water");
+
+        let mut reactor = Reactor::new();
+        let from_zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
+        let to_zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
+
+        {
+            let mixture = reactor.zone_mut(&from_zone).unwrap().mixture_mut();
+            mixture
+                .add_substance(&registry, water_id.clone(), 5.0)
+                .unwrap();
+            mixture.heat(&registry, 50_000.0).unwrap();
+        }
+        {
+            let mixture = reactor.zone_mut(&to_zone).unwrap().mixture_mut();
+            mixture
+                .add_substance(&registry, water_id.clone(), 1.0)
+                .unwrap();
+        }
+
+        let source_initial_temperature = reactor.zone(&from_zone).unwrap().temperature_kelvin();
+        let target_initial_temperature = reactor.zone(&to_zone).unwrap().temperature_kelvin();
+        assert!(source_initial_temperature > target_initial_temperature);
+
+        reactor.add_transition(ZoneTransition::new(
+            from_zone,
+            to_zone,
+            TransitionMode::Substances {
+                entries: vec![SubstanceEntry {
+                    id: water_id,
+                    rate_mol_per_second: 1.0,
+                }],
+            },
+        ));
+
+        reactor.tick(&registry, 1.0).unwrap();
+
+        let target_final_temperature = reactor.zone(&to_zone).unwrap().temperature_kelvin();
+        assert!(
+            target_final_temperature > target_initial_temperature,
+            "hot transferred stream should heat receiver: {target_initial_temperature} -> {target_final_temperature}"
+        );
+    }
+
+    #[test]
     fn electrical_interface_on_smart_heater() {
         let water_id: SubstanceId = SubstanceId::from("destroy:water");
         let registry = destroy_registry_builder().unwrap().build().unwrap();
@@ -547,10 +608,10 @@ mod tests {
             "power_at should use current voltage"
         );
 
-        let mut zone = ReactorZone::new(0.001);
+        let mut zone = ReactorZone::new(0.001).unwrap();
         let _ = zone.mixture_mut().add_substance(&registry, water_id, 1.0);
         let mut peripheral = Peripheral::SmartHeater(heater);
-        peripheral.apply(&mut zone, &registry, 1.0);
+        peripheral.apply(&mut zone, &registry, 1.0).unwrap();
 
         let state = match &peripheral {
             Peripheral::SmartHeater(s) => s,
@@ -593,10 +654,10 @@ mod tests {
         assert!(energy >= 0.0);
 
         let registry = destroy_registry_builder().unwrap().build().unwrap();
-        let mut zone = ReactorZone::new(0.001);
+        let mut zone = ReactorZone::new(0.001).unwrap();
         let _ = zone.mixture_mut().add_substance(&registry, water_id, 1.0);
         let mut peripheral = Peripheral::Electrode(electrode);
-        peripheral.apply(&mut zone, &registry, 1.0);
+        peripheral.apply(&mut zone, &registry, 1.0).unwrap();
 
         match &peripheral {
             Peripheral::Electrode(e) => {
@@ -614,6 +675,7 @@ mod tests {
         let mut reactor = Reactor::new();
         let zone = reactor.add_zone(
             ReactorZone::new(0.001)
+                .unwrap()
                 .with_peripheral(Peripheral::SmartHeater(SmartHeaterState::new(
                     373.0,
                     10.0,
@@ -647,7 +709,7 @@ mod tests {
         let water_id: SubstanceId = SubstanceId::from("destroy:water");
         let registry = destroy_registry_builder().unwrap().build().unwrap();
         let mut reactor = Reactor::new();
-        let zone = reactor.add_zone(ReactorZone::new(0.001));
+        let zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
 
         {
             let z = reactor.zone_mut(&zone).unwrap();
@@ -685,7 +747,7 @@ mod tests {
         let water_id: SubstanceId = SubstanceId::from("destroy:water");
         let registry = destroy_registry_builder().unwrap().build().unwrap();
         let mut reactor = Reactor::new();
-        let zone = reactor.add_zone(ReactorZone::new(0.001));
+        let zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
 
         {
             let z = reactor.zone_mut(&zone).unwrap();
@@ -724,8 +786,8 @@ mod tests {
         let registry = destroy_registry_builder().unwrap().build().unwrap();
         let mut reactor = Reactor::new();
 
-        let hot_zone = reactor.add_zone(ReactorZone::new(0.001));
-        let cold_zone = reactor.add_zone(ReactorZone::new(0.001));
+        let hot_zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
+        let cold_zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
 
         {
             let z = reactor.zone_mut(&hot_zone).unwrap();
@@ -785,7 +847,7 @@ mod tests {
         let water_id: SubstanceId = SubstanceId::from("destroy:water");
         let registry = destroy_registry_builder().unwrap().build().unwrap();
         let mut reactor = Reactor::new();
-        let zone = reactor.add_zone(ReactorZone::new(0.001));
+        let zone = reactor.add_zone(ReactorZone::new(0.001).unwrap());
 
         {
             let z = reactor.zone_mut(&zone).unwrap();

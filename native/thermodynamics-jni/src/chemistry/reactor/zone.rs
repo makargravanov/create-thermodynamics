@@ -1,3 +1,4 @@
+use crate::chemistry::error::ChemistryResult;
 use crate::chemistry::mixture::{Mixture, DEFAULT_TEMPERATURE_KELVIN};
 use crate::chemistry::substance::SubstanceId;
 
@@ -13,14 +14,16 @@ pub struct ReactorZone {
 }
 
 impl ReactorZone {
-    pub fn new(volume_cubic_meters: f64) -> Self {
-        Self {
-            mixture: Mixture::new(DEFAULT_TEMPERATURE_KELVIN).unwrap(),
+    pub fn new(volume_cubic_meters: f64) -> ChemistryResult<Self> {
+        let mut mixture = Mixture::new(DEFAULT_TEMPERATURE_KELVIN)?;
+        mixture.set_gas_volume_cubic_meters(volume_cubic_meters)?;
+        Ok(Self {
+            mixture,
             volume_cubic_meters,
             sealed: false,
             elapsed_seconds: 0.0,
             peripherals: Vec::new(),
-        }
+        })
     }
 
     pub fn with_peripheral(mut self, peripheral: Peripheral) -> Self {
@@ -74,9 +77,10 @@ impl ReactorZone {
         self.volume_cubic_meters
     }
 
-    pub fn set_volume_cubic_meters(&mut self, volume: f64) {
+    pub fn set_volume_cubic_meters(&mut self, volume: f64) -> ChemistryResult<()> {
+        self.mixture.set_gas_volume_cubic_meters(volume)?;
         self.volume_cubic_meters = volume;
-        self.mixture.set_gas_volume_cubic_meters(volume).unwrap();
+        Ok(())
     }
 
     pub fn sealed(&self) -> bool {
@@ -107,12 +111,17 @@ impl ReactorZone {
         &mut self,
         registry: &crate::chemistry::registry::ChemistryRegistry,
         dt_seconds: f64,
-    ) {
+    ) -> ChemistryResult<()> {
         self.elapsed_seconds += dt_seconds;
         let mut peripherals = std::mem::take(&mut self.peripherals);
+        let mut result = Ok(());
         for peripheral in &mut peripherals {
-            peripheral.apply(self, registry, dt_seconds);
+            if let Err(error) = peripheral.apply(self, registry, dt_seconds) {
+                result = Err(error);
+                break;
+            }
         }
         self.peripherals = peripherals;
+        result
     }
 }

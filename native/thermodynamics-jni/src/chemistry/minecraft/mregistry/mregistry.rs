@@ -13,6 +13,10 @@ pub enum RegistrationError {
     UnknownSubstance {
         substance_id: SubstanceId,
     },
+    InvalidAmount {
+        item_id: MinecraftId,
+        mol_per_item: f64,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -33,6 +37,12 @@ impl MinecraftChemicalRegistry {
         mol_per_item: f64,
         catalog: &ChemistryRegistry,
     ) -> Result<(), RegistrationError> {
+        if !mol_per_item.is_finite() || mol_per_item <= 0.0 {
+            return Err(RegistrationError::InvalidAmount {
+                item_id,
+                mol_per_item,
+            });
+        }
         if catalog.substance(&substance_id).is_err() {
             return Err(RegistrationError::UnknownSubstance { substance_id });
         }
@@ -191,6 +201,31 @@ mod tests {
             }
             _ => panic!("expected UnknownSubstance error"),
         }
+    }
+
+    #[test]
+    fn invalid_mol_per_item_is_rejected() {
+        let catalog = static_catalog();
+        let mut registry = MinecraftChemicalRegistry::new();
+        let err = registry
+            .register(
+                MinecraftId::from("minecraft:bad_ore"),
+                fe_id(),
+                f64::NAN,
+                &catalog,
+            )
+            .unwrap_err();
+        match err {
+            RegistrationError::InvalidAmount {
+                item_id,
+                mol_per_item,
+            } => {
+                assert_eq!(item_id, MinecraftId::from("minecraft:bad_ore"));
+                assert!(mol_per_item.is_nan());
+            }
+            _ => panic!("expected InvalidAmount error"),
+        }
+        assert!(registry.is_empty());
     }
 
     #[test]
