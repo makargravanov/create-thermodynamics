@@ -1722,6 +1722,51 @@ fn electrophilic_addition_generators_are_registered() {
 }
 
 #[test]
+fn alkene_hydration_generates_branched_alcohols_as_a_family() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let isobutene = dynamic.resolve_frowns("C=C(C)C").unwrap();
+    dynamic
+        .generate_reactions_for_substances([SubstanceId::from("destroy:propene"), isobutene], 1)
+        .unwrap();
+
+    let propene_hydration = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("alkene_hydrolysis/destroy_propene/")
+        })
+        .expect("propene must hydrate through the general alkene addition generator");
+    assert!(propene_hydration
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:water")));
+    assert_eq!(
+        propene_hydration
+            .orders
+            .get(&SubstanceId::from("destroy:proton")),
+        Some(&2)
+    );
+    let propene_products = reaction_product_ids(propene_hydration);
+    assert!(
+        propene_products.contains(&SubstanceId::from("destroy:isopropanol")),
+        "propene hydration products: {propene_products:?}"
+    );
+
+    let tert_butanol_reaction = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with("alkene_hydrolysis/")
+                && reaction_product_ids(reaction)
+                    .contains(&SubstanceId::from("destroy:tert_butanol"))
+        })
+        .expect("dynamic branched alkene must hydrate to tert-butanol");
+    assert!(tert_butanol_reaction.display_as_reversible);
+}
+
+#[test]
 fn chain_growth_polymerization_registers_a_polymer_material_from_an_alkene() {
     let registry = generated_registry();
     let reaction = reaction_with_prefix(&registry, "chain_growth_polymerization/destroy_ethene/");

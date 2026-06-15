@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 
 use super::error::{ChemistryError, ChemistryResult};
 
@@ -895,10 +895,72 @@ impl MolecularEditor {
         if substituents.len() != 4 {
             return Ok(false);
         }
+        if !self.tetrahedral_ligands_are_distinct(center, &substituents) {
+            return Ok(false);
+        }
         let mut atoms = vec![center];
         atoms.extend(substituents);
         self.mark_stereo_mixture(atoms, StereoMixtureKind::Tetrahedral)?;
         Ok(true)
+    }
+
+    fn tetrahedral_ligands_are_distinct(&self, center: usize, substituents: &[usize]) -> bool {
+        let signatures = substituents
+            .iter()
+            .copied()
+            .map(|substituent| {
+                let mut visited = BTreeSet::new();
+                self.ligand_signature(center, substituent, &mut visited)
+            })
+            .collect::<BTreeSet<_>>();
+        signatures.len() == substituents.len()
+    }
+
+    fn ligand_signature(
+        &self,
+        previous: usize,
+        atom_index: usize,
+        visited: &mut BTreeSet<usize>,
+    ) -> String {
+        if !visited.insert(atom_index) {
+            return "cycle".to_string();
+        }
+        let atom = &self.atoms[atom_index];
+        let mut branches = self
+            .editor_neighbors(atom_index)
+            .into_iter()
+            .filter(|(neighbor, _)| *neighbor != previous)
+            .map(|(neighbor, order)| {
+                let mut branch_visited = visited.clone();
+                format!(
+                    "{order:.3}:{}",
+                    self.ligand_signature(atom_index, neighbor, &mut branch_visited)
+                )
+            })
+            .collect::<Vec<_>>();
+        branches.sort();
+        format!(
+            "{}:{:.3}:{}:[{}]",
+            atom.element,
+            atom.charge,
+            atom.r_group_number,
+            branches.join(",")
+        )
+    }
+
+    fn editor_neighbors(&self, atom_index: usize) -> Vec<(usize, f64)> {
+        self.bonds
+            .iter()
+            .filter_map(|bond| {
+                if bond.from == atom_index {
+                    Some((bond.to, bond.order))
+                } else if bond.to == atom_index {
+                    Some((bond.from, bond.order))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     pub fn mark_double_bond_stereo_mixture_if_valid(
@@ -2102,6 +2164,41 @@ mod tests {
             .unwrap();
         editor.remove_atom(substituents[0]).unwrap();
         assert!(editor.finish().unwrap().stereochemistry.is_empty());
+    }
+
+    #[test]
+    fn tetrahedral_stereo_mixture_requires_distinct_ligands() {
+        let isopropanol = parse_legacy_structure("destroy:linear:CC(O)C").unwrap();
+        let isopropanol_center = isopropanol
+            .atoms
+            .iter()
+            .enumerate()
+            .find_map(|(index, atom)| {
+                (atom.element == "C"
+                    && isopropanol
+                        .neighbors(index)
+                        .iter()
+                        .any(|(neighbor, _)| isopropanol.atoms[*neighbor].element == "O"))
+                .then_some(index)
+            })
+            .unwrap();
+        let mut editor = MolecularEditor::new(&isopropanol);
+        assert!(!editor
+            .mark_tetrahedral_stereo_mixture_if_valid(isopropanol_center)
+            .unwrap());
+        assert!(editor.finish().unwrap().stereochemistry.is_empty());
+
+        let chiral = parse_legacy_structure("destroy:linear:C(Cl)(F)I").unwrap();
+        let chiral_center = chiral
+            .atoms
+            .iter()
+            .position(|atom| atom.element == "C")
+            .unwrap();
+        let mut editor = MolecularEditor::new(&chiral);
+        assert!(editor
+            .mark_tetrahedral_stereo_mixture_if_valid(chiral_center)
+            .unwrap());
+        assert_eq!(editor.finish().unwrap().stereochemistry.len(), 1);
     }
 
     #[test]

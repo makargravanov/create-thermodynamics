@@ -1740,6 +1740,47 @@ mod tests {
     }
 
     #[test]
+    fn planner_reaches_branched_alcohols_through_general_alkene_hydration() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let isopropanol_routes = SynthesisPlanner::new()
+            .with_max_steps(1)
+            .allow_reaction_prefix("alkene_hydrolysis/")
+            .find_routes(
+                &mut registry,
+                [
+                    SubstanceId::from("destroy:propene"),
+                    SubstanceId::from("destroy:water"),
+                    SubstanceId::from("destroy:proton"),
+                ],
+                parse_frowns("CC(O)C").unwrap(),
+            )
+            .unwrap();
+        assert!(!isopropanol_routes.is_empty());
+        assert!(isopropanol_routes[0].steps.iter().any(|step| step
+            .products
+            .contains(&SubstanceId::from("destroy:isopropanol"))));
+
+        let isobutene = registry.resolve_frowns("C=C(C)C").unwrap();
+        let tert_butanol_routes = SynthesisPlanner::new()
+            .with_max_steps(1)
+            .allow_reaction_prefix("alkene_hydrolysis/")
+            .find_routes(
+                &mut registry,
+                [
+                    isobutene,
+                    SubstanceId::from("destroy:water"),
+                    SubstanceId::from("destroy:proton"),
+                ],
+                parse_frowns("CC(C)(C)O").unwrap(),
+            )
+            .unwrap();
+        assert!(!tert_butanol_routes.is_empty());
+        assert!(tert_butanol_routes[0].steps.iter().any(|step| step
+            .products
+            .contains(&SubstanceId::from("destroy:tert_butanol"))));
+    }
+
+    #[test]
     fn planner_reaches_trimethyl_borate_by_repeating_borate_esterification() {
         let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
         let routes = SynthesisPlanner::new()
