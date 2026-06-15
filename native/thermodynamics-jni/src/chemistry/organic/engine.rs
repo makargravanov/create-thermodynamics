@@ -129,6 +129,8 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 }
                 let reaction = generate_thionyl_chloride_substitution(&site, &mut resolver)?;
                 push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                let reaction = generate_alcohol_chloroformate_formation(&site, &mut resolver)?;
+                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
                 for halogen in [
                     Hydrohalogen::Chloride,
                     Hydrohalogen::Bromide,

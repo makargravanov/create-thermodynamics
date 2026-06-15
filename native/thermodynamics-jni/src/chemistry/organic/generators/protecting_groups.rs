@@ -19,6 +19,7 @@ use crate::chemistry::selectivity::{
     engine::SiteDescriptorBuilder,
     types::{ReactionType, SelectivityProfile},
 };
+use crate::chemistry::substance::SubstanceId;
 
 /// Add TMS (trimethylsilyl) protecting group to an alcohol
 ///
@@ -72,6 +73,100 @@ pub(crate) fn generate_alcohol_silyl_protection(
     )
     .activation_energy_kj_per_mol(15.0)
     .build())
+}
+
+pub(crate) fn generate_alcohol_chloroformate_formation(
+    alcohol_site: &AlcoholSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let alcohol = alcohol_site.participant.substance;
+    let phosgene_id = SubstanceId::from("destroy:phosgene");
+    let phosgene =
+        resolver
+            .known_structure(&phosgene_id)
+            .ok_or_else(|| ChemistryError::InvalidReaction {
+                reaction_id: generated_site_reaction_id(
+                    "alcohol_chloroformate_formation",
+                    &alcohol_site.participant,
+                ),
+                reason: "required reagent 'destroy:phosgene' has no known molecular structure"
+                    .to_string(),
+            })?;
+    let (phosgene_carbon, _phosgene_oxygen, leaving_chlorine) =
+        phosgene_chloroformate_atoms(phosgene)?;
+
+    let mut alcohol_editor = MolecularEditor::new(alcohol_site.participant.structure);
+    let alcohol_mapping = alcohol_editor.remove_atoms(&[alcohol_site.hydrogen])?;
+    let alcohol_oxygen = mapped_atom(&alcohol_mapping, alcohol_site.oxygen, "alcohol oxygen")?;
+    let alcohol_fragment = alcohol_editor.finish()?;
+
+    let mut phosgene_editor = MolecularEditor::new(phosgene);
+    let phosgene_mapping = phosgene_editor.remove_atoms(&[leaving_chlorine])?;
+    let phosgene_carbon = mapped_atom(
+        &phosgene_mapping,
+        phosgene_carbon,
+        "phosgene carbonyl carbon",
+    )?;
+    let phosgene_fragment = phosgene_editor.finish()?;
+
+    let product = resolver.resolve(MolecularEditor::join_structures(
+        &alcohol_fragment,
+        alcohol_oxygen,
+        &phosgene_fragment,
+        phosgene_carbon,
+        1.0,
+    )?)?;
+
+    Ok(Reaction::builder(generated_site_reaction_id(
+        "alcohol_chloroformate_formation",
+        &alcohol_site.participant,
+    ))
+    .reactant(alcohol.id.clone(), 1, 1)
+    .reactant(phosgene_id, 1, 1)
+    .product(product, 1)
+    .product("destroy:hydrochloric_acid", 1)
+    .condition(
+        ReactionCondition::new("chloroformate formation requires dry alcoholysis of phosgene")
+            .max_water_activity(0.05),
+    )
+    .activation_energy_kj_per_mol(18.0)
+    .selectivity_profile(
+        SelectivityProfile::new(
+            ReactionType::AcylSubstitution,
+            SiteDescriptorBuilder::from_alcohol_site(alcohol_site),
+        )
+        .never_suppress(),
+    )
+    .build())
+}
+
+fn phosgene_chloroformate_atoms(
+    structure: &MolecularStructure,
+) -> ChemistryResult<(usize, usize, usize)> {
+    for carbon in 0..structure.atoms.len() {
+        if structure.atoms[carbon].element != "C" {
+            continue;
+        }
+        let mut oxygen = None;
+        let mut chlorines = Vec::new();
+        for (neighbor, order) in structure.neighbors(carbon) {
+            if structure.atoms[neighbor].element == "O" && bond_order_matches(order, 2.0) {
+                oxygen = Some(neighbor);
+            }
+            if structure.atoms[neighbor].element == "Cl" && bond_order_matches(order, 1.0) {
+                chlorines.push(neighbor);
+            }
+        }
+        if let (Some(oxygen), Some(chlorine)) = (oxygen, chlorines.first().copied()) {
+            if chlorines.len() == 2 {
+                return Ok((carbon, oxygen, chlorine));
+            }
+        }
+    }
+    Err(ChemistryError::InvalidReaction {
+        reaction_id: "alcohol_chloroformate_formation".to_string(),
+        reason: "phosgene structure must contain C(=O)Cl2".to_string(),
+    })
 }
 
 /// Remove TMS protecting group from a silyl ether

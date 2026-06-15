@@ -290,6 +290,73 @@ fn alcohol_hydrohalogenation_generates_alkyl_halides_as_a_family() {
 }
 
 #[test]
+fn alcohol_chloroformate_formation_generates_activated_carbonates_as_a_family() {
+    let registry = generated_registry();
+    for alcohol in ["methanol", "ethanol"] {
+        let alcohol_id = format!("destroy:{alcohol}");
+        let reaction = reaction_with_prefix(
+            &registry,
+            &format!("alcohol_chloroformate_formation/destroy_{alcohol}/"),
+        );
+        assert!(reaction
+            .reactants
+            .iter()
+            .any(|term| term.substance_id == SubstanceId::from(alcohol_id.as_str())));
+        assert!(reaction
+            .reactants
+            .iter()
+            .any(|term| term.substance_id == SubstanceId::from("destroy:phosgene")));
+        assert!(reaction
+            .products
+            .iter()
+            .any(|term| term.substance_id == SubstanceId::from("destroy:hydrochloric_acid")));
+
+        let product_ids = reaction_product_ids(reaction);
+        let chloroformate = product_ids
+            .iter()
+            .filter_map(|product| registry.substance(product).ok())
+            .filter_map(|substance| substance.molecular_structure.as_ref())
+            .find(|structure| has_chloroformate_fragment(structure))
+            .expect("alcohol chloroformate formation must produce a chloroformate");
+        assert!(has_chloroformate_fragment(chloroformate));
+    }
+}
+
+fn has_chloroformate_fragment(structure: &crate::chemistry::molecule::MolecularStructure) -> bool {
+    structure
+        .atoms
+        .iter()
+        .enumerate()
+        .filter(|(_, atom)| atom.element == "C")
+        .any(|(carbon, _)| {
+            let has_double_oxygen =
+                structure
+                    .neighbors(carbon)
+                    .into_iter()
+                    .any(|(neighbor, order)| {
+                        structure.atoms[neighbor].element == "O"
+                            && crate::chemistry::molecule::bond_order_matches(order, 2.0)
+                    });
+            let has_single_oxygen =
+                structure
+                    .neighbors(carbon)
+                    .into_iter()
+                    .any(|(neighbor, order)| {
+                        structure.atoms[neighbor].element == "O"
+                            && crate::chemistry::molecule::bond_order_matches(order, 1.0)
+                    });
+            let has_chlorine = structure
+                .neighbors(carbon)
+                .into_iter()
+                .any(|(neighbor, order)| {
+                    structure.atoms[neighbor].element == "Cl"
+                        && crate::chemistry::molecule::bond_order_matches(order, 1.0)
+                });
+            has_double_oxygen && has_single_oxygen && has_chlorine
+        })
+}
+
+#[test]
 fn borate_esterification_generates_boron_esters_as_a_family() {
     let registry = generated_registry();
     let methyl_borate = reaction_with_prefix(
