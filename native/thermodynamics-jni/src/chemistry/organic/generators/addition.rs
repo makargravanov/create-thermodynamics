@@ -12,7 +12,7 @@ use crate::chemistry::selectivity::{
     engine::SiteDescriptorBuilder,
     types::{ReactionType, SelectivityProfile},
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ElectrophilicAdditionSpec {
@@ -28,7 +28,7 @@ pub(crate) struct ElectrophilicAdditionSpec {
     display_as_reversible: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AdditionGroup {
     Atom(&'static str),
     Hydroxyl,
@@ -205,39 +205,38 @@ pub(crate) fn generate_electrophilic_addition(
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Reaction> {
     let substance = site.participant.substance;
-    let structure = site.participant.structure;
-    let high_degree_carbon = site.high_degree_carbon;
-    let low_degree_carbon = site.low_degree_carbon;
-    let is_alkyne = site.is_alkyne;
-    let mut editor = MolecularEditor::new(structure);
-    editor.set_bond_order(
-        high_degree_carbon,
-        low_degree_carbon,
-        if is_alkyne { 2.0 } else { 1.0 },
-    )?;
-    add_addition_group(&mut editor, high_degree_carbon, spec.high_degree_group)?;
-    add_addition_group(&mut editor, low_degree_carbon, spec.low_degree_group)?;
-    if is_alkyne {
-        if let Some(rule) = spec.alkyne_stereo_rule {
-            apply_alkyne_stereo_rule(&mut editor, high_degree_carbon, low_degree_carbon, rule)?;
-        } else {
-            editor
-                .mark_double_bond_stereo_mixture_if_valid(high_degree_carbon, low_degree_carbon)?;
+    let mut products = BTreeMap::new();
+    for orientation in addition_orientations(spec) {
+        for variant in build_addition_product(site, &orientation)? {
+            let product = resolver.resolve(variant.structure)?;
+            let suffix = format!("{}_{}", orientation.suffix, variant.channel_suffix);
+            let activation_delta =
+                orientation.activation_delta_kj_per_mol + variant.activation_delta_kj_per_mol;
+            let pre_exponential_multiplier = orientation.pre_exponential_factor_multiplier
+                * variant.pre_exponential_factor_multiplier;
+            products
+                .entry(product)
+                .and_modify(|current: &mut (String, f64, f64)| {
+                    if activation_delta < current.1 {
+                        *current = (suffix.clone(), activation_delta, pre_exponential_multiplier);
+                    }
+                })
+                .or_insert((suffix, activation_delta, pre_exponential_multiplier));
         }
-    } else {
-        editor.mark_tetrahedral_stereo_mixture_if_valid(high_degree_carbon)?;
-        editor.mark_tetrahedral_stereo_mixture_if_valid(low_degree_carbon)?;
     }
-    let product_variants = expand_stereo_product_distribution(editor.finish()?)?;
-    let mut products = Vec::new();
-    for variant in product_variants {
-        products.push((
-            resolver.resolve(variant.structure)?,
-            variant.channel_suffix,
-            variant.activation_delta_kj_per_mol,
-            variant.pre_exponential_factor_multiplier,
-        ));
-    }
+    let mut products = products
+        .into_iter()
+        .map(
+            |(product, (suffix, activation_delta, pre_exponential_multiplier))| {
+                (
+                    product,
+                    suffix,
+                    activation_delta,
+                    pre_exponential_multiplier,
+                )
+            },
+        )
+        .collect::<Vec<_>>();
     let mut builder = Reaction::builder(generated_site_reaction_id(spec.prefix, &site.participant))
         .reactant(substance.id.clone(), spec.nucleophile_ratio, 1)
         .reactant(spec.electrophile, 1, 1)
@@ -266,6 +265,71 @@ pub(crate) fn generate_electrophilic_addition(
         builder = builder.display_as_reversible();
     }
     Ok(builder.build())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AdditionOrientation {
+    suffix: &'static str,
+    high_degree_group: AdditionGroup,
+    low_degree_group: AdditionGroup,
+    alkyne_stereo_rule: Option<AlkyneStereoRule>,
+    activation_delta_kj_per_mol: f64,
+    pre_exponential_factor_multiplier: f64,
+}
+
+fn addition_orientations(spec: ElectrophilicAdditionSpec) -> Vec<AdditionOrientation> {
+    let mut orientations = vec![AdditionOrientation {
+        suffix: "major_regio",
+        high_degree_group: spec.high_degree_group,
+        low_degree_group: spec.low_degree_group,
+        alkyne_stereo_rule: spec.alkyne_stereo_rule,
+        activation_delta_kj_per_mol: 0.0,
+        pre_exponential_factor_multiplier: 1.0,
+    }];
+    if spec.high_degree_group != spec.low_degree_group {
+        orientations.push(AdditionOrientation {
+            suffix: "minor_regio",
+            high_degree_group: spec.low_degree_group,
+            low_degree_group: spec.high_degree_group,
+            alkyne_stereo_rule: spec.alkyne_stereo_rule,
+            activation_delta_kj_per_mol: 6.0,
+            pre_exponential_factor_multiplier: 0.35,
+        });
+    }
+    orientations
+}
+
+fn build_addition_product(
+    site: &UnsaturatedBondSite<'_>,
+    orientation: &AdditionOrientation,
+) -> ChemistryResult<Vec<StereoProductVariant>> {
+    let high_degree_carbon = site.high_degree_carbon;
+    let low_degree_carbon = site.low_degree_carbon;
+    let is_alkyne = site.is_alkyne;
+    let mut editor = MolecularEditor::new(site.participant.structure);
+    editor.set_bond_order(
+        high_degree_carbon,
+        low_degree_carbon,
+        if is_alkyne { 2.0 } else { 1.0 },
+    )?;
+    add_addition_group(
+        &mut editor,
+        high_degree_carbon,
+        orientation.high_degree_group,
+    )?;
+    add_addition_group(&mut editor, low_degree_carbon, orientation.low_degree_group)?;
+    if is_alkyne {
+        if let Some(rule) = orientation.alkyne_stereo_rule {
+            apply_alkyne_stereo_rule(&mut editor, high_degree_carbon, low_degree_carbon, rule)?;
+        } else {
+            editor
+                .mark_double_bond_stereo_mixture_if_valid(high_degree_carbon, low_degree_carbon)?;
+        }
+    } else {
+        editor.mark_tetrahedral_stereo_mixture_if_valid(high_degree_carbon)?;
+        editor.mark_tetrahedral_stereo_mixture_if_valid(low_degree_carbon)?;
+    }
+    expand_stereo_product_distribution(editor.finish()?)
 }
 
 pub(crate) fn generate_chain_growth_polymerization(

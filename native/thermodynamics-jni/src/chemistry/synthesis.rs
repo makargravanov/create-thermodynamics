@@ -1725,6 +1725,100 @@ mod tests {
     }
 
     #[test]
+    fn planner_reaches_benzyl_chloroformate_through_benzylic_side_chain_chemistry() {
+        let registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let routes = SynthesisPlanner::new()
+            .with_max_steps(3)
+            .with_max_routes(4)
+            .allow_reaction_prefix("radical_halogenation/")
+            .allow_reaction_prefix("halide_hydroxide_substitution/")
+            .allow_reaction_prefix("alcohol_chloroformate_formation/")
+            .plan_routes(
+                &registry,
+                SynthesisRequest::for_substance("destroy:benzyl_chloroformate")
+                    .with_available_substance("destroy:toluene")
+                    .with_available_substance("destroy:chlorine")
+                    .with_available_substance("destroy:hydroxide")
+                    .with_available_substance("destroy:phosgene"),
+            )
+            .unwrap();
+
+        assert!(!routes.is_empty());
+        let reaction_ids = routes[0]
+            .steps
+            .iter()
+            .map(|step| step.reaction_id.as_str())
+            .collect::<Vec<_>>();
+        assert!(reaction_ids
+            .iter()
+            .any(|id| id.starts_with("radical_halogenation/")));
+        assert!(reaction_ids
+            .iter()
+            .any(|id| id.starts_with("halide_hydroxide_substitution/")));
+        assert!(reaction_ids
+            .iter()
+            .any(|id| id.starts_with("alcohol_chloroformate_formation/")));
+        assert!(routes[0].steps.last().is_some_and(|step| step
+            .products
+            .contains(&SubstanceId::from("destroy:benzyl_chloroformate"))));
+    }
+
+    #[test]
+    fn planner_reaches_c6_nitrile_amine_isocyanate_chain_by_general_layers() {
+        let registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let adiponitrile_routes = SynthesisPlanner::new()
+            .with_max_steps(2)
+            .with_max_routes(4)
+            .allow_reaction_prefix("alkene_hydrocyanation/")
+            .plan_routes(
+                &registry,
+                SynthesisRequest::for_substance("destroy:adiponitrile")
+                    .with_available_substance("destroy:butadiene")
+                    .with_available_substance("destroy:hydrogen_cyanide"),
+            )
+            .unwrap();
+        assert!(!adiponitrile_routes.is_empty());
+        assert!(adiponitrile_routes[0].steps.iter().all(|step| step
+            .reaction_id
+            .as_str()
+            .starts_with("alkene_hydrocyanation/")));
+
+        let hexanediamine_routes = SynthesisPlanner::new()
+            .with_max_steps(2)
+            .with_max_routes(4)
+            .allow_reaction_prefix("nitrile_hydrogenation/")
+            .plan_routes(
+                &registry,
+                SynthesisRequest::for_substance("destroy:hexanediamine")
+                    .with_available_substance("destroy:adiponitrile")
+                    .with_available_substance("destroy:hydrogen"),
+            )
+            .unwrap();
+        assert!(!hexanediamine_routes.is_empty());
+        assert!(hexanediamine_routes[0].steps.iter().all(|step| step
+            .reaction_id
+            .as_str()
+            .starts_with("nitrile_hydrogenation/")));
+
+        let diisocyanate_routes = SynthesisPlanner::new()
+            .with_max_steps(2)
+            .with_max_routes(4)
+            .allow_reaction_prefix("amine_phosgenation/")
+            .plan_routes(
+                &registry,
+                SynthesisRequest::for_substance("destroy:hexane_diisocyanate")
+                    .with_available_substance("destroy:hexanediamine")
+                    .with_available_substance("destroy:phosgene"),
+            )
+            .unwrap();
+        assert!(!diisocyanate_routes.is_empty());
+        assert!(diisocyanate_routes[0]
+            .steps
+            .iter()
+            .all(|step| step.reaction_id.as_str().starts_with("amine_phosgenation/")));
+    }
+
+    #[test]
     fn planner_reaches_iodomethane_through_general_alcohol_hydrohalogenation() {
         let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
         let routes = SynthesisPlanner::new()
