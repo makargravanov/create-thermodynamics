@@ -3365,6 +3365,132 @@ fn diels_alder_closes_a_cyclohexene_from_butadiene_and_ethylene() {
 }
 
 #[test]
+fn alkene_photocycloaddition_closes_a_cyclobutane_from_two_alkenes() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let ethylene = dynamic.resolve_frowns("C=C").unwrap();
+    dynamic.generate_reactions_for(&ethylene, 1).unwrap();
+
+    let cycloaddition = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("alkene_photocycloaddition/")
+        })
+        .expect("ethylene must photochemically dimerize to a cyclobutane");
+    assert!(cycloaddition.requires_uv);
+    assert_eq!(cycloaddition.reactants.len(), 1);
+    assert_eq!(cycloaddition.reactants[0].substance_id, ethylene);
+    assert_eq!(cycloaddition.reactants[0].coefficient, 2);
+    assert_eq!(cycloaddition.products.len(), 1);
+
+    let product = dynamic
+        .substance(&cycloaddition.products[0].substance_id)
+        .unwrap();
+    let structure = product.molecular_structure.as_ref().unwrap();
+    assert_eq!(
+        structure
+            .atoms
+            .iter()
+            .filter(|atom| atom.element == "C")
+            .count(),
+        4
+    );
+    assert_eq!(
+        structure
+            .bonds
+            .iter()
+            .filter(|bond| crate::chemistry::molecule::bond_order_matches(bond.order, 2.0))
+            .count(),
+        0
+    );
+    assert_eq!(
+        structure
+            .bonds
+            .iter()
+            .filter(|bond| structure.atoms[bond.from].element == "C"
+                && structure.atoms[bond.to].element == "C")
+            .count(),
+        4
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn alkene_photocycloaddition_handles_substituted_alkenes_as_a_family() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let ethylene = dynamic.resolve_frowns("C=C").unwrap();
+    let propene = dynamic.resolve_frowns("C=CC").unwrap();
+    dynamic
+        .generate_reactions_for_substances([ethylene.clone(), propene.clone()], 1)
+        .unwrap();
+
+    let cycloaddition = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("alkene_photocycloaddition/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == ethylene)
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == propene)
+        })
+        .expect("ethylene and propene must photochemically form a substituted cyclobutane");
+    let product = dynamic
+        .substance(&cycloaddition.products[0].substance_id)
+        .unwrap();
+    let structure = product.molecular_structure.as_ref().unwrap();
+    assert_eq!(
+        structure
+            .atoms
+            .iter()
+            .filter(|atom| atom.element == "C")
+            .count(),
+        5
+    );
+    assert!(cycloaddition.requires_uv);
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn alkene_photocycloaddition_rejects_alkynes() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let ethylene = dynamic.resolve_frowns("C=C").unwrap();
+    let acetylene = dynamic.resolve_frowns("C#C").unwrap();
+    dynamic
+        .generate_reactions_for_substances([ethylene.clone(), acetylene.clone()], 1)
+        .unwrap();
+
+    assert!(
+        dynamic.reactions().all(|reaction| {
+            !reaction
+                .id
+                .as_str()
+                .starts_with("alkene_photocycloaddition/")
+                || reaction
+                    .reactants
+                    .iter()
+                    .all(|term| term.substance_id != acetylene)
+        }),
+        "an alkyne must not be accepted by the alkene [2+2] generator"
+    );
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
 fn diels_alder_rejects_a_non_conjugated_diene() {
     let mut dynamic =
         super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();

@@ -340,6 +340,11 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
                 // other alkene (on a different molecule) as the dienophile.
                 for other in space.sites_of(&ReactiveSiteKind::Alkene) {
                     let dienophile = other.unsaturated_bond_site()?;
+                    if let Some(reaction) =
+                        generate_alkene_photocycloaddition(&site, &dienophile, &mut resolver)?
+                    {
+                        push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                    }
                     if let Some(reaction) = generate_diels_alder(&site, &dienophile, &mut resolver)?
                     {
                         push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;

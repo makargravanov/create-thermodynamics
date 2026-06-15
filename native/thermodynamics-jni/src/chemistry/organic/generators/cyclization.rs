@@ -623,6 +623,83 @@ pub(crate) fn generate_diels_alder(
     ))
 }
 
+pub(crate) fn generate_alkene_photocycloaddition(
+    first_alkene: &UnsaturatedBondSite<'_>,
+    second_alkene: &UnsaturatedBondSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    if first_alkene.is_alkyne || second_alkene.is_alkyne {
+        return Ok(None);
+    }
+    if !photocycloaddition_pair_is_canonical(first_alkene, second_alkene) {
+        return Ok(None);
+    }
+
+    let first_substance = first_alkene.participant.substance;
+    let second_substance = second_alkene.participant.substance;
+    let a1 = first_alkene.high_degree_carbon;
+    let a2 = first_alkene.low_degree_carbon;
+    let b1 = second_alkene.high_degree_carbon;
+    let b2 = second_alkene.low_degree_carbon;
+
+    let mut editor = MolecularEditor::new(first_alkene.participant.structure);
+    let b1_joined = editor.add_group(a1, second_alkene.participant.structure, b1, 1.0)?;
+    let offset = b1_joined - b1;
+    let b2_joined = b2 + offset;
+    editor.add_bond(a2, b2_joined, 1.0)?;
+    editor.set_bond_order(a1, a2, 1.0)?;
+    editor.set_bond_order(b1_joined, b2_joined, 1.0)?;
+    let product = resolver.resolve(editor.finish()?)?;
+
+    let same_species = first_substance.id == second_substance.id;
+    let mut builder = Reaction::builder(generated_pair_site_reaction_id(
+        "alkene_photocycloaddition",
+        &first_alkene.participant,
+        &second_alkene.participant,
+    ));
+    builder = if same_species {
+        builder.reactant(first_substance.id.clone(), 2, 2)
+    } else {
+        builder.reactant(first_substance.id.clone(), 1, 1).reactant(
+            second_substance.id.clone(),
+            1,
+            1,
+        )
+    };
+
+    let first_desc = SiteDescriptorBuilder::from_unsaturated_bond_site(first_alkene);
+    let second_desc = SiteDescriptorBuilder::from_unsaturated_bond_site(second_alkene);
+    Ok(Some(
+        builder
+            .product(product, 1)
+            .activation_energy_kj_per_mol(105.0)
+            .requires_uv()
+            .selectivity_profile(
+                SelectivityProfile::new(ReactionType::PhotochemicalCycloaddition, first_desc)
+                    .with_secondary_site(second_desc)
+                    .never_suppress(),
+            )
+            .build(),
+    ))
+}
+
+fn photocycloaddition_pair_is_canonical(
+    first: &UnsaturatedBondSite<'_>,
+    second: &UnsaturatedBondSite<'_>,
+) -> bool {
+    let first_key = alkene_pair_key(first);
+    let second_key = alkene_pair_key(second);
+    first_key <= second_key
+}
+
+fn alkene_pair_key(site: &UnsaturatedBondSite<'_>) -> (String, usize, usize) {
+    (
+        site.participant.substance.id.to_string(),
+        site.high_degree_carbon.min(site.low_degree_carbon),
+        site.high_degree_carbon.max(site.low_degree_carbon),
+    )
+}
+
 pub(crate) fn generate_retro_diels_alder(
     alkene: &UnsaturatedBondSite<'_>,
     resolver: &mut DerivedSubstanceResolver,

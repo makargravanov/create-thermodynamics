@@ -592,6 +592,8 @@ pub enum ReactionType {
     RetroDielsAlder,
     /// Light-driven double-bond geometric isomerization
     PhotochemicalIsomerization,
+    /// Light-driven [2+2] cycloaddition of two alkenes into a cyclobutane framework
+    PhotochemicalCycloaddition,
     /// Alkylation of an amine or amide nitrogen by an alkyl halide
     NAlkylation,
     /// Radical-chain substitution of an abstractable C-H bond

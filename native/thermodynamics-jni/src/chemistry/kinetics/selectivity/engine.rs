@@ -259,6 +259,23 @@ impl SelectivityEngine {
                 }
                 score
             }
+            ReactionType::PhotochemicalCycloaddition => {
+                let mut score =
+                    ReactivityScore::new(0.0, "photochemical [2+2] cycloaddition needs light");
+                if context.total_light_power > TRACE_CONCENTRATION_MOL_PER_BUCKET
+                    || context.has_uv()
+                {
+                    score.value = 0.8 + context.total_light_power.max(context.uv_power).min(5.0);
+                    score.activation_delta =
+                        -4.0 * context.total_light_power.max(context.uv_power).min(3.0);
+                    score.value *= profile.primary_site.steric_accessibility().max(0.2);
+                    if let Some(second_alkene) = profile.secondary_site.as_ref() {
+                        score.value *= second_alkene.steric_accessibility().max(0.2);
+                    }
+                    score.reason = "light drives alkene [2+2] cycloaddition".to_string();
+                }
+                score
+            }
             ReactionType::NAlkylation => evaluate_sn2(&profile.primary_site, context).primary,
             ReactionType::RadicalHalogenation => evaluate_radical_halogenation(profile, context),
             ReactionType::SkeletalRearrangement => {
