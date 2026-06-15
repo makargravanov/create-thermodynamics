@@ -334,6 +334,14 @@ pub(crate) struct BoraneSite<'a> {
 }
 
 #[derive(Clone)]
+pub(crate) struct BoricAcidSite<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) boron: usize,
+    pub(crate) hydroxyl_oxygen: usize,
+    pub(crate) hydroxyl_hydrogen: usize,
+}
+
+#[derive(Clone)]
 pub(crate) struct BorateEsterSite<'a> {
     pub(crate) participant: SiteParticipant<'a>,
     pub(crate) oxygen: usize,
@@ -1275,6 +1283,20 @@ impl<'a> SiteParticipant<'a> {
             participant: self,
             carbon,
             boron,
+        })
+    }
+
+    pub(crate) fn boric_acid_site(self) -> ChemistryResult<BoricAcidSite<'a>> {
+        self.require_kind(ReactiveSiteKind::BoricAcid)?;
+        let boron = self.site_atom_by_element("B", "boric acid boron")?;
+        let hydroxyl_oxygen = self.bonded_site_atom(boron, "O", 1.0, "boric acid hydroxyl")?;
+        let hydroxyl_hydrogen =
+            self.bonded_site_atom(hydroxyl_oxygen, "H", 1.0, "boric acid hydroxyl hydrogen")?;
+        Ok(BoricAcidSite {
+            participant: self,
+            boron,
+            hydroxyl_oxygen,
+            hydroxyl_hydrogen,
         })
     }
 

@@ -550,6 +550,7 @@ fn is_generator_seed_site(kind: &ReactiveSiteKind) -> bool {
             | ReactiveSiteKind::Sulfide
             | ReactiveSiteKind::Sulfoxide
             | ReactiveSiteKind::Isocyanate
+            | ReactiveSiteKind::BoricAcid
             | ReactiveSiteKind::Borane
             | ReactiveSiteKind::BorateEster
             | ReactiveSiteKind::Alkene
@@ -726,6 +727,12 @@ fn generate_pair_reactions_for_seed(
                 {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
+            }
+            for boric_acid in space.sites_of(&ReactiveSiteKind::BoricAcid) {
+                let boric_acid_site = boric_acid.boric_acid_site()?;
+                let reaction =
+                    generate_borate_esterification(&boric_acid_site, &alcohol_site, resolver)?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
             for carbonyl_kind in carbonyl_site_kinds() {
                 for carbonyl in space.sites_of(&carbonyl_kind) {
@@ -975,6 +982,15 @@ fn generate_pair_reactions_for_seed(
                 {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
                 }
+            }
+        }
+        ReactiveSiteKind::BoricAcid => {
+            let boric_acid_site = seed.clone().boric_acid_site()?;
+            for alcohol in space.sites_of(&ReactiveSiteKind::Alcohol) {
+                let alcohol_site = alcohol.alcohol_site()?;
+                let reaction =
+                    generate_borate_esterification(&boric_acid_site, &alcohol_site, resolver)?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
         }
         ReactiveSiteKind::FormylationDonor => {

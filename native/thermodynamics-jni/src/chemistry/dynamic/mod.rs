@@ -73,6 +73,7 @@ enum OrganicGeneratorKind {
     IsocyanateHydrolysis,
     IsocyanateAmmonolysis,
     IsocyanateAmineAddition,
+    BorateEsterification,
     BoraneOxidation,
     BorateEsterHydrolysis,
     AlkeneChlorination,
@@ -1887,6 +1888,7 @@ fn generators_for_site(
             OrganicGeneratorKind::IsocyanateAmmonolysis,
             OrganicGeneratorKind::IsocyanateAmineAddition,
         ],
+        ReactiveSiteKind::BoricAcid => &[OrganicGeneratorKind::BorateEsterification],
         ReactiveSiteKind::Borane => &[OrganicGeneratorKind::BoraneOxidation],
         ReactiveSiteKind::BorateEster => &[OrganicGeneratorKind::BorateEsterHydrolysis],
         ReactiveSiteKind::Alkene => &[

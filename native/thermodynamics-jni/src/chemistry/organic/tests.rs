@@ -39,6 +39,7 @@ const ACTIVE_DESTROY_GENERIC_REACTIONS: &[&str] = &[
     "amide_hydrolysis",
     "amine_phosgenation",
     "borane_oxidation",
+    "borate_esterification",
     "borate_ester_hydrolysis",
     "borohydride_carbonyl_reduction",
     "cyanamide_addition",
@@ -57,11 +58,8 @@ const ACTIVE_DESTROY_GENERIC_REACTIONS: &[&str] = &[
     "wolff_kishner_reduction",
 ];
 
-const EXCLUDED_DESTROY_GENERIC_REACTIONS: &[&str] = &[
-    "electrophilic_hydroboration",
-    "borate_esterification",
-    "carboxylic_acid_reduction",
-];
+const EXCLUDED_DESTROY_GENERIC_REACTIONS: &[&str] =
+    &["electrophilic_hydroboration", "carboxylic_acid_reduction"];
 
 const ACTIVE_GENERATORS_WITHOUT_CATALOG_SUBSTRATE: &[&str] = &["aldehyde_oxidation"];
 const ACTIVE_GENERATORS_WITH_UNKNOWN_STEREO_DISTRIBUTION: &[&str] = &[];
@@ -260,6 +258,67 @@ fn alcohol_hydrohalogenation_generates_alkyl_halides_as_a_family() {
         .products
         .iter()
         .any(|term| term.substance_id == SubstanceId::from("destroy:water")));
+}
+
+#[test]
+fn borate_esterification_generates_boron_esters_as_a_family() {
+    let registry = generated_registry();
+    let methyl_borate = reaction_with_prefix(
+        &registry,
+        "borate_esterification/destroy_boric_acid/destroy_methanol/",
+    );
+    assert!(methyl_borate
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:boric_acid")));
+    assert!(methyl_borate
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:methanol")));
+    assert!(methyl_borate
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str().starts_with("destroy:linear:")));
+    assert!(methyl_borate
+        .products
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:water")));
+
+    let ethyl_borate = reaction_with_prefix(
+        &registry,
+        "borate_esterification/destroy_boric_acid/destroy_ethanol/",
+    );
+    assert!(ethyl_borate
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:ethanol")));
+    assert!(ethyl_borate
+        .products
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:water")));
+}
+
+#[test]
+fn repeated_borate_esterification_reaches_trimethyl_borate_without_targeted_reaction() {
+    let mut registry =
+        crate::chemistry::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    registry
+        .generate_reactions_for_substances(
+            [
+                SubstanceId::from("destroy:boric_acid"),
+                SubstanceId::from("destroy:methanol"),
+            ],
+            3,
+        )
+        .unwrap();
+
+    assert!(registry.reactions().any(|reaction| {
+        reaction.id.as_str().starts_with("borate_esterification/")
+            && reaction
+                .products
+                .iter()
+                .any(|term| term.substance_id == SubstanceId::from("destroy:trimethyl_borate"))
+    }));
 }
 
 #[test]
@@ -1080,8 +1139,8 @@ fn generated_registry_builds_without_duplicate_derived_substances() {
 
 #[test]
 fn active_destroy_generic_reactions_are_accounted_for() {
-    assert_eq!(ACTIVE_DESTROY_GENERIC_REACTIONS.len(), 42);
-    assert_eq!(EXCLUDED_DESTROY_GENERIC_REACTIONS.len(), 3);
+    assert_eq!(ACTIVE_DESTROY_GENERIC_REACTIONS.len(), 43);
+    assert_eq!(EXCLUDED_DESTROY_GENERIC_REACTIONS.len(), 2);
 
     let registry = generated_registry();
     for prefix in ACTIVE_DESTROY_GENERIC_REACTIONS {

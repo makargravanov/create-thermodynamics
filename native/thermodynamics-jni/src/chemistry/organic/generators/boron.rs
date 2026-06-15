@@ -1,9 +1,77 @@
 use super::super::centers::*;
 use super::super::resolver::DerivedSubstanceResolver;
 use super::common::*;
+use crate::chemistry::condition::{AcidityCondition, ReactionCondition};
 use crate::chemistry::error::ChemistryResult;
 use crate::chemistry::molecule::MolecularEditor;
 use crate::chemistry::reaction::Reaction;
+use crate::chemistry::selectivity::{
+    engine::SiteDescriptorBuilder,
+    types::{ReactionType, SelectivityProfile},
+};
+
+pub(crate) fn generate_borate_esterification(
+    boric_acid: &BoricAcidSite<'_>,
+    alcohol: &AlcoholSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let boron_substance = boric_acid.participant.substance;
+    let alcohol_substance = alcohol.participant.substance;
+
+    let mut boron_editor = MolecularEditor::new(boric_acid.participant.structure);
+    let boron_mapping =
+        boron_editor.remove_atoms(&[boric_acid.hydroxyl_oxygen, boric_acid.hydroxyl_hydrogen])?;
+    let boron = mapped_atom(&boron_mapping, boric_acid.boron, "boric acid boron")?;
+    let boron_fragment = boron_editor.finish()?;
+
+    let mut alcohol_editor = MolecularEditor::new(alcohol.participant.structure);
+    let alcohol_mapping = alcohol_editor.remove_atoms(&[alcohol.hydrogen])?;
+    let alcohol_oxygen = mapped_atom(&alcohol_mapping, alcohol.oxygen, "alcohol oxygen")?;
+    let alcohol_fragment = alcohol_editor.finish()?;
+
+    let product = resolver.resolve(MolecularEditor::join_structures(
+        &boron_fragment,
+        boron,
+        &alcohol_fragment,
+        alcohol_oxygen,
+        1.0,
+    )?)?;
+
+    Ok(Reaction::builder(generated_pair_site_reaction_id(
+        "borate_esterification",
+        &boric_acid.participant,
+        &alcohol.participant,
+    ))
+    .reactant(boron_substance.id.clone(), 1, 1)
+    .reactant(alcohol_substance.id.clone(), 1, 1)
+    .product(product, 1)
+    .product("destroy:water", 1)
+    .condition(
+        ReactionCondition::new("borate esterification is favored by acidic, water-poor conditions")
+            .acidity(AcidityCondition::Acidic)
+            .max_water_activity(0.35),
+    )
+    .activation_energy_kj_per_mol(32.0)
+    .selectivity_profile(
+        SelectivityProfile::new(
+            ReactionType::FischerEsterification,
+            SiteDescriptorBuilder::build(
+                crate::chemistry::reactive_site::ReactiveSiteKind::BoricAcid,
+                crate::chemistry::selectivity::types::SubstitutionDegree::Primary,
+                0,
+                0,
+                0,
+                false,
+                false,
+                false,
+            ),
+        )
+        .with_secondary_site(SiteDescriptorBuilder::from_alcohol_site(alcohol))
+        .never_suppress(),
+    )
+    .build())
+}
+
 pub(crate) fn generate_borane_oxidation(
     site: &BoraneSite<'_>,
     resolver: &mut DerivedSubstanceResolver,
