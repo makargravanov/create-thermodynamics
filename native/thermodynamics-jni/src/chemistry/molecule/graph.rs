@@ -149,7 +149,10 @@ impl MolecularStructure {
         if !self.is_connected() {
             return Err(invalid_structure(
                 &self.source_code,
-                "structure is disconnected",
+                &format!(
+                    "structure is disconnected; atoms={:?}; bonds={:?}; stereo={:?}",
+                    self.atoms, self.bonds, self.stereochemistry
+                ),
             ));
         }
         Ok(())

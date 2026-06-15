@@ -2115,6 +2115,29 @@ fn tms_deprotection_restores_original_alcohol() {
 }
 
 #[test]
+fn non_tms_silyl_ether_does_not_use_tms_deprotection_path() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let non_tms = dynamic.resolve_frowns("O(C)(Si(C)(C)(C(Cl)))").unwrap();
+
+    dynamic
+        .generate_reactions_for_substances([non_tms.clone()], 1)
+        .unwrap();
+
+    assert!(!dynamic.reactions().any(|reaction| {
+        reaction
+            .id
+            .as_str()
+            .starts_with("silyl_ether_deprotection/")
+            && reaction
+                .reactants
+                .iter()
+                .any(|term| term.substance_id == non_tms)
+    }));
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
 fn acetal_hydrolysis_restores_carbonyl_and_concrete_alcohols() {
     let mut dynamic =
         super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();

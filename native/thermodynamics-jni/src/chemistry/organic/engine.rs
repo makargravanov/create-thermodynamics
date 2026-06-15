@@ -80,6 +80,10 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
     let mut reaction_ids = BTreeSet::new();
 
     for participant in seed_participants {
+        resolver.set_generation_context(format!(
+            "site={:?}; substance={}",
+            participant.site.kind, participant.substance.id
+        ));
         match participant.site.kind {
             ReactiveSiteKind::Halide => {
                 let site = participant.clone().halide_site()?;
@@ -346,8 +350,9 @@ pub(crate) fn generate_organic_reactions_for_seed_participants<'a>(
             // Protecting group sites - generate deprotection reactions
             ReactiveSiteKind::SilylEther => {
                 let site = participant.clone().silyl_ether_center()?;
-                let reaction = generate_silyl_ether_deprotection(&site, &mut resolver)?;
-                push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                if let Some(reaction) = generate_silyl_ether_deprotection(&site, &mut resolver)? {
+                    push_unique_reaction(&mut reactions, &mut reaction_ids, reaction)?;
+                }
             }
             ReactiveSiteKind::Acetal | ReactiveSiteKind::Ketal => {
                 let site = participant.clone().acetal_center()?;
@@ -554,8 +559,20 @@ fn canonical_to_id_from_generated(
         canonical_to_id_from_substances(space.all_substances.iter().copied())?;
     for substance in &generated.substances {
         if let Some(structure) = &substance.molecular_structure {
+            let canonical = crate::chemistry::frowns::write_frowns(structure).map_err(|error| {
+                ChemistryError::InvalidSubstance {
+                    substance_id: substance.id.to_string(),
+                    reason: format!(
+                        "{error}; atoms={:?}; bonds={:?}; stereo={:?}; source={}",
+                        structure.atoms,
+                        structure.bonds,
+                        structure.stereochemistry,
+                        structure.source_code
+                    ),
+                }
+            })?;
             canonical_to_id
-                .entry(crate::chemistry::frowns::write_frowns(structure)?)
+                .entry(canonical)
                 .or_insert_with(|| substance.id.clone());
         }
     }
@@ -577,8 +594,20 @@ fn canonical_to_id_from_substances<'a>(
     let mut canonical_to_id = BTreeMap::new();
     for substance in substances {
         if let Some(structure) = &substance.molecular_structure {
+            let canonical = crate::chemistry::frowns::write_frowns(structure).map_err(|error| {
+                ChemistryError::InvalidSubstance {
+                    substance_id: substance.id.to_string(),
+                    reason: format!(
+                        "{error}; atoms={:?}; bonds={:?}; stereo={:?}; source={}",
+                        structure.atoms,
+                        structure.bonds,
+                        structure.stereochemistry,
+                        structure.source_code
+                    ),
+                }
+            })?;
             canonical_to_id
-                .entry(crate::chemistry::frowns::write_frowns(structure)?)
+                .entry(canonical)
                 .or_insert_with(|| substance.id.clone());
         }
     }

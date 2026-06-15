@@ -919,7 +919,13 @@ impl Substance {
                     .summary()
                     .map_err(|error| ChemistryError::InvalidSubstance {
                         substance_id: self.id.to_string(),
-                        reason: format!("invalid molecular structure: {error}"),
+                        reason: format!(
+                            "invalid molecular structure: {error}; atoms={:?}; bonds={:?}; stereo={:?}; source={}",
+                            structure.atoms,
+                            structure.bonds,
+                            structure.stereochemistry,
+                            structure.source_code
+                        ),
                     })?;
             if summary.charge != self.charge {
                 return Err(ChemistryError::InvalidSubstance {

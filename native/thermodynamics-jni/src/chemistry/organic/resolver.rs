@@ -12,6 +12,7 @@ pub(crate) struct DerivedSubstanceResolver {
     canonical_to_id: BTreeMap<String, SubstanceId>,
     known_structures_by_id: BTreeMap<SubstanceId, MolecularStructure>,
     generated_id_to_canonical: BTreeMap<SubstanceId, String>,
+    generation_context: Option<String>,
     pub(crate) substances: Vec<Substance>,
 }
 
@@ -29,8 +30,13 @@ impl DerivedSubstanceResolver {
             canonical_to_id,
             known_structures_by_id,
             generated_id_to_canonical: BTreeMap::new(),
+            generation_context: None,
             substances: Vec::new(),
         }
+    }
+
+    pub(crate) fn set_generation_context(&mut self, generation_context: impl Into<String>) {
+        self.generation_context = Some(generation_context.into());
     }
 
     pub(crate) fn known_structure(
@@ -44,7 +50,19 @@ impl DerivedSubstanceResolver {
         &mut self,
         structure: MolecularStructure,
     ) -> ChemistryResult<SubstanceId> {
-        let canonical = crate::chemistry::frowns::write_frowns(&structure)?;
+        let canonical = crate::chemistry::frowns::write_frowns(&structure).map_err(|error| {
+            ChemistryError::InvalidSubstance {
+                substance_id: "generated".to_string(),
+                reason: format!(
+                    "{error}; context={}; atoms={:?}; bonds={:?}; stereo={:?}; source={}",
+                    self.generation_context.as_deref().unwrap_or("<unknown>"),
+                    structure.atoms,
+                    structure.bonds,
+                    structure.stereochemistry,
+                    structure.source_code
+                ),
+            }
+        })?;
         if let Some(id) = self.canonical_to_id.get(&canonical) {
             return Ok(id.clone());
         }
@@ -57,7 +75,19 @@ impl DerivedSubstanceResolver {
                 });
             }
         }
-        let summary = structure.summary()?;
+        let summary = structure
+            .summary()
+            .map_err(|error| ChemistryError::InvalidSubstance {
+                substance_id: "generated".to_string(),
+                reason: format!(
+                    "{error}; context={}; atoms={:?}; bonds={:?}; stereo={:?}; source={}",
+                    self.generation_context.as_deref().unwrap_or("<unknown>"),
+                    structure.atoms,
+                    structure.bonds,
+                    structure.stereochemistry,
+                    structure.source_code
+                ),
+            })?;
         let substance = Substance::new(
             id.clone(),
             summary.charge,
@@ -83,7 +113,22 @@ impl DerivedSubstanceResolver {
         &mut self,
         substance: Substance,
     ) -> ChemistryResult<SubstanceId> {
-        substance.validate()?;
+        substance
+            .validate()
+            .map_err(|error| ChemistryError::InvalidSubstance {
+                substance_id: substance.id.to_string(),
+                reason: match &substance.molecular_structure {
+                    Some(structure) => format!(
+                        "{error}; context={}; atoms={:?}; bonds={:?}; stereo={:?}; source={}",
+                        self.generation_context.as_deref().unwrap_or("<unknown>"),
+                        structure.atoms,
+                        structure.bonds,
+                        structure.stereochemistry,
+                        structure.source_code
+                    ),
+                    None => error.to_string(),
+                },
+            })?;
         let id = substance.id.clone();
         let canonical = format!("material:{}", id.as_str());
         if let Some(existing) = self.canonical_to_id.get(&canonical) {

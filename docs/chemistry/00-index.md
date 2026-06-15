@@ -13,6 +13,7 @@
 7. [[07-code-map|Карта кода]]
 8. [[08-generalized-organic-synthesis-plan|План обобщенной органики]]
 9. [[09-complete-organic-synthesis-implementation-plan|Полный план внедрения органического синтеза]]
+10. [[10-generalized-reachability-closure-plan|План закрытия дыр достижимости органики]]
 
 Подробные постраничные описания каждого файла нативной части лежат в `files/` и доступны через [[07-code-map|Карту кода]].
 

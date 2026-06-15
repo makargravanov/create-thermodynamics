@@ -58,6 +58,36 @@ pub struct SynthesisPlanReport {
     pub unsupported_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SynthesisReachabilityRequest {
+    pub targets: Vec<SubstanceId>,
+    pub available_substances: BTreeSet<SubstanceId>,
+    pub generation_iterations: usize,
+    pub max_steps: usize,
+    pub max_routes_per_target: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SynthesisReachabilityReport {
+    pub starting_substance_count: usize,
+    pub target_count: usize,
+    pub reachable_targets: Vec<SubstanceId>,
+    pub unreachable_targets: Vec<SubstanceId>,
+    pub target_reports: Vec<SynthesisTargetReachability>,
+    pub generation_report: super::dynamic::DynamicGenerationReport,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SynthesisTargetReachability {
+    pub target: SubstanceId,
+    pub status: SynthesisPlanStatus,
+    pub has_known_producer: bool,
+    pub producer_reactions: Vec<ReactionId>,
+    pub missing_reactants: Vec<SynthesisRequirement>,
+    pub routes: Vec<SynthesisRoute>,
+    pub unsupported_reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SynthesisPlanStatus {
     TargetAlreadyAvailable,
@@ -172,6 +202,46 @@ impl SynthesisRequest {
 
     pub fn with_max_routes(mut self, max_routes: usize) -> Self {
         self.max_routes = Some(max_routes);
+        self
+    }
+}
+
+impl SynthesisReachabilityRequest {
+    pub fn new(targets: impl IntoIterator<Item = SubstanceId>) -> Self {
+        Self {
+            targets: targets.into_iter().collect(),
+            available_substances: BTreeSet::new(),
+            generation_iterations: 3,
+            max_steps: 6,
+            max_routes_per_target: 3,
+        }
+    }
+
+    pub fn with_available_substance(mut self, substance_id: impl Into<SubstanceId>) -> Self {
+        self.available_substances.insert(substance_id.into());
+        self
+    }
+
+    pub fn with_available_substances<I>(mut self, substance_ids: I) -> Self
+    where
+        I: IntoIterator<Item = SubstanceId>,
+    {
+        self.available_substances.extend(substance_ids);
+        self
+    }
+
+    pub fn with_generation_iterations(mut self, generation_iterations: usize) -> Self {
+        self.generation_iterations = generation_iterations;
+        self
+    }
+
+    pub fn with_max_steps(mut self, max_steps: usize) -> Self {
+        self.max_steps = max_steps;
+        self
+    }
+
+    pub fn with_max_routes_per_target(mut self, max_routes_per_target: usize) -> Self {
+        self.max_routes_per_target = max_routes_per_target;
         self
     }
 }
@@ -359,6 +429,112 @@ impl SynthesisPlanner {
             required_additions,
             condition_hints,
             unsupported_reason,
+        })
+    }
+
+    pub fn analyze_reachability(
+        &self,
+        registry: &DynamicChemistryRegistry,
+        request: SynthesisReachabilityRequest,
+    ) -> ChemistryResult<SynthesisReachabilityReport> {
+        if request.targets.is_empty() {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: "<synthesis-reachability>".to_string(),
+                reason: "reachability target list must not be empty".to_string(),
+            });
+        }
+        if request.generation_iterations == 0 {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: "<synthesis-reachability>".to_string(),
+                reason: "generation_iterations must be greater than zero".to_string(),
+            });
+        }
+        if request.max_steps == 0 {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: "<synthesis-reachability>".to_string(),
+                reason: "max_steps must be greater than zero".to_string(),
+            });
+        }
+        if request.max_routes_per_target == 0 {
+            return Err(ChemistryError::InvalidReaction {
+                reaction_id: "<synthesis-reachability>".to_string(),
+                reason: "max_routes_per_target must be greater than zero".to_string(),
+            });
+        }
+
+        let mut working_registry = registry.clone();
+        let mut targets = request.targets;
+        targets.sort();
+        targets.dedup();
+        for target in &targets {
+            working_registry.substance(target)?;
+            self.safety_policy
+                .check_substance(&working_registry, target)?;
+        }
+        for substance in &request.available_substances {
+            working_registry.substance(substance)?;
+            self.safety_policy
+                .check_substance(&working_registry, substance)?;
+        }
+
+        let generation_report = if request.available_substances.is_empty() {
+            working_registry.generate_reactions(request.generation_iterations)?
+        } else {
+            working_registry.generate_reactions_for_substances(
+                request.available_substances.iter().cloned(),
+                request.generation_iterations,
+            )?
+        };
+
+        let mut target_reports = Vec::new();
+        let mut reachable_targets = Vec::new();
+        let mut unreachable_targets = Vec::new();
+        for target in targets {
+            let producer_reactions = producer_reactions_for_target(&working_registry, &target);
+            let plan = self
+                .clone()
+                .with_max_steps(request.max_steps)
+                .with_max_routes(request.max_routes_per_target)
+                .plan_report(
+                    &working_registry,
+                    SynthesisRequest::for_substance(target.clone())
+                        .with_available_substances(
+                            request
+                                .available_substances
+                                .iter()
+                                .cloned()
+                                .collect::<Vec<_>>(),
+                        )
+                        .with_max_steps(request.max_steps)
+                        .with_max_routes(request.max_routes_per_target),
+                )?;
+            let reachable = matches!(
+                plan.status,
+                SynthesisPlanStatus::TargetAlreadyAvailable | SynthesisPlanStatus::RoutesFound
+            );
+            if reachable {
+                reachable_targets.push(target.clone());
+            } else {
+                unreachable_targets.push(target.clone());
+            }
+            target_reports.push(SynthesisTargetReachability {
+                target,
+                status: plan.status,
+                has_known_producer: !producer_reactions.is_empty(),
+                producer_reactions,
+                missing_reactants: plan.required_additions,
+                routes: plan.routes,
+                unsupported_reason: plan.unsupported_reason,
+            });
+        }
+
+        Ok(SynthesisReachabilityReport {
+            starting_substance_count: request.available_substances.len(),
+            target_count: target_reports.len(),
+            reachable_targets,
+            unreachable_targets,
+            target_reports,
+            generation_report,
         })
     }
 
@@ -679,6 +855,17 @@ fn reaction_can_produce(reaction: &Reaction, target: &SubstanceId) -> bool {
     reaction_products(reaction)
         .iter()
         .any(|product| product == target)
+}
+
+fn producer_reactions_for_target(
+    registry: &DynamicChemistryRegistry,
+    target: &SubstanceId,
+) -> Vec<ReactionId> {
+    registry
+        .reactions()
+        .filter(|reaction| reaction_can_produce(reaction, target))
+        .map(|reaction| reaction.id.clone())
+        .collect()
 }
 
 fn reaction_products(reaction: &Reaction) -> Vec<SubstanceId> {
@@ -1152,6 +1339,58 @@ mod tests {
             .unsupported_reason
             .as_deref()
             .is_some_and(|reason| reason.contains("destroy:argon")));
+    }
+
+    #[test]
+    fn reachability_report_distinguishes_reachable_targets_from_model_gaps() {
+        let registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let before_reactions = registry.reactions().count();
+        let report = SynthesisPlanner::new()
+            .analyze_reachability(
+                &registry,
+                SynthesisReachabilityRequest::new([
+                    SubstanceId::from("destroy:ethanol"),
+                    SubstanceId::from("destroy:argon"),
+                ])
+                .with_available_substance("destroy:chloroethane")
+                .with_available_substance("destroy:hydroxide")
+                .with_generation_iterations(1)
+                .with_max_steps(2)
+                .with_max_routes_per_target(2),
+            )
+            .unwrap();
+
+        assert_eq!(report.starting_substance_count, 2);
+        assert_eq!(report.target_count, 2);
+        assert!(report
+            .reachable_targets
+            .contains(&SubstanceId::from("destroy:ethanol")));
+        assert!(report
+            .unreachable_targets
+            .contains(&SubstanceId::from("destroy:argon")));
+        assert!(report
+            .target_reports
+            .iter()
+            .find(|target| target.target == SubstanceId::from("destroy:ethanol"))
+            .is_some_and(|target| {
+                target.status == SynthesisPlanStatus::RoutesFound
+                    && target.has_known_producer
+                    && target.producer_reactions.iter().any(|reaction| {
+                        reaction
+                            .as_str()
+                            .starts_with("halide_hydroxide_substitution/")
+                    })
+            }));
+        assert!(report
+            .target_reports
+            .iter()
+            .find(|target| target.target == SubstanceId::from("destroy:argon"))
+            .is_some_and(|target| {
+                target.status == SynthesisPlanStatus::UnsupportedByCurrentModel
+                    && !target.has_known_producer
+                    && target.missing_reactants.is_empty()
+            }));
+        assert_eq!(registry.reactions().count(), before_reactions);
     }
 
     #[test]

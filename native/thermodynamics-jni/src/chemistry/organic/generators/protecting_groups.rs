@@ -81,58 +81,51 @@ pub(crate) fn generate_alcohol_silyl_protection(
 pub(crate) fn generate_silyl_ether_deprotection(
     silyl_site: &SilylEtherCenter<'_>,
     resolver: &mut DerivedSubstanceResolver,
-) -> ChemistryResult<Reaction> {
+) -> ChemistryResult<Option<Reaction>> {
     let substance = silyl_site.participant.substance;
     let structure = silyl_site.participant.structure;
     let oxygen = silyl_site.oxygen;
     let silicon = silyl_site.silicon;
 
-    // Find and remove the silicon with its three methyl groups
+    let Some(mut atoms_to_remove) = trimethylsilyl_fragment_atoms(structure, oxygen, silicon)
+    else {
+        return Ok(None);
+    };
+    atoms_to_remove.push(silicon);
+    atoms_to_remove.sort_unstable();
+    atoms_to_remove.dedup();
+
     let mut editor = MolecularEditor::new(structure);
-
-    // Collect atoms to remove: silicon and its methyl groups
-    let mut atoms_to_remove = vec![silicon];
-    for (neighbor, order) in structure.neighbors(silicon) {
-        if structure.atoms[neighbor].element == "C" && bond_order_matches(order, 1.0) {
-            atoms_to_remove.push(neighbor);
-            // Also remove hydrogens on these methyl carbons
-            for (h_neighbor, h_order) in structure.neighbors(neighbor) {
-                if structure.atoms[h_neighbor].element == "H" && bond_order_matches(h_order, 1.0) {
-                    atoms_to_remove.push(h_neighbor);
-                }
-            }
-        }
-    }
-
     let mapping = editor.remove_atoms(&atoms_to_remove)?;
     let oxygen = mapped_atom(&mapping, oxygen, "silyl ether oxygen")?;
 
-    // Add hydrogen to the oxygen
     editor.add_atom(oxygen, "H", 0.0, 1.0)?;
 
     let product = resolver.resolve(editor.finish()?)?;
 
-    Ok(Reaction::builder(generated_site_reaction_id(
-        "silyl_ether_deprotection",
-        &silyl_site.participant,
-    ))
-    .reactant(substance.id.clone(), 1, 1)
-    .reactant("destroy:fluoride", 1, 1) // F- from TBAF or similar
-    .reactant("destroy:proton", 1, 1)
-    .product(product, 1)
-    .product("destroy:trimethylsilyl_fluoride", 1)
-    .condition(ReactionCondition::new(
-        "fluoride deprotection requires fluoride source",
-    ))
-    .selectivity_profile(
-        SelectivityProfile::new(
-            ReactionType::SilylEtherCleavage,
-            SiteDescriptorBuilder::silyl_ether(),
+    Ok(Some(
+        Reaction::builder(generated_site_reaction_id(
+            "silyl_ether_deprotection",
+            &silyl_site.participant,
+        ))
+        .reactant(substance.id.clone(), 1, 1)
+        .reactant("destroy:fluoride", 1, 1) // F- from TBAF or similar
+        .reactant("destroy:proton", 1, 1)
+        .product(product, 1)
+        .product("destroy:trimethylsilyl_fluoride", 1)
+        .condition(ReactionCondition::new(
+            "fluoride deprotection requires fluoride source",
+        ))
+        .selectivity_profile(
+            SelectivityProfile::new(
+                ReactionType::SilylEtherCleavage,
+                SiteDescriptorBuilder::silyl_ether(),
+            )
+            .never_suppress(),
         )
-        .never_suppress(),
-    )
-    .activation_energy_kj_per_mol(20.0)
-    .build())
+        .activation_energy_kj_per_mol(20.0)
+        .build(),
+    ))
 }
 
 /// Hydrolyze an acetal or ketal back to the carbonyl compound and concrete alcohols.
@@ -440,6 +433,47 @@ fn add_cbz_group(editor: &mut MolecularEditor, nitrogen: usize) -> ChemistryResu
         editor.add_atom(*carbon, "H", 0.0, 1.0)?;
     }
     Ok(())
+}
+
+fn trimethylsilyl_fragment_atoms(
+    structure: &MolecularStructure,
+    protected_oxygen: usize,
+    silicon: usize,
+) -> Option<Vec<usize>> {
+    let substituents = structure
+        .neighbors(silicon)
+        .into_iter()
+        .filter(|(neighbor, order)| {
+            *neighbor != protected_oxygen && bond_order_matches(*order, 1.0)
+        })
+        .collect::<Vec<_>>();
+    if substituents.len() != 3 {
+        return None;
+    }
+
+    let mut atoms = Vec::new();
+    for (carbon, _) in substituents {
+        if structure.atoms[carbon].element != "C" {
+            return None;
+        }
+        let mut hydrogens = Vec::new();
+        for (neighbor, order) in structure.neighbors(carbon) {
+            if neighbor == silicon {
+                continue;
+            }
+            if structure.atoms[neighbor].element == "H" && bond_order_matches(order, 1.0) {
+                hydrogens.push(neighbor);
+            } else {
+                return None;
+            }
+        }
+        if hydrogens.len() != 3 {
+            return None;
+        }
+        atoms.push(carbon);
+        atoms.extend(hydrogens);
+    }
+    Some(atoms)
 }
 
 fn branch_atoms(
