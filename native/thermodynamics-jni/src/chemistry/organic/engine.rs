@@ -529,6 +529,7 @@ fn is_generator_seed_site(kind: &ReactiveSiteKind) -> bool {
             | ReactiveSiteKind::Oxime
             | ReactiveSiteKind::Hydrazone
             | ReactiveSiteKind::AcylChloride
+            | ReactiveSiteKind::Chloroformate
             | ReactiveSiteKind::AcidAnhydride
             | ReactiveSiteKind::CarboxylicAcid
             | ReactiveSiteKind::Aldehyde
@@ -722,6 +723,15 @@ fn generate_pair_reactions_for_seed(
                 )?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
             }
+            for chloroformate in space.sites_of(&ReactiveSiteKind::Chloroformate) {
+                let chloroformate_site = chloroformate.chloroformate_site()?;
+                let reaction = generate_chloroformate_alcohol_carbonate_formation(
+                    &chloroformate_site,
+                    &alcohol_site,
+                    resolver,
+                )?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
             for anhydride in space.sites_of(&ReactiveSiteKind::AcidAnhydride) {
                 let anhydride_site = anhydride.acid_anhydride_site()?;
                 for reaction in
@@ -786,6 +796,33 @@ fn generate_pair_reactions_for_seed(
             for aromatic in space.sites_of(&ReactiveSiteKind::AromaticRing) {
                 if let Some(reaction) = generate_fc_acylation(aromatic, seed.clone(), resolver)? {
                     push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
+            }
+        }
+        ReactiveSiteKind::Chloroformate => {
+            let chloroformate_site = seed.clone().chloroformate_site()?;
+            for alcohol in space.sites_of(&ReactiveSiteKind::Alcohol) {
+                let alcohol_site = alcohol.alcohol_site()?;
+                let reaction = generate_chloroformate_alcohol_carbonate_formation(
+                    &chloroformate_site,
+                    &alcohol_site,
+                    resolver,
+                )?;
+                push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+            for amine_kind in [
+                ReactiveSiteKind::PrimaryAmine,
+                ReactiveSiteKind::NonTertiaryAmine,
+            ] {
+                for amine in space.sites_of(&amine_kind) {
+                    let amine_site = amine.amine_site()?;
+                    if let Some(reaction) = generate_chloroformate_amine_carbamate_formation(
+                        &chloroformate_site,
+                        &amine_site,
+                        resolver,
+                    )? {
+                        push_unique_reaction(reactions, reaction_ids, reaction)?;
+                    }
                 }
             }
         }
@@ -949,6 +986,16 @@ fn generate_pair_reactions_for_seed(
                 let reaction =
                     generate_acyl_chloride_amidation(&acyl_chloride_site, &amine_site, resolver)?;
                 push_unique_reaction(reactions, reaction_ids, reaction)?;
+            }
+            for chloroformate in space.sites_of(&ReactiveSiteKind::Chloroformate) {
+                let chloroformate_site = chloroformate.chloroformate_site()?;
+                if let Some(reaction) = generate_chloroformate_amine_carbamate_formation(
+                    &chloroformate_site,
+                    &amine_site,
+                    resolver,
+                )? {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
             }
             for anhydride in space.sites_of(&ReactiveSiteKind::AcidAnhydride) {
                 let anhydride_site = anhydride.acid_anhydride_site()?;

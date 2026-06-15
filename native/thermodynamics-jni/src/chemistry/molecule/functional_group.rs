@@ -15,6 +15,7 @@ pub enum FunctionalGroupType {
     BoricAcid,
     Carbonyl,
     CarboxylicAcid,
+    Chloroformate,
     Ester,
     Halide,
     Isocyanate,
@@ -112,7 +113,13 @@ pub fn find_functional_groups(structure: &MolecularStructure) -> Vec<FunctionalG
                 continue;
             }
 
-            if single_oxygens.len() == 1 {
+            if chlorines.len() == 1 && single_oxygens.len() == 1 {
+                groups.push(FunctionalGroup::new(
+                    FunctionalGroupType::Chloroformate,
+                    vec![carbon, carbonyl_oxygen, chlorines[0], single_oxygens[0]],
+                ));
+                continue;
+            } else if single_oxygens.len() == 1 {
                 let alcohol_oxygen = single_oxygens[0];
                 let oxygen_carbons = bonded(structure, alcohol_oxygen, "C", Some(1.0));
                 if oxygen_carbons.len() == 2 {

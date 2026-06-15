@@ -25,6 +25,7 @@ pub enum ReactiveSiteKind {
     BorateEster,
     Carbonyl,
     CarboxylicAcid,
+    Chloroformate,
     Diazonium,
     Enol,
     Enolate,
@@ -271,6 +272,10 @@ pub fn try_find_reactive_sites(
             FunctionalGroupType::CarboxylicAcid => (
                 ReactiveSiteKind::CarboxylicAcid,
                 vec![ReactiveRole::AcidicProton, ReactiveRole::Electrophile],
+            ),
+            FunctionalGroupType::Chloroformate => (
+                ReactiveSiteKind::Chloroformate,
+                vec![ReactiveRole::Electrophile, ReactiveRole::LeavingGroup],
             ),
             FunctionalGroupType::Ester => {
                 (ReactiveSiteKind::Ester, vec![ReactiveRole::Electrophile])

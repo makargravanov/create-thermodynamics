@@ -7,7 +7,8 @@
 //! Cbz amine protection.
 
 use super::super::centers::{
-    AcetalCenter, AlcoholSite, AmineSite, BocCarbamateCenter, CbzCarbamateCenter, SilylEtherCenter,
+    AcetalCenter, AlcoholSite, AmineSite, BocCarbamateCenter, CbzCarbamateCenter,
+    ChloroformateSite, SilylEtherCenter,
 };
 use super::super::resolver::DerivedSubstanceResolver;
 use super::common::*;
@@ -167,6 +168,116 @@ fn phosgene_chloroformate_atoms(
         reaction_id: "alcohol_chloroformate_formation".to_string(),
         reason: "phosgene structure must contain C(=O)Cl2".to_string(),
     })
+}
+
+pub(crate) fn generate_chloroformate_alcohol_carbonate_formation(
+    chloroformate: &ChloroformateSite<'_>,
+    alcohol: &AlcoholSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    generate_chloroformate_transfer(
+        chloroformate,
+        alcohol.participant.structure,
+        alcohol.oxygen,
+        alcohol.hydrogen,
+        &alcohol.participant,
+        "chloroformate_alcohol_carbonate_formation",
+        ReactionType::AcylSubstitution,
+        SiteDescriptorBuilder::from_alcohol_site(alcohol),
+        resolver,
+    )
+}
+
+pub(crate) fn generate_chloroformate_amine_carbamate_formation(
+    chloroformate: &ChloroformateSite<'_>,
+    amine: &AmineSite<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    let Some(&hydrogen) = amine.hydrogens.first() else {
+        return Ok(None);
+    };
+    Ok(Some(generate_chloroformate_transfer(
+        chloroformate,
+        amine.participant.structure,
+        amine.nitrogen,
+        hydrogen,
+        &amine.participant,
+        "chloroformate_amine_carbamate_formation",
+        ReactionType::AcylSubstitution,
+        SiteDescriptorBuilder::from_amine_site(amine),
+        resolver,
+    )?))
+}
+
+fn generate_chloroformate_transfer(
+    chloroformate: &ChloroformateSite<'_>,
+    nucleophile_structure: &MolecularStructure,
+    nucleophile_atom: usize,
+    nucleophile_hydrogen: usize,
+    nucleophile_participant: &crate::chemistry::organic::space::SiteParticipant<'_>,
+    prefix: &'static str,
+    reaction_type: ReactionType,
+    nucleophile_descriptor: crate::chemistry::selectivity::types::SiteDescriptor,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let mut donor_editor = MolecularEditor::new(chloroformate.participant.structure);
+    let donor_mapping = donor_editor.remove_atoms(&[chloroformate.chlorine])?;
+    let carbon = mapped_atom(
+        &donor_mapping,
+        chloroformate.carbon,
+        "chloroformate carbonyl carbon",
+    )?;
+    let donor_fragment = donor_editor.finish()?;
+
+    let mut nucleophile_editor = MolecularEditor::new(nucleophile_structure);
+    let nucleophile_mapping = nucleophile_editor.remove_atoms(&[nucleophile_hydrogen])?;
+    let nucleophile_atom = mapped_atom(
+        &nucleophile_mapping,
+        nucleophile_atom,
+        "chloroformate nucleophile atom",
+    )?;
+    let nucleophile_fragment = nucleophile_editor.finish()?;
+
+    let product = resolver.resolve(MolecularEditor::join_structures(
+        &donor_fragment,
+        carbon,
+        &nucleophile_fragment,
+        nucleophile_atom,
+        1.0,
+    )?)?;
+
+    Ok(Reaction::builder(generated_pair_site_reaction_id(
+        prefix,
+        &chloroformate.participant,
+        nucleophile_participant,
+    ))
+    .reactant(chloroformate.participant.substance.id.clone(), 1, 1)
+    .reactant(nucleophile_participant.substance.id.clone(), 1, 1)
+    .product(product, 1)
+    .product("destroy:hydrochloric_acid", 1)
+    .condition(
+        ReactionCondition::new("chloroformate transfer is suppressed by wet media")
+            .max_water_activity(0.2),
+    )
+    .activation_energy_kj_per_mol(16.0)
+    .selectivity_profile(
+        SelectivityProfile::new(
+            reaction_type,
+            SiteDescriptorBuilder::build(
+                crate::chemistry::reactive_site::ReactiveSiteKind::Chloroformate,
+                crate::chemistry::selectivity::types::SubstitutionDegree::Primary,
+                0,
+                0,
+                0,
+                false,
+                false,
+                false,
+            ),
+        )
+        .with_secondary_site(nucleophile_descriptor)
+        .never_suppress(),
+    )
+    .build())
 }
 
 /// Remove TMS protecting group from a silyl ether

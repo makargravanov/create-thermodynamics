@@ -51,6 +51,8 @@ enum OrganicGeneratorKind {
     ThionylChlorideSubstitution,
     AlcoholHydrohalogenation,
     AlcoholChloroformateFormation,
+    ChloroformateAlcoholCarbonateFormation,
+    ChloroformateAmineCarbamateFormation,
     CarboxylicAcidEsterification,
     AcylChlorideEsterification,
     AlkoxideProtonation,
@@ -1793,6 +1795,10 @@ fn generators_for_site(
             OrganicGeneratorKind::AcylChlorideAmidation,
             OrganicGeneratorKind::AcylChlorideThioesterification,
             OrganicGeneratorKind::FriedelCraftsAcylation,
+        ],
+        ReactiveSiteKind::Chloroformate => &[
+            OrganicGeneratorKind::ChloroformateAlcoholCarbonateFormation,
+            OrganicGeneratorKind::ChloroformateAmineCarbamateFormation,
         ],
         ReactiveSiteKind::AcidAnhydride => &[
             OrganicGeneratorKind::AcidAnhydrideHydrolysis,

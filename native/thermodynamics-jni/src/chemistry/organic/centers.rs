@@ -107,6 +107,13 @@ pub(crate) struct AcylChlorideSite<'a> {
 }
 
 #[derive(Clone)]
+pub(crate) struct ChloroformateSite<'a> {
+    pub(crate) participant: SiteParticipant<'a>,
+    pub(crate) carbon: usize,
+    pub(crate) chlorine: usize,
+}
+
+#[derive(Clone)]
 pub(crate) struct AcidAnhydrideSite<'a> {
     pub(crate) participant: SiteParticipant<'a>,
     pub(crate) carbon_a: usize,
@@ -615,6 +622,30 @@ impl<'a> SiteParticipant<'a> {
         let (carbon, _) = carbonyl_atoms_from_site(self.structure, &self.site, "acyl chloride")?;
         let chlorine = self.bonded_site_atom(carbon, "Cl", 1.0, "acyl chloride chlorine")?;
         Ok(AcylChlorideSite {
+            participant: self,
+            carbon,
+            chlorine,
+        })
+    }
+
+    pub(crate) fn chloroformate_site(self) -> ChemistryResult<ChloroformateSite<'a>> {
+        self.require_kind(ReactiveSiteKind::Chloroformate)?;
+        let (carbon, _) = carbonyl_atoms_from_site(self.structure, &self.site, "chloroformate")?;
+        let chlorine = self.bonded_site_atom(carbon, "Cl", 1.0, "chloroformate chlorine")?;
+        self.structure
+            .neighbors(carbon)
+            .into_iter()
+            .find_map(|(neighbor, order)| {
+                (neighbor != chlorine
+                    && self.structure.atoms[neighbor].element == "O"
+                    && crate::chemistry::molecule::bond_order_matches(order, 1.0))
+                .then_some(neighbor)
+            })
+            .ok_or_else(|| ChemistryError::InvalidReaction {
+                reaction_id: generated_site_reaction_id("chloroformate_site", &self),
+                reason: "chloroformate has no alkoxy oxygen".to_string(),
+            })?;
+        Ok(ChloroformateSite {
             participant: self,
             carbon,
             chlorine,

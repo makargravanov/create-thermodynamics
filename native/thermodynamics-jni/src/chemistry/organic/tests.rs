@@ -322,6 +322,65 @@ fn alcohol_chloroformate_formation_generates_activated_carbonates_as_a_family() 
     }
 }
 
+#[test]
+fn chloroformates_transfer_to_alcohols_and_amines_as_a_family() {
+    let mut registry =
+        crate::chemistry::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    registry
+        .generate_reactions_for_substances(
+            [
+                SubstanceId::from("destroy:methanol"),
+                SubstanceId::from("destroy:ethanol"),
+                SubstanceId::from("destroy:ammonia"),
+                SubstanceId::from("destroy:phosgene"),
+            ],
+            3,
+        )
+        .unwrap();
+
+    let carbonate = registry
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("chloroformate_alcohol_carbonate_formation/")
+        })
+        .expect("dynamic chloroformate must acylate alcohols");
+    assert!(carbonate
+        .products
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:hydrochloric_acid")));
+    assert!(reaction_product_ids(carbonate)
+        .iter()
+        .any(|product| registry
+            .substance(product)
+            .ok()
+            .and_then(|substance| substance.molecular_structure.as_ref())
+            .is_some_and(has_carbonate_fragment)));
+
+    let carbamate = registry
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("chloroformate_amine_carbamate_formation/")
+        })
+        .expect("dynamic chloroformate must acylate amines");
+    assert!(carbamate
+        .products
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:hydrochloric_acid")));
+    assert!(reaction_product_ids(carbamate)
+        .iter()
+        .any(|product| registry
+            .substance(product)
+            .ok()
+            .and_then(|substance| substance.molecular_structure.as_ref())
+            .is_some_and(has_carbamate_fragment)));
+}
+
 fn has_chloroformate_fragment(structure: &crate::chemistry::molecule::MolecularStructure) -> bool {
     structure
         .atoms
@@ -353,6 +412,68 @@ fn has_chloroformate_fragment(structure: &crate::chemistry::molecule::MolecularS
                         && crate::chemistry::molecule::bond_order_matches(order, 1.0)
                 });
             has_double_oxygen && has_single_oxygen && has_chlorine
+        })
+}
+
+fn has_carbonate_fragment(structure: &crate::chemistry::molecule::MolecularStructure) -> bool {
+    structure
+        .atoms
+        .iter()
+        .enumerate()
+        .filter(|(_, atom)| atom.element == "C")
+        .any(|(carbon, _)| {
+            let double_oxygens = structure
+                .neighbors(carbon)
+                .into_iter()
+                .filter(|(neighbor, order)| {
+                    structure.atoms[*neighbor].element == "O"
+                        && crate::chemistry::molecule::bond_order_matches(*order, 2.0)
+                })
+                .count();
+            let single_oxygens = structure
+                .neighbors(carbon)
+                .into_iter()
+                .filter(|(neighbor, order)| {
+                    structure.atoms[*neighbor].element == "O"
+                        && crate::chemistry::molecule::bond_order_matches(*order, 1.0)
+                })
+                .count();
+            double_oxygens == 1 && single_oxygens == 2
+        })
+}
+
+fn has_carbamate_fragment(structure: &crate::chemistry::molecule::MolecularStructure) -> bool {
+    structure
+        .atoms
+        .iter()
+        .enumerate()
+        .filter(|(_, atom)| atom.element == "C")
+        .any(|(carbon, _)| {
+            let has_double_oxygen =
+                structure
+                    .neighbors(carbon)
+                    .into_iter()
+                    .any(|(neighbor, order)| {
+                        structure.atoms[neighbor].element == "O"
+                            && crate::chemistry::molecule::bond_order_matches(order, 2.0)
+                    });
+            let has_single_oxygen =
+                structure
+                    .neighbors(carbon)
+                    .into_iter()
+                    .any(|(neighbor, order)| {
+                        structure.atoms[neighbor].element == "O"
+                            && crate::chemistry::molecule::bond_order_matches(order, 1.0)
+                    });
+            let has_single_nitrogen =
+                structure
+                    .neighbors(carbon)
+                    .into_iter()
+                    .any(|(neighbor, order)| {
+                        structure.atoms[neighbor].element == "N"
+                            && crate::chemistry::molecule::bond_order_matches(order, 1.0)
+                    });
+            has_double_oxygen && has_single_oxygen && has_single_nitrogen
         })
 }
 
