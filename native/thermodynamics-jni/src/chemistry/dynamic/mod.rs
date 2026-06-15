@@ -2488,6 +2488,16 @@ fn conjugate_base_for_group(
                 ))
             })
         }
+        FunctionalGroupType::AromatizingCarbonAcid => {
+            let carbon = group_atom(group, 0, substance_id, "aromatizing carbon acid center")?;
+            let proton = group_atom(group, 1, substance_id, "aromatizing carbon acid proton")?;
+            deprotonated_structure(structure, carbon, proton, -1.0).map(|structure| {
+                Some((
+                    structure,
+                    estimated_acid_pka(FunctionalGroupType::AromatizingCarbonAcid),
+                ))
+            })
+        }
         _ => Ok(None),
     }
 }
@@ -2528,6 +2538,7 @@ fn estimated_acid_pka(group_type: FunctionalGroupType) -> f64 {
     match group_type {
         FunctionalGroupType::CarboxylicAcid => 4.8,
         FunctionalGroupType::BoricAcid => 9.2,
+        FunctionalGroupType::AromatizingCarbonAcid => 16.0,
         _ => unreachable!("only acid functional groups have estimated pKa values"),
     }
 }
@@ -3019,6 +3030,30 @@ mod tests {
 
         assert!(mixture.ph(&registry).unwrap().is_some_and(|ph| ph < 7.0));
         assert!(mixture.concentration_of(&spec.conjugate_base) > 0.0);
+    }
+
+    #[test]
+    fn dynamic_aromatizing_carbon_acid_creates_cyclopentadienyl_base() {
+        let mut dynamic = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let acid = dynamic
+            .resolve_frowns(
+                "destroy:graph:atoms=C.C.C.C.C.H.H.H.H.H.H;\
+                 bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-s-0,\
+                 0-s-5,1-s-6,2-s-7,3-s-8,4-s-9,4-s-10",
+            )
+            .unwrap();
+        let spec = dynamic
+            .dynamic_acid_base_specs
+            .iter()
+            .find(|spec| spec.acid == acid)
+            .expect("aromatizing carbon acid must register acidity")
+            .clone();
+
+        assert_eq!(
+            spec.conjugate_base,
+            SubstanceId::from("destroy:cyclopentadienide")
+        );
+        assert!((spec.pka - 16.0).abs() < 1.0e-9);
     }
 
     #[test]

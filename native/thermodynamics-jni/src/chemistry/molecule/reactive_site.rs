@@ -17,6 +17,7 @@ pub enum ReactiveSiteKind {
     Amide,
     AmideNitrogen,
     AromaticCarbon,
+    AromatizingCarbonAcid,
     AromaticRing,
     ArylHalide,
     Azide,
@@ -364,6 +365,10 @@ pub fn try_find_reactive_sites(
             FunctionalGroupType::FormylationDonor => (
                 ReactiveSiteKind::FormylationDonor,
                 vec![ReactiveRole::Electrophile],
+            ),
+            FunctionalGroupType::AromatizingCarbonAcid => (
+                ReactiveSiteKind::AromatizingCarbonAcid,
+                vec![ReactiveRole::AcidicProton],
             ),
         };
         sites.push(ReactiveSite::new(kind, group.atoms, roles));
@@ -781,6 +786,7 @@ fn primary_atom_for_site(site: &ReactiveSite) -> Option<usize> {
         | ReactiveSiteKind::Alkyne
         | ReactiveSiteKind::Enol
         | ReactiveSiteKind::AromaticCarbon
+        | ReactiveSiteKind::AromatizingCarbonAcid
         | ReactiveSiteKind::ArylHalide => site.atoms.first().copied(),
         ReactiveSiteKind::Hydrazone
         | ReactiveSiteKind::BisNucleophile

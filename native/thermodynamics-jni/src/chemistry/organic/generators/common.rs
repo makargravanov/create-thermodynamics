@@ -278,6 +278,7 @@ pub(crate) fn site_kind_suffix(kind: &ReactiveSiteKind) -> &'static str {
         ReactiveSiteKind::Amide => "amide",
         ReactiveSiteKind::AmideNitrogen => "amide_nitrogen",
         ReactiveSiteKind::AromaticCarbon => "aromatic_carbon",
+        ReactiveSiteKind::AromatizingCarbonAcid => "aromatizing_carbon_acid",
         ReactiveSiteKind::AromaticRing => "aromatic_ring",
         ReactiveSiteKind::ArylHalide => "aryl_halide",
         ReactiveSiteKind::Azide => "azide",

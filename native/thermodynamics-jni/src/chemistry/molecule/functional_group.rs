@@ -49,6 +49,7 @@ pub enum FunctionalGroupType {
     DicarbonylElectrophile,
     UreaLike,
     FormylationDonor,
+    AromatizingCarbonAcid,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -508,6 +509,7 @@ fn add_generalized_cn_groups(structure: &MolecularStructure, groups: &mut Vec<Fu
     add_dicarbonyl_electrophiles(structure, groups);
     add_urea_like_groups(structure, groups);
     add_formylation_donors(structure, groups);
+    add_aromatizing_carbon_acids(structure, groups);
 }
 
 fn add_hydrazone_groups(structure: &MolecularStructure, groups: &mut Vec<FunctionalGroup>) {
@@ -649,6 +651,92 @@ fn add_formylation_donors(structure: &MolecularStructure, groups: &mut Vec<Funct
             ));
         }
     }
+}
+
+fn add_aromatizing_carbon_acids(structure: &MolecularStructure, groups: &mut Vec<FunctionalGroup>) {
+    for acidic_carbon in 0..structure.atoms.len() {
+        if structure.atoms[acidic_carbon].element != "C"
+            || structure.atoms[acidic_carbon].charge != 0.0
+        {
+            continue;
+        }
+        let hydrogens = bonded(structure, acidic_carbon, "H", Some(1.0));
+        if hydrogens.is_empty() {
+            continue;
+        }
+        let ring_neighbors = structure
+            .neighbors(acidic_carbon)
+            .into_iter()
+            .filter_map(|(neighbor, order)| {
+                (structure.atoms[neighbor].element == "C" && bond_order_matches(order, 1.0))
+                    .then_some(neighbor)
+            })
+            .collect::<Vec<_>>();
+        if ring_neighbors.len() != 2 {
+            continue;
+        }
+        let Some(path) = conjugated_c5_path_between(
+            structure,
+            acidic_carbon,
+            ring_neighbors[0],
+            ring_neighbors[1],
+        ) else {
+            continue;
+        };
+        let mut atoms = vec![acidic_carbon, hydrogens[0]];
+        atoms.extend(path);
+        groups.push(FunctionalGroup::new(
+            FunctionalGroupType::AromatizingCarbonAcid,
+            atoms,
+        ));
+    }
+}
+
+fn conjugated_c5_path_between(
+    structure: &MolecularStructure,
+    excluded: usize,
+    first: usize,
+    second: usize,
+) -> Option<Vec<usize>> {
+    conjugated_c5_path_with_orders(structure, excluded, first, second, [2.0, 1.0, 2.0])
+}
+
+fn conjugated_c5_path_with_orders(
+    structure: &MolecularStructure,
+    excluded: usize,
+    first: usize,
+    second: usize,
+    expected_orders: [f64; 3],
+) -> Option<Vec<usize>> {
+    for (middle_a, first_order) in structure.neighbors(first) {
+        if middle_a == excluded
+            || middle_a == second
+            || structure.atoms[middle_a].element != "C"
+            || !bond_order_matches(first_order, expected_orders[0])
+        {
+            continue;
+        }
+        for (middle_b, middle_order) in structure.neighbors(middle_a) {
+            if middle_b == excluded
+                || middle_b == first
+                || middle_b == second
+                || structure.atoms[middle_b].element != "C"
+                || !bond_order_matches(middle_order, expected_orders[1])
+            {
+                continue;
+            }
+            if structure
+                .neighbors(middle_b)
+                .into_iter()
+                .any(|(neighbor, order)| {
+                    neighbor == second && bond_order_matches(order, expected_orders[2])
+                })
+            {
+                return Some(vec![first, middle_a, middle_b, second]);
+            }
+        }
+    }
+    None
 }
 
 fn carbonyl_carbons(structure: &MolecularStructure) -> Vec<usize> {
@@ -896,10 +984,10 @@ fn bonded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chemistry::molecule::parse_legacy_structure;
+    use crate::chemistry::frowns::parse_frowns;
 
     fn group_types(code: &str) -> Vec<FunctionalGroupType> {
-        find_functional_groups(&parse_legacy_structure(code).unwrap())
+        find_functional_groups(&parse_frowns(code).unwrap())
             .into_iter()
             .map(|group| group.group_type)
             .collect()
@@ -941,5 +1029,22 @@ mod tests {
         assert!(group_types("destroy:linear:C=C").contains(&FunctionalGroupType::Alkene));
         assert!(group_types("destroy:linear:C#C").contains(&FunctionalGroupType::Alkyne));
         assert!(group_types("destroy:linear:CN(~O)(~O)").contains(&FunctionalGroupType::Nitro));
+    }
+
+    #[test]
+    fn detects_aromatizing_carbon_acid_center_from_explicit_ring_hydrogen() {
+        let cyclopentadiene = group_types(
+            "destroy:graph:atoms=C.C.C.C.C.H.H.H.H.H.H;\
+             bonds=0-d-1,1-s-2,2-d-3,3-s-4,4-s-0,\
+             0-s-5,1-s-6,2-s-7,3-s-8,4-s-9,4-s-10",
+        );
+        assert!(cyclopentadiene.contains(&FunctionalGroupType::AromatizingCarbonAcid));
+
+        let cyclopentene = group_types(
+            "destroy:graph:atoms=C.C.C.C.C.H.H.H.H.H.H.H.H;\
+             bonds=0-d-1,1-s-2,2-s-3,3-s-4,4-s-0,\
+             0-s-5,1-s-6,2-s-7,2-s-8,3-s-9,3-s-10,4-s-11,4-s-12",
+        );
+        assert!(!cyclopentene.contains(&FunctionalGroupType::AromatizingCarbonAcid));
     }
 }
