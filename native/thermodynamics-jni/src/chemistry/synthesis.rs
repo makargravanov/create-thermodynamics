@@ -1713,6 +1713,33 @@ mod tests {
     }
 
     #[test]
+    fn planner_reaches_acetone_cyanohydrin_through_general_carbonyl_addition() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let routes = SynthesisPlanner::new()
+            .with_max_steps(1)
+            .allow_reaction_prefix("cyanide_nucleophilic_addition/")
+            .find_routes(
+                &mut registry,
+                [
+                    SubstanceId::from("destroy:acetone"),
+                    SubstanceId::from("destroy:hydrogen_cyanide"),
+                    SubstanceId::from("destroy:cyanide"),
+                ],
+                parse_frowns("CC(OH)(C#N)C").unwrap(),
+            )
+            .unwrap();
+
+        assert!(!routes.is_empty());
+        assert!(routes[0].steps.iter().any(|step| step
+            .reaction_id
+            .as_str()
+            .starts_with("cyanide_nucleophilic_addition/")));
+        assert!(routes[0].steps.iter().any(|step| step
+            .products
+            .contains(&SubstanceId::from("destroy:acetone_cyanohydrin"))));
+    }
+
+    #[test]
     fn planner_reaches_trimethyl_borate_by_repeating_borate_esterification() {
         let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
         let routes = SynthesisPlanner::new()

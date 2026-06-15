@@ -559,6 +559,72 @@ fn alkene_hydrocyanation_generates_nitriles_as_a_family() {
 }
 
 #[test]
+fn cyanide_addition_generates_cyanohydrins_as_a_family() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let acetaldehyde = dynamic.resolve_frowns("CC=O").unwrap();
+    dynamic
+        .generate_reactions_for_substances(
+            [SubstanceId::from("destroy:acetone"), acetaldehyde.clone()],
+            1,
+        )
+        .unwrap();
+
+    let acetone_cyanohydrin = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("cyanide_nucleophilic_addition/destroy_acetone/")
+        })
+        .expect("acetone must form a cyanohydrin through the general carbonyl generator");
+    assert!(acetone_cyanohydrin
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:hydrogen_cyanide")));
+    assert_eq!(
+        acetone_cyanohydrin
+            .orders
+            .get(&SubstanceId::from("destroy:cyanide")),
+        Some(&1)
+    );
+    assert!(acetone_cyanohydrin
+        .products
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:acetone_cyanohydrin")));
+
+    let aldehyde_cyanohydrin = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("cyanide_nucleophilic_addition/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == acetaldehyde)
+        })
+        .and_then(|reaction| reaction.products.first())
+        .map(|term| term.substance_id.clone())
+        .expect("dynamic aldehyde must use the same cyanohydrin generator");
+    let aldehyde_product = dynamic.substance(&aldehyde_cyanohydrin).unwrap();
+    let site_kinds = try_find_reactive_sites(
+        aldehyde_product
+            .molecular_structure
+            .as_ref()
+            .expect("cyanohydrin product must keep a graph"),
+    )
+    .unwrap()
+    .into_iter()
+    .map(|site| site.kind)
+    .collect::<BTreeSet<_>>();
+    assert!(site_kinds.contains(&ReactiveSiteKind::Alcohol));
+    assert!(site_kinds.contains(&ReactiveSiteKind::Nitrile));
+}
+
+#[test]
 fn repeated_borate_esterification_reaches_trimethyl_borate_without_targeted_reaction() {
     let mut registry =
         crate::chemistry::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
