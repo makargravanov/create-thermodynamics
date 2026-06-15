@@ -14,7 +14,7 @@
 
 ### `MixturePhase`
 
-Перечисление из 6 фаз:
+Перечисление из 7 фаз:
 
 | Вариант | Смысл |
 |---|---|
@@ -24,6 +24,7 @@
 | `MoltenSlag` | расплав шлака; аналогично |
 | `Gas` | газовая фаза |
 | `Solid` | твёрдый осадок |
+| `SupercriticalFluid` | сверхкритическая фаза |
 
 `Aqueous` и `Gas` — «одиночные»; `Organic`, `MoltenMetal`, `MoltenSlag`
 требуют конкретного «анкера» — вещества-растворителя, которое
@@ -84,7 +85,7 @@ struct MixtureComponent {
 - `concentration_in_phase(id, phase)` — количество в конкретной фазе.
 - `total_concentration_in_phase(phase)` — сумма по всем веществам в фазе.
 - `gaseous_fraction_of(id)` — доля газовой фазы (0..=1).
-- `phase_amounts_of(id)` → `Vec<PhaseAmount>` по всем 6 фазам.
+- `phase_amounts_of(id)` → `Vec<PhaseAmount>` по всем фазам.
 - `organic_phase_amounts_of(registry, id)` → список с указанием растворителя.
 - `concentration_in_organic_solvent(registry, id, solvent_id)`.
 

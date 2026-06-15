@@ -49,8 +49,8 @@ include!("destroy_reactions.generated.rs");
 ### Константы
 
 ```rust
-pub const DESTROY_EXPLICIT_REACTION_COUNT: usize = 118;
-pub const DESTROY_REGISTERED_REACTION_COUNT: usize = 155;
+pub const DESTROY_EXPLICIT_REACTION_COUNT: usize = 120;
+pub const DESTROY_REGISTERED_REACTION_COUNT: usize = 157;
 ```
 
 `DESTROY_EXPLICIT_REACTION_COUNT` — число уникальных реакций верхнего уровня
@@ -174,7 +174,7 @@ ABS, PAN, PVC, PE, PP, PTFE, полистирол, полистирол-бута
 
 Параметры рассчитываются из pKa: общая Ea = 2.477 кДж/моль.
 Эти 37 реакций (9 пар × 3 + авто-ионизация) составляют большую часть
-разрыва 118 → 155.
+разрыва 120 → 157.
 
 ### Прочие
 
@@ -223,4 +223,3 @@ pub fn destroy_reactions_registry_builder(...) -> ... {
 - [[core-redox]] — `RedoxAnnotation`, `RedoxEnvironment`
 - [[data-catalog]] — `destroy_substances_registry_builder` — поставщик builder'а
 - [[core-kinetics]] — обработка Ea, A, ΔH при симуляции
-
