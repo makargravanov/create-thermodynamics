@@ -8,6 +8,10 @@ use create_thermodynamics_jni::chemistry::molecule::{
     MolecularAtom, MolecularBond, MolecularStructure, ValenceSaturation,
 };
 use create_thermodynamics_jni::chemistry::simulation::react_for_tick;
+use create_thermodynamics_jni::chemistry::substance::SubstanceId;
+use create_thermodynamics_jni::chemistry::synthesis::{
+    SynthesisPlanner, SynthesisReachabilityRequest, SynthesisRequest,
+};
 use create_thermodynamics_jni::chemistry::{
     destroy_registry_builder, destroy_registry_with_generated_reactions_builder, ChemistryRegistry,
 };
@@ -25,7 +29,16 @@ impl BenchCase {
 }
 
 fn main() {
+    let filter = std::env::args().nth(1);
     let mut cases = Vec::new();
+    if filter
+        .as_deref()
+        .is_some_and(|filter| filter.contains("synthesis"))
+    {
+        push_synthesis_benches(&mut cases);
+        print_cases(&cases, filter.as_deref());
+        return;
+    }
 
     cases.push(run("base registry build", 50, || {
         black_box(destroy_registry_builder().unwrap().build().unwrap());
@@ -124,7 +137,73 @@ fn main() {
         black_box(registry.generate_reactions_for(&methane, 2).unwrap());
     }));
 
-    print_cases(&cases);
+    push_synthesis_benches(&mut cases);
+
+    print_cases(&cases, filter.as_deref());
+}
+
+fn push_synthesis_benches(cases: &mut Vec<BenchCase>) {
+    let synthesis_registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    cases.push(run("synthesis hint one-step organic", 250, || {
+        let routes = SynthesisPlanner::new()
+            .with_max_steps(2)
+            .with_max_routes(4)
+            .plan_routes(
+                &synthesis_registry,
+                SynthesisRequest::for_substance("destroy:acetone_cyanohydrin")
+                    .with_available_substance("destroy:acetone")
+                    .with_available_substance("destroy:hydrogen_cyanide")
+                    .with_available_substance("destroy:cyanide"),
+            )
+            .unwrap();
+        black_box(routes);
+    }));
+
+    cases.push(run("synthesis hint deep bridgehead route", 25, || {
+        let routes = SynthesisPlanner::new()
+            .with_max_steps(6)
+            .with_max_routes(4)
+            .allow_reaction_prefix("radical_halogenation/")
+            .allow_reaction_prefix("organomagnesium_formation/")
+            .allow_reaction_prefix("organometallic_carboxylation/")
+            .plan_routes(
+                &synthesis_registry,
+                SynthesisRequest::for_substance("destroy:cubanedicarboxylic_acid")
+                    .with_available_substance("destroy:cubane")
+                    .with_available_substance("destroy:chlorine")
+                    .with_available_substance("destroy:carbon_dioxide")
+                    .with_available_substance("destroy:water"),
+            )
+            .unwrap();
+        black_box(routes);
+    }));
+
+    cases.push(run("synthesis reachability small report", 100, || {
+        let report = SynthesisPlanner::new()
+            .with_max_routes(2)
+            .analyze_reachability(
+                &synthesis_registry,
+                SynthesisReachabilityRequest::new([
+                    SubstanceId::from("destroy:acetone_cyanohydrin"),
+                    SubstanceId::from("destroy:cubane"),
+                    SubstanceId::from("destroy:iodomethane"),
+                    SubstanceId::from("destroy:isopropanol"),
+                ])
+                .with_available_substance("destroy:propene")
+                .with_available_substance("destroy:methanol")
+                .with_available_substance("destroy:acetone")
+                .with_available_substance("destroy:water")
+                .with_available_substance("destroy:hydrogen_cyanide")
+                .with_available_substance("destroy:cyanide")
+                .with_available_substance("destroy:hydroiodic_acid")
+                .with_available_substance("destroy:proton")
+                .with_generation_iterations(1)
+                .with_max_steps(4)
+                .with_max_routes_per_target(2),
+            )
+            .unwrap();
+        black_box(report);
+    }));
 }
 
 fn run(name: &'static str, iterations: usize, mut f: impl FnMut()) -> BenchCase {
@@ -142,14 +221,17 @@ fn run(name: &'static str, iterations: usize, mut f: impl FnMut()) -> BenchCase 
     }
 }
 
-fn print_cases(cases: &[BenchCase]) {
+fn print_cases(cases: &[BenchCase], filter: Option<&str>) {
     println!();
     println!(
         "{:<42} {:>12} {:>16} {:>16}",
         "case", "iterations", "total ms", "per op"
     );
     println!("{}", "-".repeat(90));
-    for case in cases {
+    for case in cases
+        .iter()
+        .filter(|case| filter.is_none_or(|filter| case.name.contains(filter)))
+    {
         println!(
             "{:<42} {:>12} {:>16.3} {:>16}",
             case.name,

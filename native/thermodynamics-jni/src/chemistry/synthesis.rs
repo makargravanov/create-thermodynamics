@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::dynamic::DynamicChemistryRegistry;
 use super::error::{ChemistryError, ChemistryResult};
@@ -136,10 +136,23 @@ pub struct SynthesisConditionHint {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct FrontierState {
-    known: BTreeSet<SubstanceId>,
-    steps: Vec<SynthesisStep>,
+struct ProductPlan {
+    step: SynthesisStep,
     estimated_yield: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct SynthesisReactionIndex {
+    producers_by_product: BTreeMap<SubstanceId, Vec<ReactionId>>,
+}
+
+impl SynthesisReactionIndex {
+    fn producers(&self, product: &SubstanceId) -> &[ReactionId] {
+        self.producers_by_product
+            .get(product)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
 }
 
 impl Default for SynthesisPlanner {
@@ -489,11 +502,13 @@ impl SynthesisPlanner {
         let mut target_reports = Vec::new();
         let mut reachable_targets = Vec::new();
         let mut unreachable_targets = Vec::new();
+        let reaction_index = build_synthesis_reaction_index(&working_registry, self);
         for target in targets {
-            let producer_reactions = producer_reactions_for_target(&working_registry, &target);
+            let producer_reactions = producer_reactions_for_target(&reaction_index, &target);
             let mut visiting = BTreeSet::new();
             let routes = backward_routes_for_target(
                 &working_registry,
+                &reaction_index,
                 &self.safety_policy,
                 &request.available_substances,
                 &target,
@@ -613,70 +628,83 @@ impl SynthesisPlanner {
         }
 
         let mut routes = Vec::new();
-        let mut queue = VecDeque::from([FrontierState {
-            known: initial_known.clone(),
-            steps: Vec::new(),
-            estimated_yield: 1.0,
-        }]);
-        let mut seen_known_sets = BTreeSet::from([known_set_key(&initial_known)]);
+        let mut known = initial_known.clone();
+        let mut frontier = initial_known.iter().cloned().collect::<Vec<_>>();
+        let mut product_plans = BTreeMap::<SubstanceId, ProductPlan>::new();
 
-        while let Some(state) = queue.pop_front() {
-            if state.steps.len() >= max_steps || state.known.is_empty() {
-                continue;
+        for _depth in 0..max_steps {
+            if frontier.is_empty() || routes.len() >= max_routes {
+                break;
             }
-            registry.generate_reactions_for_substances(state.known.iter().cloned(), 1)?;
-            let candidates = registry
-                .reaction_candidates_for_substances(state.known.iter())
+            registry.generate_reactions_for_substances_in_scope(
+                frontier.iter().cloned(),
+                known.iter().cloned(),
+                1,
+            )?;
+            let mut candidates = registry
+                .reaction_candidates_for_substances(known.iter())
                 .into_iter()
                 .filter(|reaction| self.reaction_allowed(reaction))
-                .filter_map(|reaction| {
-                    synthesis_step_from_available_reaction(reaction, &state.known)
-                })
+                .filter_map(|reaction| synthesis_step_from_available_reaction(reaction, &known))
                 .collect::<Vec<_>>();
+            candidates.sort_by(|left, right| {
+                left.step_cost
+                    .total_cmp(&right.step_cost)
+                    .then_with(|| left.reaction_id.cmp(&right.reaction_id))
+            });
+
+            let mut next_frontier = Vec::new();
             for step in candidates {
-                let mut next_known = state.known.clone();
-                let mut added_new_product = false;
                 if !step_products_allowed(registry, &self.safety_policy, &step)? {
                     continue;
                 }
+                let Some(estimated_yield) =
+                    estimated_yield_for_step(&step, &product_plans, &initial_known)
+                else {
+                    continue;
+                };
                 for product in &step.products {
-                    if next_known.insert(product.clone()) {
-                        added_new_product = true;
+                    if initial_known.contains(product) {
+                        continue;
+                    }
+                    let candidate_plan = ProductPlan {
+                        step: step.clone(),
+                        estimated_yield,
+                    };
+                    if product == &target {
+                        if let Some(route) = build_forward_route_from_plan(
+                            target.clone(),
+                            candidate_plan.clone(),
+                            &product_plans,
+                            &initial_known,
+                            "route can be run from the available substances".to_string(),
+                        ) {
+                            routes.push(route);
+                            routes.sort_by(compare_routes);
+                            routes.dedup_by(|left, right| route_key(left) == route_key(right));
+                            routes.truncate(max_routes);
+                        }
+                    }
+                    if known.insert(product.clone()) {
+                        product_plans.insert(product.clone(), candidate_plan);
+                        next_frontier.push(product.clone());
+                    } else if product_plans
+                        .get(product)
+                        .is_some_and(|existing| estimated_yield > existing.estimated_yield)
+                    {
+                        product_plans.insert(product.clone(), candidate_plan);
                     }
                 }
-                if !added_new_product {
-                    continue;
-                }
-                let mut next_steps = state.steps.clone();
-                next_steps.push(step.clone());
-                let estimated_yield = state.estimated_yield * step.product_fraction;
-                if next_known.contains(&target) {
-                    routes.push(build_route(
-                        target.clone(),
-                        estimated_yield,
-                        next_steps.clone(),
-                        &initial_known,
-                        "route can be run from the available substances".to_string(),
-                    ));
-                    routes.sort_by(compare_routes);
-                    routes.truncate(max_routes);
-                    continue;
-                }
-                let key = known_set_key(&next_known);
-                if seen_known_sets.insert(key) {
-                    queue.push_back(FrontierState {
-                        known: next_known,
-                        steps: next_steps,
-                        estimated_yield,
-                    });
-                }
             }
+            frontier = next_frontier;
         }
 
         if self.include_routes_with_missing_inputs && routes.len() < max_routes {
             let mut visiting = BTreeSet::new();
+            let reaction_index = build_synthesis_reaction_index(registry, self);
             let mut backward = backward_routes_for_target(
                 registry,
+                &reaction_index,
                 &self.safety_policy,
                 &initial_known,
                 &target,
@@ -776,8 +804,86 @@ fn synthesis_step_from_reaction(
     Some(step)
 }
 
+fn estimated_yield_for_step(
+    step: &SynthesisStep,
+    product_plans: &BTreeMap<SubstanceId, ProductPlan>,
+    initial_known: &BTreeSet<SubstanceId>,
+) -> Option<f64> {
+    let mut result = step.product_fraction;
+    for reactant in &step.reactants {
+        if initial_known.contains(reactant) {
+            continue;
+        }
+        result *= product_plans.get(reactant)?.estimated_yield;
+    }
+    Some(result)
+}
+
+fn build_forward_route_from_plan(
+    target: SubstanceId,
+    target_plan: ProductPlan,
+    product_plans: &BTreeMap<SubstanceId, ProductPlan>,
+    initial_known: &BTreeSet<SubstanceId>,
+    explanation: String,
+) -> Option<SynthesisRoute> {
+    let mut steps = Vec::new();
+    let mut visiting = BTreeSet::new();
+    let mut emitted = BTreeSet::new();
+    append_step_dependencies(
+        &target_plan.step,
+        product_plans,
+        initial_known,
+        &mut visiting,
+        &mut emitted,
+        &mut steps,
+    )?;
+    if emitted.insert(target_plan.step.reaction_id.clone()) {
+        steps.push(target_plan.step);
+    }
+    Some(build_route(
+        target,
+        target_plan.estimated_yield,
+        steps,
+        initial_known,
+        explanation,
+    ))
+}
+
+fn append_step_dependencies(
+    step: &SynthesisStep,
+    product_plans: &BTreeMap<SubstanceId, ProductPlan>,
+    initial_known: &BTreeSet<SubstanceId>,
+    visiting: &mut BTreeSet<SubstanceId>,
+    emitted: &mut BTreeSet<ReactionId>,
+    steps: &mut Vec<SynthesisStep>,
+) -> Option<()> {
+    for reactant in &step.reactants {
+        if initial_known.contains(reactant) {
+            continue;
+        }
+        if !visiting.insert(reactant.clone()) {
+            return None;
+        }
+        let plan = product_plans.get(reactant)?;
+        append_step_dependencies(
+            &plan.step,
+            product_plans,
+            initial_known,
+            visiting,
+            emitted,
+            steps,
+        )?;
+        if emitted.insert(plan.step.reaction_id.clone()) {
+            steps.push(plan.step.clone());
+        }
+        visiting.remove(reactant);
+    }
+    Some(())
+}
+
 fn backward_routes_for_target(
     registry: &DynamicChemistryRegistry,
+    reaction_index: &SynthesisReactionIndex,
     safety_policy: &SynthesisSafetyPolicy,
     available: &BTreeSet<SubstanceId>,
     target: &SubstanceId,
@@ -790,11 +896,8 @@ fn backward_routes_for_target(
         return Ok(Vec::new());
     }
     let mut routes = Vec::new();
-    for reaction in registry
-        .reactions()
-        .filter(|reaction| planner.reaction_allowed(reaction))
-        .filter(|reaction| reaction_can_produce(reaction, target))
-    {
+    for reaction_id in reaction_index.producers(target) {
+        let reaction = registry.reaction(reaction_id)?;
         let Some(step) = synthesis_step_from_reaction(reaction, available) else {
             continue;
         };
@@ -811,6 +914,7 @@ fn backward_routes_for_target(
             }
             let nested = backward_routes_for_target(
                 registry,
+                reaction_index,
                 safety_policy,
                 available,
                 &reactant,
@@ -880,15 +984,35 @@ fn reaction_can_produce(reaction: &Reaction, target: &SubstanceId) -> bool {
         .any(|product| product == target)
 }
 
-fn producer_reactions_for_target(
+fn build_synthesis_reaction_index(
     registry: &DynamicChemistryRegistry,
+    planner: &SynthesisPlanner,
+) -> SynthesisReactionIndex {
+    let mut index = SynthesisReactionIndex::default();
+    for reaction in registry
+        .reactions()
+        .filter(|reaction| planner.reaction_allowed(reaction))
+    {
+        for product in reaction_products(reaction) {
+            index
+                .producers_by_product
+                .entry(product)
+                .or_default()
+                .push(reaction.id.clone());
+        }
+    }
+    for producers in index.producers_by_product.values_mut() {
+        producers.sort();
+        producers.dedup();
+    }
+    index
+}
+
+fn producer_reactions_for_target(
+    reaction_index: &SynthesisReactionIndex,
     target: &SubstanceId,
 ) -> Vec<ReactionId> {
-    registry
-        .reactions()
-        .filter(|reaction| reaction_can_produce(reaction, target))
-        .map(|reaction| reaction.id.clone())
-        .collect()
+    reaction_index.producers(target).to_vec()
 }
 
 fn reaction_products(reaction: &Reaction) -> Vec<SubstanceId> {
@@ -1201,10 +1325,6 @@ fn route_condition_hints(steps: &[SynthesisStep]) -> Vec<SynthesisConditionHint>
         .collect()
 }
 
-fn known_set_key(known: &BTreeSet<SubstanceId>) -> Vec<SubstanceId> {
-    known.iter().cloned().collect()
-}
-
 fn route_key(route: &SynthesisRoute) -> Vec<String> {
     route
         .steps
@@ -1462,7 +1582,9 @@ mod tests {
             "destroy:isopropanol",
         ] {
             assert!(
-                report.reachable_targets.contains(&SubstanceId::from(target)),
+                report
+                    .reachable_targets
+                    .contains(&SubstanceId::from(target)),
                 "{target} should remain reachable through a general reaction family"
             );
         }

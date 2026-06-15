@@ -408,7 +408,7 @@ impl DynamicChemistryRegistry {
     ) -> ChemistryResult<DynamicGenerationReport> {
         self.substance(substance_id)?;
         let seeds = vec![self.known_substance_index_or_error(substance_id)?];
-        self.generate_reactions_from_scope(seeds, max_iterations)
+        self.generate_reactions_from_scope(seeds.clone(), seeds, max_iterations)
     }
 
     pub fn generate_reactions_for_substances(
@@ -417,19 +417,32 @@ impl DynamicChemistryRegistry {
         max_iterations: usize,
     ) -> ChemistryResult<DynamicGenerationReport> {
         let seeds = self.validated_substance_indices(substance_ids)?;
-        self.generate_reactions_from_scope(seeds, max_iterations)
+        self.generate_reactions_from_scope(seeds.clone(), seeds, max_iterations)
+    }
+
+    pub fn generate_reactions_for_substances_in_scope(
+        &mut self,
+        seed_substance_ids: impl IntoIterator<Item = SubstanceId>,
+        scope_substance_ids: impl IntoIterator<Item = SubstanceId>,
+        max_iterations: usize,
+    ) -> ChemistryResult<DynamicGenerationReport> {
+        let seeds = self.validated_substance_indices(seed_substance_ids)?;
+        let scope = self.validated_substance_indices(scope_substance_ids)?;
+        self.generate_reactions_from_scope(seeds, scope, max_iterations)
     }
 
     pub fn generate_reactions(
         &mut self,
         max_iterations: usize,
     ) -> ChemistryResult<DynamicGenerationReport> {
-        self.generate_reactions_from_scope(self.all_known_substance_indices(), max_iterations)
+        let seeds = self.all_known_substance_indices();
+        self.generate_reactions_from_scope(seeds.clone(), seeds, max_iterations)
     }
 
     fn generate_reactions_from_scope(
         &mut self,
         seeds: Vec<KnownSubstanceIndex>,
+        scope_indices: Vec<KnownSubstanceIndex>,
         max_iterations: usize,
     ) -> ChemistryResult<DynamicGenerationReport> {
         if max_iterations == 0 {
@@ -446,6 +459,9 @@ impl DynamicChemistryRegistry {
         let mut queue = VecDeque::new();
         let mut queued = vec![false; self.known_substance_count()];
         let mut scope = vec![false; self.known_substance_count()];
+        for scope_index in scope_indices {
+            self.mark_known_substance(&mut scope, scope_index, true);
+        }
         for seed in seeds {
             self.mark_known_substance(&mut scope, seed, true);
             enqueue_known_substance(
