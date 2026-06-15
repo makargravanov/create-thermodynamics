@@ -160,6 +160,87 @@ pub(crate) fn generate_thionyl_chloride_substitution(
     .build())
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum Hydrohalogen {
+    Chloride,
+    Bromide,
+    Iodide,
+}
+
+impl Hydrohalogen {
+    fn acid_id(self) -> &'static str {
+        match self {
+            Self::Chloride => "destroy:hydrochloric_acid",
+            Self::Bromide => "destroy:hydrobromic_acid",
+            Self::Iodide => "destroy:hydroiodic_acid",
+        }
+    }
+
+    fn element(self) -> &'static str {
+        match self {
+            Self::Chloride => "Cl",
+            Self::Bromide => "Br",
+            Self::Iodide => "I",
+        }
+    }
+
+    fn id_suffix(self) -> &'static str {
+        match self {
+            Self::Chloride => "chloride",
+            Self::Bromide => "bromide",
+            Self::Iodide => "iodide",
+        }
+    }
+
+    fn activation_energy(self) -> f64 {
+        match self {
+            Self::Chloride => 34.0,
+            Self::Bromide => 28.0,
+            Self::Iodide => 24.0,
+        }
+    }
+}
+
+pub(crate) fn generate_alcohol_hydrohalogenation(
+    site: &AlcoholSite<'_>,
+    halogen: Hydrohalogen,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Reaction> {
+    let substance = site.participant.substance;
+    let structure = site.participant.structure;
+    let mut editor = MolecularEditor::new(structure);
+    let mapping = editor.remove_atoms(&[site.oxygen, site.hydrogen])?;
+    let carbon = mapped_atom(&mapping, site.carbon, "alcohol carbon")?;
+    editor.add_atom(carbon, halogen.element(), 0.0, 1.0)?;
+    let product = resolver.resolve(editor.finish()?)?;
+
+    Ok(Reaction::builder(format!(
+        "{}/{}",
+        generated_site_reaction_id("alcohol_hydrohalogenation", &site.participant),
+        halogen.id_suffix()
+    ))
+    .reactant(substance.id.clone(), 1, 1)
+    .reactant(halogen.acid_id(), 1, 1)
+    .product(product, 1)
+    .product("destroy:water", 1)
+    .condition(
+        ReactionCondition::new(
+            "alcohol hydrohalogenation requires acidic conditions and available halide",
+        )
+        .acidity(AcidityCondition::Acidic),
+    )
+    .activation_energy_kj_per_mol(halogen.activation_energy())
+    .selectivity_profile(SelectivityProfile::new(
+        if site.degree >= 3 {
+            ReactionType::SN1
+        } else {
+            ReactionType::SN2
+        },
+        SiteDescriptorBuilder::from_alcohol_site(site),
+    ))
+    .build())
+}
+
 pub(crate) fn generate_halide_ammonia_substitution(
     site: &HalideSite<'_>,
     resolver: &mut DerivedSubstanceResolver,

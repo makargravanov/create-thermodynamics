@@ -199,6 +199,69 @@ fn reaction_with_prefix<'a>(registry: &'a ChemistryRegistry, prefix: &str) -> &'
         .unwrap_or_else(|| panic!("missing generated reaction with prefix {prefix}"))
 }
 
+fn reaction_with_prefix_and_suffix<'a>(
+    registry: &'a ChemistryRegistry,
+    prefix: &str,
+    suffix: &str,
+) -> &'a Reaction {
+    registry
+        .reactions()
+        .find(|reaction| {
+            reaction.id.as_str().starts_with(prefix) && reaction.id.as_str().ends_with(suffix)
+        })
+        .unwrap_or_else(|| {
+            panic!("missing generated reaction with prefix {prefix} and suffix {suffix}")
+        })
+}
+
+#[test]
+fn alcohol_hydrohalogenation_generates_alkyl_halides_as_a_family() {
+    let registry = generated_registry();
+    let methyl_iodide = reaction_with_prefix_and_suffix(
+        &registry,
+        "alcohol_hydrohalogenation/destroy_methanol/",
+        "/iodide",
+    );
+    assert!(methyl_iodide
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:methanol")));
+    assert!(methyl_iodide
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:hydroiodic_acid")));
+    assert!(methyl_iodide
+        .products
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:iodomethane")));
+    assert!(methyl_iodide
+        .products
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:water")));
+
+    let ethyl_chloride = reaction_with_prefix_and_suffix(
+        &registry,
+        "alcohol_hydrohalogenation/destroy_ethanol/",
+        "/chloride",
+    );
+    assert!(ethyl_chloride
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:ethanol")));
+    assert!(ethyl_chloride
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:hydrochloric_acid")));
+    assert!(ethyl_chloride
+        .products
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:chloroethane")));
+    assert!(ethyl_chloride
+        .products
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:water")));
+}
+
 #[test]
 fn generation_space_indexes_only_substances_inside_scope() {
     let registry = super::super::destroy_registry_builder()
