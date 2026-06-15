@@ -1685,4 +1685,57 @@ mod tests {
             .products
             .contains(&SubstanceId::from("destroy:acetylene"))));
     }
+
+    #[test]
+    fn planner_reaches_iodomethane_through_general_alcohol_hydrohalogenation() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let routes = SynthesisPlanner::new()
+            .with_max_steps(1)
+            .allow_reaction_prefix("alcohol_hydrohalogenation/")
+            .find_routes(
+                &mut registry,
+                [
+                    SubstanceId::from("destroy:methanol"),
+                    SubstanceId::from("destroy:hydroiodic_acid"),
+                ],
+                parse_frowns("CI").unwrap(),
+            )
+            .unwrap();
+
+        assert!(!routes.is_empty());
+        assert!(routes[0].steps.iter().any(|step| step
+            .reaction_id
+            .as_str()
+            .starts_with("alcohol_hydrohalogenation/")));
+        assert!(routes[0].steps.iter().any(|step| step
+            .products
+            .contains(&SubstanceId::from("destroy:iodomethane"))));
+    }
+
+    #[test]
+    fn planner_reaches_trimethyl_borate_by_repeating_borate_esterification() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let routes = SynthesisPlanner::new()
+            .with_max_steps(3)
+            .allow_reaction_prefix("borate_esterification/")
+            .find_routes(
+                &mut registry,
+                [
+                    SubstanceId::from("destroy:boric_acid"),
+                    SubstanceId::from("destroy:methanol"),
+                ],
+                parse_frowns("COB(OC)OC").unwrap(),
+            )
+            .unwrap();
+
+        assert!(!routes.is_empty());
+        assert_eq!(routes[0].steps.len(), 3);
+        assert!(routes[0].steps.iter().all(|step| step
+            .reaction_id
+            .as_str()
+            .starts_with("borate_esterification/")));
+        assert!(routes[0].steps.last().is_some_and(|step| step
+            .products
+            .contains(&SubstanceId::from("destroy:trimethyl_borate"))));
+    }
 }
