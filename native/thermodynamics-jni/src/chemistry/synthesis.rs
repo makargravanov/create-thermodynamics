@@ -491,40 +491,63 @@ impl SynthesisPlanner {
         let mut unreachable_targets = Vec::new();
         for target in targets {
             let producer_reactions = producer_reactions_for_target(&working_registry, &target);
-            let plan = self
-                .clone()
-                .with_max_steps(request.max_steps)
-                .with_max_routes(request.max_routes_per_target)
-                .plan_report(
-                    &working_registry,
-                    SynthesisRequest::for_substance(target.clone())
-                        .with_available_substances(
-                            request
-                                .available_substances
-                                .iter()
-                                .cloned()
-                                .collect::<Vec<_>>(),
-                        )
-                        .with_max_steps(request.max_steps)
-                        .with_max_routes(request.max_routes_per_target),
-                )?;
-            let reachable = matches!(
-                plan.status,
-                SynthesisPlanStatus::TargetAlreadyAvailable | SynthesisPlanStatus::RoutesFound
-            );
+            let mut visiting = BTreeSet::new();
+            let routes = backward_routes_for_target(
+                &working_registry,
+                &self.safety_policy,
+                &request.available_substances,
+                &target,
+                request.max_steps,
+                request.max_routes_per_target,
+                &mut visiting,
+                self,
+            )?;
+            let has_complete_route = routes
+                .iter()
+                .any(|route| route.required_additions.is_empty());
+            let target_already_available = request.available_substances.contains(&target);
+            let reachable = target_already_available || has_complete_route;
             if reachable {
                 reachable_targets.push(target.clone());
             } else {
                 unreachable_targets.push(target.clone());
             }
+            let status = if target_already_available {
+                SynthesisPlanStatus::TargetAlreadyAvailable
+            } else if has_complete_route {
+                SynthesisPlanStatus::RoutesFound
+            } else if !routes.is_empty() {
+                SynthesisPlanStatus::RequiresAdditionalInputs
+            } else if producer_reactions.is_empty() {
+                SynthesisPlanStatus::UnsupportedByCurrentModel
+            } else {
+                SynthesisPlanStatus::SearchLimitReached
+            };
+            let missing_reactants = if has_complete_route {
+                Vec::new()
+            } else {
+                route_required_additions(&routes)
+            };
+            let unsupported_reason = match status {
+                SynthesisPlanStatus::UnsupportedByCurrentModel => Some(format!(
+                    "no known reaction in the current model produces '{}'",
+                    target.as_str()
+                )),
+                SynthesisPlanStatus::SearchLimitReached => Some(format!(
+                    "known producers for '{}' exist, but no route was found within {} step(s)",
+                    target.as_str(),
+                    request.max_steps
+                )),
+                _ => None,
+            };
             target_reports.push(SynthesisTargetReachability {
                 target,
-                status: plan.status,
+                status,
                 has_known_producer: !producer_reactions.is_empty(),
                 producer_reactions,
-                missing_reactants: plan.required_additions,
-                routes: plan.routes,
-                unsupported_reason: plan.unsupported_reason,
+                missing_reactants,
+                routes,
+                unsupported_reason,
             });
         }
 
@@ -1391,6 +1414,71 @@ mod tests {
                     && target.missing_reactants.is_empty()
             }));
         assert_eq!(registry.reactions().count(), before_reactions);
+    }
+
+    #[test]
+    fn reachability_gap_report_covers_representative_closed_families_without_mutating_registry() {
+        let registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let before_reactions = registry.reactions().count();
+        let representative_targets = [
+            "destroy:acetone_cyanohydrin",
+            "destroy:cubane",
+            "destroy:iodomethane",
+            "destroy:isopropanol",
+        ]
+        .into_iter()
+        .map(SubstanceId::from)
+        .collect::<Vec<_>>();
+        let simple_feedstocks = [
+            "destroy:propene",
+            "destroy:methanol",
+            "destroy:acetone",
+            "destroy:water",
+            "destroy:hydrogen_cyanide",
+            "destroy:cyanide",
+            "destroy:hydroiodic_acid",
+            "destroy:proton",
+        ]
+        .into_iter()
+        .map(SubstanceId::from)
+        .collect::<Vec<_>>();
+        let report = SynthesisPlanner::new()
+            .with_max_routes(2)
+            .analyze_reachability(
+                &registry,
+                SynthesisReachabilityRequest::new(representative_targets.clone())
+                    .with_available_substances(simple_feedstocks)
+                    .with_generation_iterations(1)
+                    .with_max_steps(4)
+                    .with_max_routes_per_target(2),
+            )
+            .unwrap();
+
+        assert_eq!(report.target_count, representative_targets.len());
+        assert_eq!(registry.reactions().count(), before_reactions);
+        for target in [
+            "destroy:acetone_cyanohydrin",
+            "destroy:iodomethane",
+            "destroy:isopropanol",
+        ] {
+            assert!(
+                report.reachable_targets.contains(&SubstanceId::from(target)),
+                "{target} should remain reachable through a general reaction family"
+            );
+        }
+        let cubane_report = report
+            .target_reports
+            .iter()
+            .find(|target| target.target == SubstanceId::from("destroy:cubane"))
+            .expect("representative report must include cubane");
+        assert_eq!(
+            cubane_report.status,
+            SynthesisPlanStatus::UnsupportedByCurrentModel
+        );
+        assert!(
+            cubane_report.routes.is_empty(),
+            "cubane must not be reported as synthesizable unless a general strained-ring route exists"
+        );
     }
 
     #[test]
