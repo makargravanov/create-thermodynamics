@@ -33,6 +33,7 @@ pub(crate) enum AdditionGroup {
     Atom(&'static str),
     Hydroxyl,
     Borane,
+    Nitrile,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -143,6 +144,22 @@ pub(crate) fn electrophilic_addition_specs(alkyne: bool) -> Vec<ElectrophilicAdd
             alkyne_stereo_rule: None,
             nucleophile_ratio: 1,
             activation_energy,
+            catalyst: None,
+            external_catalyst: Some("forge:dusts/nickel"),
+            display_as_reversible: false,
+        },
+        ElectrophilicAdditionSpec {
+            prefix: if alkyne {
+                "alkyne_hydrocyanation"
+            } else {
+                "alkene_hydrocyanation"
+            },
+            electrophile: "destroy:hydrogen_cyanide",
+            high_degree_group: AdditionGroup::Nitrile,
+            low_degree_group: AdditionGroup::Atom("H"),
+            alkyne_stereo_rule: None,
+            nucleophile_ratio: 1,
+            activation_energy: if alkyne { 24.0 } else { 30.0 },
             catalyst: None,
             external_catalyst: Some("forge:dusts/nickel"),
             display_as_reversible: false,

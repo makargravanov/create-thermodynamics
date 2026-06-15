@@ -212,6 +212,35 @@ fn reaction_with_prefix_and_suffix<'a>(
         })
 }
 
+fn reaction_product_ids(reaction: &Reaction) -> Vec<SubstanceId> {
+    let mut products = reaction
+        .products
+        .iter()
+        .map(|term| term.substance_id.clone())
+        .collect::<Vec<_>>();
+    for channel in &reaction.channels {
+        products.extend(
+            channel
+                .products
+                .iter()
+                .map(|term| term.substance_id.clone()),
+        );
+    }
+    if let Some(distribution) = &reaction.product_distribution {
+        for variant in &distribution.variants {
+            products.extend(
+                variant
+                    .products
+                    .iter()
+                    .map(|term| term.substance_id.clone()),
+            );
+        }
+    }
+    products.sort();
+    products.dedup();
+    products
+}
+
 #[test]
 fn alcohol_hydrohalogenation_generates_alkyl_halides_as_a_family() {
     let registry = generated_registry();
@@ -296,6 +325,49 @@ fn borate_esterification_generates_boron_esters_as_a_family() {
         .products
         .iter()
         .any(|term| term.substance_id == SubstanceId::from("destroy:water")));
+}
+
+#[test]
+fn alkene_hydrocyanation_generates_nitriles_as_a_family() {
+    let registry = generated_registry();
+    let ethene_hydrocyanation =
+        reaction_with_prefix(&registry, "alkene_hydrocyanation/destroy_ethene/");
+    assert!(ethene_hydrocyanation
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:ethene")));
+    assert!(ethene_hydrocyanation
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:hydrogen_cyanide")));
+    let ethene_product_ids = reaction_product_ids(ethene_hydrocyanation);
+    let ethene_product = ethene_product_ids
+        .iter()
+        .filter_map(|product| registry.substance(product).ok())
+        .filter_map(|substance| substance.molecular_structure.as_ref())
+        .find(|structure| {
+            try_find_reactive_sites(structure).is_ok_and(|sites| {
+                sites
+                    .iter()
+                    .any(|site| site.kind == ReactiveSiteKind::Nitrile)
+            })
+        })
+        .expect("ethene hydrocyanation must produce a molecular nitrile");
+    assert!(try_find_reactive_sites(ethene_product)
+        .unwrap()
+        .iter()
+        .any(|site| site.kind == ReactiveSiteKind::Nitrile));
+
+    let propene_hydrocyanation =
+        reaction_with_prefix(&registry, "alkene_hydrocyanation/destroy_propene/");
+    assert!(propene_hydrocyanation
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:propene")));
+    assert!(propene_hydrocyanation
+        .reactants
+        .iter()
+        .any(|term| term.substance_id == SubstanceId::from("destroy:hydrogen_cyanide")));
 }
 
 #[test]

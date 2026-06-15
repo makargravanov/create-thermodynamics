@@ -27,6 +27,10 @@ pub(crate) fn add_addition_group(
             editor.add_atom(boron, "H", 0.0, 1.0)?;
             editor.add_atom(boron, "H", 0.0, 1.0)?;
         }
+        AdditionGroup::Nitrile => {
+            let carbon = editor.add_atom(parent, "C", 0.0, 1.0)?;
+            editor.add_atom(carbon, "N", 0.0, 3.0)?;
+        }
     }
     Ok(())
 }
