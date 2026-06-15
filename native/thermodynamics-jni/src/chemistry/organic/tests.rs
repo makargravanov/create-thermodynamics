@@ -1027,6 +1027,91 @@ fn organometallic_reagent_adds_to_nitrile_and_opens_epoxide() {
 }
 
 #[test]
+fn organometallic_reagent_carboxylates_with_carbon_dioxide() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let methyl_magnesium_chloride = dynamic.resolve_frowns("CMgCl").unwrap();
+    dynamic
+        .generate_reactions_for_substances(
+            [
+                methyl_magnesium_chloride,
+                SubstanceId::from("destroy:carbon_dioxide"),
+                SubstanceId::from("destroy:water"),
+            ],
+            1,
+        )
+        .unwrap();
+
+    let carboxylation = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("organometallic_carboxylation/")
+        })
+        .expect("organometallic reagent must carboxylate with carbon dioxide");
+    assert!(carboxylation
+        .reactants
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:carbon_dioxide"));
+    assert!(carboxylation
+        .products
+        .iter()
+        .any(|term| term.substance_id.as_str() == "destroy:acetic_acid"));
+    assert!(!carboxylation.external_products.is_empty());
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
+fn bridgehead_halide_can_form_organometallic_but_ordinary_tertiary_halide_cannot() {
+    let mut dynamic =
+        super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+    let cubyl_chloride = dynamic.resolve_frowns("destroy:cubane:Cl,,,,,,,").unwrap();
+    let tert_butyl_chloride = dynamic.resolve_frowns("CC(C)(C)Cl").unwrap();
+    dynamic
+        .generate_reactions_for_substances([cubyl_chloride.clone(), tert_butyl_chloride.clone()], 1)
+        .unwrap();
+
+    let bridgehead_organometallic = dynamic
+        .reactions()
+        .find(|reaction| {
+            reaction
+                .id
+                .as_str()
+                .starts_with("organomagnesium_formation/")
+                && reaction
+                    .reactants
+                    .iter()
+                    .any(|term| term.substance_id == cubyl_chloride)
+        })
+        .expect("bridgehead halide must be eligible for organometallic insertion");
+    assert!(dynamic
+        .substance(&bridgehead_organometallic.products[0].substance_id)
+        .unwrap()
+        .molecular_structure
+        .as_ref()
+        .is_some_and(|structure| try_find_reactive_sites(structure)
+            .unwrap()
+            .into_iter()
+            .any(|site| site.kind == ReactiveSiteKind::Organomagnesium)));
+
+    assert!(dynamic.reactions().all(|reaction| {
+        !reaction
+            .id
+            .as_str()
+            .starts_with("organomagnesium_formation/")
+            || reaction
+                .reactants
+                .iter()
+                .all(|term| term.substance_id != tert_butyl_chloride)
+    }));
+
+    dynamic.to_registry().unwrap();
+}
+
+#[test]
 fn alpha_carbon_generators_create_halogenation_dehydration_enamine_and_alkylation() {
     let mut dynamic =
         super::super::dynamic::DynamicChemistryRegistry::from_destroy_catalog().unwrap();

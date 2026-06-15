@@ -8,7 +8,7 @@ use crate::chemistry::molecule::{MolecularEditor, MolecularStructure};
 use crate::chemistry::reaction::Reaction;
 use crate::chemistry::selectivity::{
     engine::SiteDescriptorBuilder,
-    types::{ReactionType, SelectivityProfile},
+    types::{ReactionType, SelectivityProfile, SubstitutionDegree},
     NucleophileStrength,
 };
 
@@ -46,7 +46,9 @@ pub(crate) fn generate_organometallic_formation(
     metal: OrganometallicFormationMetal,
     resolver: &mut DerivedSubstanceResolver,
 ) -> ChemistryResult<Option<Reaction>> {
-    if site.degree >= 3 {
+    if site.degree >= 3
+        && !is_bridgehead_organometallic_carbon(site.participant.structure, site.carbon)
+    {
         return Ok(None);
     }
     let halogen_element = site.participant.structure.atoms[site.halogen]
@@ -105,6 +107,63 @@ pub(crate) fn generate_organometallic_formation(
         );
     }
     Ok(Some(builder.build()))
+}
+
+fn is_bridgehead_organometallic_carbon(structure: &MolecularStructure, carbon: usize) -> bool {
+    if structure.atoms[carbon].element != "C" || structure.carbon_degree(carbon) < 3 {
+        return false;
+    }
+    let carbon_neighbors = structure
+        .neighbors(carbon)
+        .into_iter()
+        .filter_map(|(neighbor, order)| {
+            (structure.atoms[neighbor].element == "C"
+                && crate::chemistry::molecule::bond_order_matches(order, 1.0))
+            .then_some(neighbor)
+        })
+        .collect::<Vec<_>>();
+    if carbon_neighbors.len() < 3 {
+        return false;
+    }
+    for first_index in 0..carbon_neighbors.len() {
+        for second_index in (first_index + 1)..carbon_neighbors.len() {
+            if !path_exists_avoiding_atom(
+                structure,
+                carbon_neighbors[first_index],
+                carbon_neighbors[second_index],
+                carbon,
+            ) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn path_exists_avoiding_atom(
+    structure: &MolecularStructure,
+    start: usize,
+    target: usize,
+    excluded: usize,
+) -> bool {
+    let mut seen = vec![false; structure.atoms.len()];
+    let mut stack = vec![start];
+    seen[excluded] = true;
+    while let Some(atom) = stack.pop() {
+        if atom == target {
+            return true;
+        }
+        if seen[atom] {
+            continue;
+        }
+        seen[atom] = true;
+        for (neighbor, _) in structure.neighbors(atom) {
+            if !seen[neighbor] && structure.atoms[neighbor].element != "H" {
+                stack.push(neighbor);
+            }
+        }
+    }
+    false
 }
 
 pub(crate) fn generate_organometallic_nitrile_addition(
@@ -244,6 +303,126 @@ pub(crate) fn generate_organometallic_epoxide_opening(
     )
     .activation_energy_kj_per_mol(14.0)
     .build())
+}
+
+pub(crate) fn generate_organometallic_carboxylation(
+    organometallic: SiteParticipant<'_>,
+    resolver: &mut DerivedSubstanceResolver,
+) -> ChemistryResult<Option<Reaction>> {
+    if organometallic.site.kind == crate::chemistry::reactive_site::ReactiveSiteKind::Organocopper {
+        return Ok(None);
+    }
+    let (organo_fragment, organo_carbon, residue) =
+        organometallic_fragment(organometallic.structure, &organometallic.site)?;
+    let carbon_dioxide = crate::chemistry::frowns::parse_frowns("O=C=O")?;
+    let carbonyl_carbon = carbon_dioxide
+        .atoms
+        .iter()
+        .enumerate()
+        .find_map(|(index, atom)| (atom.element == "C").then_some(index))
+        .ok_or_else(|| ChemistryError::InvalidReaction {
+            reaction_id: generated_site_reaction_id(
+                "organometallic_carboxylation",
+                &organometallic,
+            ),
+            reason: "carbon dioxide graph has no carbon atom".to_string(),
+        })?;
+    let mut editor = MolecularEditor::new(&organo_fragment);
+    let carbon_dioxide_mapping =
+        editor.add_group_with_mapping(organo_carbon, &carbon_dioxide, carbonyl_carbon, 1.0)?;
+    let carboxyl_carbon = carbon_dioxide_mapping[carbonyl_carbon];
+    let hydroxyl_oxygen = carbon_dioxide
+        .neighbors(carbonyl_carbon)
+        .into_iter()
+        .find_map(|(oxygen, order)| {
+            (carbon_dioxide.atoms[oxygen].element == "O"
+                && crate::chemistry::molecule::bond_order_matches(order, 2.0))
+            .then_some(carbon_dioxide_mapping[oxygen])
+        })
+        .ok_or_else(|| ChemistryError::InvalidReaction {
+            reaction_id: generated_site_reaction_id(
+                "organometallic_carboxylation",
+                &organometallic,
+            ),
+            reason: "carbon dioxide graph has no oxygen to protonate".to_string(),
+        })?;
+    editor.set_bond_order(carboxyl_carbon, hydroxyl_oxygen, 1.0)?;
+    editor.add_atom(hydroxyl_oxygen, "H", 0.0, 1.0)?;
+    let acid = editor.finish()?;
+    let product = resolver.resolve(acid)?;
+
+    let organometallic_desc =
+        organometallic_site_descriptor(organometallic.structure, &organometallic.site)?;
+    Ok(Some(
+        Reaction::builder(generated_site_reaction_id(
+            "organometallic_carboxylation",
+            &organometallic,
+        ))
+        .reactant(organometallic.substance.id.clone(), 1, 1)
+        .reactant("destroy:carbon_dioxide", 1, 1)
+        .reactant("destroy:water", 1, 1)
+        .product(product, 1)
+        .chemical_external_product(
+            "organometallic carboxylation metal hydroxide salt",
+            1.0,
+            residue.mass + 17.01,
+            residue.charge,
+        )
+        .condition(
+            ReactionCondition::new(
+                "organometallic carboxylation requires dry CO2 addition and wet workup",
+            )
+            .max_oxygen_activity(0.02)
+            .atmosphere(AtmosphereCondition::Inert),
+        )
+        .activation_energy_kj_per_mol(16.0)
+        .selectivity_profile(
+            SelectivityProfile::new(ReactionType::CarbonylAddition, organometallic_desc)
+                .with_nucleophile_strength(NucleophileStrength::VeryStrong),
+        )
+        .build(),
+    ))
+}
+
+fn organometallic_site_descriptor(
+    structure: &MolecularStructure,
+    site: &crate::chemistry::reactive_site::ReactiveSite,
+) -> ChemistryResult<crate::chemistry::selectivity::SiteDescriptor> {
+    let (organo_carbon, _, _) = organometallic_atoms(structure, site)?;
+    let degree = match structure.carbon_degree(organo_carbon) {
+        0 | 1 => SubstitutionDegree::Primary,
+        2 => SubstitutionDegree::Secondary,
+        _ => SubstitutionDegree::Tertiary,
+    };
+    let has_beta_hydrogen =
+        structure
+            .neighbors(organo_carbon)
+            .into_iter()
+            .any(|(neighbor, order)| {
+                structure.atoms[neighbor].element == "C"
+                    && crate::chemistry::molecule::bond_order_matches(order, 1.0)
+                    && structure.hydrogen_count(neighbor) > 0
+            });
+    let electron_withdrawing = structure
+        .neighbors(organo_carbon)
+        .into_iter()
+        .filter(|(neighbor, _)| {
+            matches!(
+                structure.atoms[*neighbor].element.as_str(),
+                "O" | "N" | "S" | "F" | "Cl" | "Br" | "I"
+            )
+        })
+        .count() as u32;
+    Ok(SiteDescriptorBuilder::build(
+        site.kind.clone(),
+        degree,
+        structure.carbon_degree(organo_carbon).saturating_sub(1) as u32,
+        electron_withdrawing,
+        0,
+        has_beta_hydrogen,
+        false,
+        false,
+    ))
 }
 
 struct OrganometallicResidue {

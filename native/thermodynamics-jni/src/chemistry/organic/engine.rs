@@ -1333,6 +1333,11 @@ fn generate_site_reactions_for_seed_participants<'a>(
             ReactiveSiteKind::Organomagnesium
             | ReactiveSiteKind::Organolithium
             | ReactiveSiteKind::Organocopper => {
+                if let Some(reaction) =
+                    generate_organometallic_carboxylation(seed.clone(), resolver)?
+                {
+                    push_unique_reaction(reactions, reaction_ids, reaction)?;
+                }
                 for carbonyl_kind in [
                     ReactiveSiteKind::Aldehyde,
                     ReactiveSiteKind::Ketone,
