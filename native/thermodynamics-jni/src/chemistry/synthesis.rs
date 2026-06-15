@@ -1938,4 +1938,58 @@ mod tests {
             .products
             .contains(&SubstanceId::from("destroy:trimethyl_borate"))));
     }
+
+    #[test]
+    fn planner_reaches_cubane_dicarboxylic_acid_through_bridgehead_functionalization() {
+        let registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let routes = SynthesisPlanner::new()
+            .with_max_steps(6)
+            .with_max_routes(4)
+            .allow_reaction_prefix("radical_halogenation/")
+            .allow_reaction_prefix("organomagnesium_formation/")
+            .allow_reaction_prefix("organometallic_carboxylation/")
+            .plan_routes(
+                &registry,
+                SynthesisRequest::for_substance("destroy:cubanedicarboxylic_acid")
+                    .with_available_substance("destroy:cubane")
+                    .with_available_substance("destroy:chlorine")
+                    .with_available_substance("destroy:carbon_dioxide")
+                    .with_available_substance("destroy:water"),
+            )
+            .unwrap();
+
+        assert!(
+            !routes.is_empty(),
+            "cubane dicarboxylic acid should be reachable through general bridgehead halogenation, organometallic formation, and carboxylation"
+        );
+        let reaction_ids = routes[0]
+            .steps
+            .iter()
+            .map(|step| step.reaction_id.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            reaction_ids
+                .iter()
+                .filter(|id| id.starts_with("radical_halogenation/"))
+                .count()
+                >= 2
+        );
+        assert!(
+            reaction_ids
+                .iter()
+                .filter(|id| id.starts_with("organomagnesium_formation/"))
+                .count()
+                >= 2
+        );
+        assert!(
+            reaction_ids
+                .iter()
+                .filter(|id| id.starts_with("organometallic_carboxylation/"))
+                .count()
+                >= 2
+        );
+        assert!(routes[0].steps.last().is_some_and(|step| step
+            .products
+            .contains(&SubstanceId::from("destroy:cubanedicarboxylic_acid"))));
+    }
 }
