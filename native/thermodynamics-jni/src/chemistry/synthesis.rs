@@ -1687,6 +1687,44 @@ mod tests {
     }
 
     #[test]
+    fn planner_reaches_conjugated_dienes_through_general_pyrolysis() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let butane = registry.resolve_frowns("CCCC").unwrap();
+        let butadiene_routes = SynthesisPlanner::new()
+            .with_max_steps(2)
+            .allow_reaction_prefix("pyrolysis/")
+            .find_routes(&mut registry, [butane], parse_frowns("C=CC=C").unwrap())
+            .unwrap();
+        assert!(!butadiene_routes.is_empty());
+        assert!(butadiene_routes[0]
+            .steps
+            .iter()
+            .all(|step| step.reaction_id.as_str().starts_with("pyrolysis/")));
+        assert!(butadiene_routes[0].steps.last().is_some_and(|step| step
+            .products
+            .contains(&SubstanceId::from("destroy:butadiene"))));
+
+        let isopentane = registry.resolve_frowns("CC(C)CC").unwrap();
+        let isoprene_routes = SynthesisPlanner::new()
+            .with_max_steps(2)
+            .allow_reaction_prefix("pyrolysis/")
+            .find_routes(
+                &mut registry,
+                [isopentane],
+                parse_frowns("C=C(C)C=C").unwrap(),
+            )
+            .unwrap();
+        assert!(!isoprene_routes.is_empty());
+        assert!(isoprene_routes[0]
+            .steps
+            .iter()
+            .all(|step| step.reaction_id.as_str().starts_with("pyrolysis/")));
+        assert!(isoprene_routes[0].steps.last().is_some_and(|step| step
+            .products
+            .contains(&SubstanceId::from("destroy:isoprene"))));
+    }
+
+    #[test]
     fn planner_reaches_iodomethane_through_general_alcohol_hydrohalogenation() {
         let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
         let routes = SynthesisPlanner::new()
