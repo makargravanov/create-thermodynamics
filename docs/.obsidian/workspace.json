@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "chemistry/09-complete-organic-synthesis-implementation-plan.md",
+                "file": "chemistry/10-generalized-reachability-closure-plan.md",
                 "mode": "preview",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "09-complete-organic-synthesis-implementation-plan"
+              "title": "10-generalized-reachability-closure-plan"
             }
           }
         ]
@@ -183,10 +183,12 @@
       "bases:Создать новую базу": false
     }
   },
-  "active": "f3ef191ded25ae4b",
+  "active": "bbd4f6343fb3fef4",
   "lastOpenFiles": [
-    "chemistry/08-generalized-organic-synthesis-plan.md",
+    "chemistry/Без названия",
     "chemistry/09-complete-organic-synthesis-implementation-plan.md",
+    "chemistry/10-generalized-reachability-closure-plan.md",
+    "chemistry/08-generalized-organic-synthesis-plan.md",
     "chemistry/files/organic-aromatic-catalog.md",
     "chemistry/files/core-error.md",
     "chemistry/files/core-error.md.tmp.11948.34fcfcc140e0",
