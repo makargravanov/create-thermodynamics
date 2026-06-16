@@ -40,8 +40,42 @@ Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_n
 ) -> jint
 ```
 
-Возвращает `1`. Используется JVM-стороной для проверки совместимости
+Возвращает `2`. Используется JVM-стороной для проверки совместимости
 нативной библиотеки при загрузке.
+
+### nativeReplaceMinecraftItemChemicalBindings
+
+```rust
+Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeReplaceMinecraftItemChemicalBindings(
+    item_ids: Array<String>,
+    substance_ids: Array<String>,
+    mol_per_items: DoubleArray,
+)
+```
+
+Атомарно заменяет весь набор соответствий Minecraft-предметов химическим веществам.
+JVM-сторона передаёт три массива одинаковой длины:
+
+- `item_ids` — идентификаторы предметов Minecraft;
+- `substance_ids` — устойчивые `SubstanceId` из химического каталога;
+- `mol_per_items` — количество вещества в одном предмете.
+
+Rust сначала строит новый `MinecraftChemicalRegistry` во временной структуре и
+проверяет все записи. Если есть неизвестное вещество, дубль предмета, `NaN`,
+бесконечность или неположительное количество, текущий набор биндингов не меняется,
+а JVM получает `IllegalArgumentException`.
+
+### nativeClearMinecraftItemChemicalBindings
+
+Очищает все предметные соответствия.
+
+### nativeMinecraftItemChemicalBindingCount
+
+Возвращает количество зарегистрированных предметных соответствий.
+
+### nativeHasMinecraftItemChemicalBinding
+
+Проверяет, есть ли соответствие для конкретного идентификатора предмета.
 
 ## Поток данных / Алгоритм
 
@@ -65,8 +99,10 @@ Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_n
 
 - Дублирующиеся ID реакций при кодогенерации → `panic!` в `build.rs`
 - Несбалансированные скобки в Java-источнике → `panic!` в `matching_paren`
-- ABI-версия `1` жёстко зашита; изменение нативного API требует её инкремента
+- ABI-версия `2` жёстко зашита; изменение нативного API требует её инкремента
   и синхронизации с JVM-стороной
+- Предметные биндинги заменяются атомарно: ошибка в одной записи не оставляет
+  частично применённый набор
 
 ## Связи
 
