@@ -8,4 +8,4 @@ pub use peripheral::Peripheral;
 pub use reactor::{
     Input, Output, PhaseEntry, Reactor, SubstanceEntry, TransitionMode, ZoneId, ZoneTransition,
 };
-pub use zone::ReactorZone;
+pub use zone::{ReactorVolumeMode, ReactorZone};

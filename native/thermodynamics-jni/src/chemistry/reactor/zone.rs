@@ -1,16 +1,26 @@
 use crate::chemistry::error::{ChemistryError, ChemistryResult};
-use crate::chemistry::mixture::{Mixture, DEFAULT_TEMPERATURE_KELVIN};
+use crate::chemistry::mixture::{
+    Mixture, MixturePhase, DEFAULT_TEMPERATURE_KELVIN, TRACE_CONCENTRATION_MOL_PER_BUCKET,
+};
 use crate::chemistry::registry::ChemistryRegistry;
 use crate::chemistry::substance::SubstanceId;
 
 use super::peripheral::Peripheral;
 
 const MIN_HEADSPACE_CUBIC_METERS: f64 = 1.0e-9;
+const VOLUME_TOLERANCE_CUBIC_METERS: f64 = 1.0e-12;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReactorVolumeMode {
+    HeadspaceRequired,
+    LiquidFilled,
+}
 
 #[derive(Debug, Clone)]
 pub struct ReactorZone {
     mixture: Mixture,
     volume_cubic_meters: f64,
+    volume_mode: ReactorVolumeMode,
     sealed: bool,
     elapsed_seconds: f64,
     peripherals: Vec<Peripheral>,
@@ -23,10 +33,16 @@ impl ReactorZone {
         Ok(Self {
             mixture,
             volume_cubic_meters,
+            volume_mode: ReactorVolumeMode::HeadspaceRequired,
             sealed: false,
             elapsed_seconds: 0.0,
             peripherals: Vec::new(),
         })
+    }
+
+    pub fn with_volume_mode(mut self, volume_mode: ReactorVolumeMode) -> Self {
+        self.volume_mode = volume_mode;
+        self
     }
 
     pub fn with_peripheral(mut self, peripheral: Peripheral) -> Self {
@@ -80,15 +96,36 @@ impl ReactorZone {
         self.volume_cubic_meters
     }
 
-    pub fn set_volume_cubic_meters(&mut self, volume: f64) -> ChemistryResult<()> {
+    pub fn volume_mode(&self) -> ReactorVolumeMode {
+        self.volume_mode
+    }
+
+    pub fn set_volume_mode(&mut self, volume_mode: ReactorVolumeMode) {
+        self.volume_mode = volume_mode;
+    }
+
+    pub fn set_volume_cubic_meters(
+        &mut self,
+        registry: &ChemistryRegistry,
+        volume: f64,
+    ) -> ChemistryResult<()> {
         if !volume.is_finite() || volume <= MIN_HEADSPACE_CUBIC_METERS {
             return Err(ChemistryError::InvalidMixtureState(format!(
                 "reactor zone volume must be finite and greater than {MIN_HEADSPACE_CUBIC_METERS}, got {volume}"
             )));
         }
+        let old_volume = self.volume_cubic_meters;
         self.volume_cubic_meters = volume;
-        self.mixture.set_gas_volume_cubic_meters(volume)?;
-        Ok(())
+        let result = (|| {
+            let condensed = self.condensed_volume_cubic_meters(registry)?;
+            let headspace =
+                self.validated_headspace_for_mixture(&self.mixture, condensed, "reactor zone")?;
+            self.mixture.set_gas_volume_cubic_meters(headspace)
+        })();
+        if result.is_err() {
+            self.volume_cubic_meters = old_volume;
+        }
+        result
     }
 
     pub fn sealed(&self) -> bool {
@@ -108,7 +145,11 @@ impl ReactorZone {
     }
 
     pub fn pressure_pascal(&self) -> f64 {
-        self.mixture.gas_pressure_pascal()
+        if self.non_condensed_mol_per_bucket() <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+            0.0
+        } else {
+            self.mixture.gas_pressure_pascal()
+        }
     }
 
     pub fn concentration_of(&self, substance_id: &SubstanceId) -> f64 {
@@ -142,13 +183,8 @@ impl ReactorZone {
         registry: &ChemistryRegistry,
     ) -> ChemistryResult<()> {
         let condensed = self.condensed_volume_cubic_meters(registry)?;
-        let headspace = self.volume_cubic_meters - condensed;
-        if !headspace.is_finite() || headspace <= MIN_HEADSPACE_CUBIC_METERS {
-            return Err(ChemistryError::InvalidMixtureState(format!(
-                "reactor zone is overfilled: volume={} m^3, condensed={} m^3, required positive headspace>{MIN_HEADSPACE_CUBIC_METERS} m^3",
-                self.volume_cubic_meters, condensed
-            )));
-        }
+        let headspace =
+            self.validated_headspace_for_mixture(&self.mixture, condensed, "reactor zone")?;
         self.mixture.set_gas_volume_cubic_meters(headspace)
     }
 
@@ -164,17 +200,35 @@ impl ReactorZone {
             )));
         }
         let mut predicted = self.mixture.clone();
-        predicted.add_substance(registry, substance_id.clone(), mol_per_bucket)?;
-        predicted.equilibrate_phases(registry)?;
-        predicted.equilibrate_vapor_liquid(registry, 1.0)?;
-        let condensed = predicted.condensed_volume_cubic_meters(registry)?;
-        let headspace = self.volume_cubic_meters - condensed;
-        if !headspace.is_finite() || headspace <= MIN_HEADSPACE_CUBIC_METERS {
-            return Err(ChemistryError::InvalidMixtureState(format!(
-                "reactor zone cannot accept {mol_per_bucket} mol/bucket of '{substance_id}': volume={} m^3, predicted condensed={} m^3, required positive headspace>{MIN_HEADSPACE_CUBIC_METERS} m^3",
-                self.volume_cubic_meters, condensed
-            )));
+        match self.volume_mode {
+            ReactorVolumeMode::HeadspaceRequired => {
+                predicted.add_substance(registry, substance_id.clone(), mol_per_bucket)?;
+            }
+            ReactorVolumeMode::LiquidFilled => {
+                predicted.add_substance_without_vapor_liquid_equilibrium(
+                    registry,
+                    substance_id.clone(),
+                    mol_per_bucket,
+                )?;
+            }
         }
+        let condensed_before_vle = predicted.condensed_volume_cubic_meters(registry)?;
+        let headspace_before_vle = self.validated_headspace_for_mixture(
+            &predicted,
+            condensed_before_vle,
+            "predicted reactor zone",
+        )?;
+        if headspace_before_vle > MIN_HEADSPACE_CUBIC_METERS {
+            predicted.set_gas_volume_cubic_meters(headspace_before_vle)?;
+            predicted.equilibrate_vapor_liquid(registry, 1.0)?;
+        }
+        let condensed = predicted.condensed_volume_cubic_meters(registry)?;
+        self.validated_headspace_for_mixture(&predicted, condensed, "predicted reactor zone")
+            .map_err(|error| {
+                ChemistryError::InvalidMixtureState(format!(
+                    "reactor zone cannot accept {mol_per_bucket} mol/bucket of '{substance_id}': {error}"
+                ))
+            })?;
         Ok(())
     }
 
@@ -185,8 +239,20 @@ impl ReactorZone {
         mol_per_bucket: f64,
     ) -> ChemistryResult<()> {
         self.can_accept_substance(registry, &substance_id, mol_per_bucket)?;
-        self.mixture
-            .add_substance(registry, substance_id, mol_per_bucket)?;
+        match self.volume_mode {
+            ReactorVolumeMode::HeadspaceRequired => {
+                self.mixture
+                    .add_substance(registry, substance_id, mol_per_bucket)?;
+            }
+            ReactorVolumeMode::LiquidFilled => {
+                self.mixture
+                    .add_substance_without_vapor_liquid_equilibrium(
+                        registry,
+                        substance_id,
+                        mol_per_bucket,
+                    )?;
+            }
+        }
         self.refresh_headspace_volume(registry)
     }
 
@@ -204,4 +270,54 @@ impl ReactorZone {
         result?;
         self.refresh_headspace_volume(registry)
     }
+
+    fn non_condensed_mol_per_bucket(&self) -> f64 {
+        non_condensed_mol_per_bucket(&self.mixture)
+    }
+
+    fn validated_headspace_for_mixture(
+        &self,
+        mixture: &Mixture,
+        condensed: f64,
+        context: &str,
+    ) -> ChemistryResult<f64> {
+        let headspace = self.volume_cubic_meters - condensed;
+        if !headspace.is_finite() {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "{context} headspace is not finite: volume={} m^3, condensed={condensed} m^3",
+                self.volume_cubic_meters
+            )));
+        }
+        if headspace > MIN_HEADSPACE_CUBIC_METERS {
+            return Ok(headspace);
+        }
+        if headspace < -VOLUME_TOLERANCE_CUBIC_METERS {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "{context} is overfilled: volume={} m^3, condensed={condensed} m^3",
+                self.volume_cubic_meters
+            )));
+        }
+        match self.volume_mode {
+            ReactorVolumeMode::HeadspaceRequired => Err(ChemistryError::InvalidMixtureState(
+                format!(
+                    "{context} requires positive headspace>{MIN_HEADSPACE_CUBIC_METERS} m^3: volume={} m^3, condensed={condensed} m^3",
+                    self.volume_cubic_meters
+                ),
+            )),
+            ReactorVolumeMode::LiquidFilled => {
+                let gas = non_condensed_mol_per_bucket(mixture);
+                if gas > TRACE_CONCENTRATION_MOL_PER_BUCKET {
+                    return Err(ChemistryError::InvalidMixtureState(format!(
+                        "{context} is liquid-filled but contains {gas} mol/bucket of gas or supercritical fluid"
+                    )));
+                }
+                Ok(MIN_HEADSPACE_CUBIC_METERS)
+            }
+        }
+    }
+}
+
+fn non_condensed_mol_per_bucket(mixture: &Mixture) -> f64 {
+    mixture.total_concentration_in_phase(MixturePhase::Gas)
+        + mixture.total_concentration_in_phase(MixturePhase::SupercriticalFluid)
 }

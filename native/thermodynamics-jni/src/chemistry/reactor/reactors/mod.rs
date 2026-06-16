@@ -5,7 +5,7 @@ use crate::chemistry::reactor::peripheral::{
 use crate::chemistry::reactor::reactor::{
     PhaseEntry, Reactor, SubstanceEntry, TransitionMode, ZoneId, ZoneTransition,
 };
-use crate::chemistry::reactor::zone::ReactorZone;
+use crate::chemistry::reactor::zone::{ReactorVolumeMode, ReactorZone};
 use crate::chemistry::substance::SubstanceId;
 use crate::chemistry::ChemistryResult;
 
@@ -178,6 +178,19 @@ mod tests {
     use super::*;
     use crate::chemistry::destroy_registry_builder;
     use crate::chemistry::reactor::io;
+    use crate::chemistry::registry::ChemistryRegistry;
+
+    fn liquid_amount_for_condensed_volume(
+        registry: &ChemistryRegistry,
+        substance_id: &SubstanceId,
+        condensed_volume_cubic_meters: f64,
+    ) -> f64 {
+        let substance = registry.substance_index(substance_id).unwrap();
+        let properties = registry.substance_properties();
+        condensed_volume_cubic_meters / crate::chemistry::mixture::DEFAULT_GAS_VOLUME_CUBIC_METERS
+            * properties.liquid_density_grams_per_bucket[substance.as_usize()]
+            / properties.molar_mass_grams[substance.as_usize()]
+    }
 
     #[test]
     fn distillation_column_separates_ethanol_from_water() {
@@ -560,6 +573,32 @@ mod tests {
     }
 
     #[test]
+    fn reactor_zone_rejects_volume_shrink_that_would_overfill() {
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let water_id = SubstanceId::from("destroy:water");
+        let mut zone = ReactorZone::new(0.001).unwrap();
+        zone.add_substance_checked(&registry, water_id, 10.0)
+            .unwrap();
+        let original_volume = zone.volume_cubic_meters();
+        let original_gas_volume = zone.mixture().gas_volume_cubic_meters();
+        let condensed = zone.condensed_volume_cubic_meters(&registry).unwrap();
+
+        let error = zone
+            .set_volume_cubic_meters(&registry, condensed * 0.5)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            crate::chemistry::ChemistryError::InvalidMixtureState(_)
+        ));
+        assert_eq!(zone.volume_cubic_meters(), original_volume);
+        assert_eq!(
+            zone.mixture().gas_volume_cubic_meters(),
+            original_gas_volume
+        );
+    }
+
+    #[test]
     fn reactor_zone_rejects_liquid_overfill_without_mutating_mixture() {
         let registry = destroy_registry_builder().unwrap().build().unwrap();
         let water_id = SubstanceId::from("destroy:water");
@@ -574,6 +613,78 @@ mod tests {
             crate::chemistry::ChemistryError::InvalidMixtureState(_)
         ));
         assert!(zone.concentration_of(&water_id) < 1.0e-12);
+    }
+
+    #[test]
+    fn liquid_filled_zone_allows_no_headspace_without_gas_phase() {
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let water_id = SubstanceId::from("destroy:water");
+        let volume = 0.0005;
+        let target_condensed_volume = volume - 0.5e-9;
+        let amount =
+            liquid_amount_for_condensed_volume(&registry, &water_id, target_condensed_volume);
+        let mut zone = ReactorZone::new(volume)
+            .unwrap()
+            .with_volume_mode(ReactorVolumeMode::LiquidFilled);
+
+        zone.add_substance_checked(&registry, water_id.clone(), amount)
+            .unwrap();
+
+        let headspace = zone.headspace_volume_cubic_meters(&registry).unwrap();
+        let condensed = zone.condensed_volume_cubic_meters(&registry).unwrap();
+        assert!(
+            headspace <= 1.0e-9,
+            "headspace={headspace}, condensed={condensed}, volume={volume}"
+        );
+        assert!(zone.pressure_pascal() <= 1.0e-9);
+        assert!((zone.concentration_of(&water_id) - amount).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn headspace_required_zone_rejects_exact_liquid_fill() {
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let water_id = SubstanceId::from("destroy:water");
+        let volume = 0.0005;
+        let target_condensed_volume = volume - 0.5e-9;
+        let amount =
+            liquid_amount_for_condensed_volume(&registry, &water_id, target_condensed_volume);
+        let mut zone = ReactorZone::new(volume).unwrap();
+
+        let error = zone
+            .add_substance_checked(&registry, water_id.clone(), amount)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            crate::chemistry::ChemistryError::InvalidMixtureState(_)
+        ));
+        assert!(zone.concentration_of(&water_id) < 1.0e-12);
+    }
+
+    #[test]
+    fn liquid_filled_zone_rejects_gas_without_headspace() {
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let water_id = SubstanceId::from("destroy:water");
+        let oxygen_id = SubstanceId::from("destroy:oxygen");
+        let volume = 0.0005;
+        let target_condensed_volume = volume - 0.5e-9;
+        let amount =
+            liquid_amount_for_condensed_volume(&registry, &water_id, target_condensed_volume);
+        let mut zone = ReactorZone::new(volume)
+            .unwrap()
+            .with_volume_mode(ReactorVolumeMode::LiquidFilled);
+        zone.add_substance_checked(&registry, water_id, amount)
+            .unwrap();
+
+        let error = zone
+            .add_substance_checked(&registry, oxygen_id.clone(), 0.1)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            crate::chemistry::ChemistryError::InvalidMixtureState(_)
+        ));
+        assert!(zone.concentration_of(&oxygen_id) < 1.0e-12);
     }
 
     #[test]

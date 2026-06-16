@@ -839,6 +839,43 @@ impl Mixture {
         self.validate(registry)
     }
 
+    pub(crate) fn add_substance_without_vapor_liquid_equilibrium(
+        &mut self,
+        registry: &ChemistryRegistry,
+        substance_id: impl Into<SubstanceId>,
+        concentration_mol_per_bucket: f64,
+    ) -> ChemistryResult<()> {
+        let substance_id = substance_id.into();
+        let substance_index = registry.substance_index(&substance_id).ok_or_else(|| {
+            ChemistryError::InvalidMixtureState(format!("unknown substance '{substance_id}'"))
+        })?;
+        let substance = registry.substance(&substance_id)?;
+        if substance
+            .tags
+            .iter()
+            .any(|tag| tag == &SubstanceTagId::from("destroy:hypothetical"))
+        {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "hypothetical substance '{substance_id}' cannot be added to a mixture"
+            )));
+        }
+        validate_concentration(concentration_mol_per_bucket)?;
+        if concentration_mol_per_bucket == 0.0 {
+            return Ok(());
+        }
+        self.ensure_position_capacity(registry);
+        let initial_phase = initial_phase_for_substance(substance, self.temperature_kelvin)?;
+        self.change_concentration_by_index_unchecked(
+            registry,
+            substance_index,
+            substance_id,
+            concentration_mol_per_bucket,
+            initial_phase,
+        )?;
+        self.redistribute_condensed_phases(registry)?;
+        self.validate(registry)
+    }
+
     pub fn set_gaseous_fraction(
         &mut self,
         registry: &ChemistryRegistry,
