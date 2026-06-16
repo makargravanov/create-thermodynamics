@@ -108,6 +108,16 @@ pub fn has_item_chemical_binding(item_id: &str) -> ChemistryResult<bool> {
     with_minecraft_chemistry_state(|state| Ok(state.item_bindings.contains_item(item_id)))
 }
 
+pub fn static_substance_ids() -> ChemistryResult<Vec<String>> {
+    with_minecraft_chemistry_state(|state| {
+        Ok(state
+            .chemistry_registry
+            .substances()
+            .map(|substance| substance.id.as_str().to_string())
+            .collect())
+    })
+}
+
 fn minecraft_chemistry_state() -> ChemistryResult<&'static Mutex<MinecraftChemistryState>> {
     MINECRAFT_CHEMISTRY_STATE
         .get_or_init(|| MinecraftChemistryState::new().map(Mutex::new))
@@ -183,5 +193,14 @@ mod tests {
 
         assert_eq!(item_chemical_binding_count().unwrap(), 0);
         assert!(!has_item_chemical_binding("minecraft:water_bucket").unwrap());
+    }
+
+    #[test]
+    fn static_substance_ids_expose_destroy_catalog() {
+        let ids = static_substance_ids().unwrap();
+
+        assert!(ids.contains(&"destroy:water".to_string()));
+        assert!(ids.contains(&"destroy:ethanol".to_string()));
+        assert!(ids.len() >= 152);
     }
 }

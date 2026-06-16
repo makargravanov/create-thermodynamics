@@ -16,6 +16,10 @@ object ThermodynamicsNative {
 
     fun abiVersion(): Int = nativeAbiVersion()
 
+    fun configureDefaultItemChemicalBindings() {
+        configureItemChemicalBindings(DefaultItemChemicalBindings.bindings)
+    }
+
     fun configureItemChemicalBindings(bindings: Collection<ItemChemicalBinding>) {
         val itemIds = Array(bindings.size) { "" }
         val substanceIds = Array(bindings.size) { "" }
@@ -36,6 +40,9 @@ object ThermodynamicsNative {
 
     fun hasItemChemicalBinding(itemId: String): Boolean =
         nativeHasMinecraftItemChemicalBinding(itemId)
+
+    fun staticSubstanceIds(): List<String> =
+        nativeStaticSubstanceIds().asList()
 
     @JvmStatic
     private external fun nativeIdealGasPressure(
@@ -62,4 +69,7 @@ object ThermodynamicsNative {
 
     @JvmStatic
     private external fun nativeHasMinecraftItemChemicalBinding(itemId: String): Boolean
+
+    @JvmStatic
+    private external fun nativeStaticSubstanceIds(): Array<String>
 }

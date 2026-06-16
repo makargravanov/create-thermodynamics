@@ -1,5 +1,5 @@
-use jni::objects::{JClass, JDoubleArray, JObjectArray, JString};
-use jni::sys::{jboolean, jdouble, jint, JNI_FALSE, JNI_TRUE};
+use jni::objects::{JClass, JDoubleArray, JObject, JObjectArray, JString};
+use jni::sys::{jboolean, jdouble, jint, jobjectArray, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 
 pub mod chemistry;
@@ -26,7 +26,7 @@ pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust
     _: JNIEnv,
     _: JClass,
 ) -> jint {
-    2
+    3
 }
 
 #[no_mangle]
@@ -111,6 +111,26 @@ pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust
     }
 }
 
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeStaticSubstanceIds(
+    mut env: JNIEnv,
+    _: JClass,
+) -> jobjectArray {
+    match chemistry::minecraft::chem_api::static_substance_ids()
+        .and_then(|ids| java_string_array(&mut env, &ids))
+    {
+        Ok(array) => array,
+        Err(error) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalStateException",
+                &error.to_string(),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
 fn read_item_chemical_bindings_from_jvm(
     env: &mut JNIEnv,
     item_ids: JObjectArray,
@@ -177,6 +197,26 @@ fn jni_error_to_chemistry_error(
 
 fn throw_java_exception(env: &mut JNIEnv, class_name: &str, message: &str) {
     let _ = env.throw_new(class_name, message);
+}
+
+fn java_string_array(
+    env: &mut JNIEnv,
+    values: &[String],
+) -> chemistry::ChemistryResult<jobjectArray> {
+    let string_class = env
+        .find_class("java/lang/String")
+        .map_err(|error| jni_error_to_chemistry_error("java/lang/String class", error))?;
+    let array = env
+        .new_object_array(values.len() as jint, string_class, JObject::null())
+        .map_err(|error| jni_error_to_chemistry_error("String array", error))?;
+    for (index, value) in values.iter().enumerate() {
+        let java_value = env
+            .new_string(value)
+            .map_err(|error| jni_error_to_chemistry_error("String", error))?;
+        env.set_object_array_element(&array, index as jint, java_value)
+            .map_err(|error| jni_error_to_chemistry_error("String array", error))?;
+    }
+    Ok(array.into_raw())
 }
 
 #[cfg(test)]
