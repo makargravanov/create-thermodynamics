@@ -275,9 +275,13 @@ impl Reactor {
             for zone in &mut self.zones {
                 zone.mixture_mut()
                     .equilibrate_vapor_liquid(registry, self.vle_relaxation)?;
+                zone.refresh_headspace_volume(registry)?;
             }
         }
         self.apply_ambient_heat_exchange(registry, dt_seconds)?;
+        for zone in &mut self.zones {
+            zone.refresh_headspace_volume(registry)?;
+        }
         Ok(())
     }
 

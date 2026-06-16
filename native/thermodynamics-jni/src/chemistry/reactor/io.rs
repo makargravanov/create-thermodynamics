@@ -75,8 +75,7 @@ pub fn insert_substance(
     substance_id: &SubstanceId,
     mol_per_bucket: f64,
 ) -> ChemistryResult<()> {
-    zone.mixture_mut()
-        .add_substance(registry, substance_id.clone(), mol_per_bucket)
+    zone.add_substance_checked(registry, substance_id.clone(), mol_per_bucket)
 }
 
 pub fn extract_substance(

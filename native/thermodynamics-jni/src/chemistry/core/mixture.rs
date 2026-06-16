@@ -1303,6 +1303,30 @@ impl Mixture {
         }
     }
 
+    pub fn condensed_volume_cubic_meters(
+        &self,
+        registry: &ChemistryRegistry,
+    ) -> ChemistryResult<f64> {
+        self.validate(registry)?;
+        let properties = registry.substance_properties();
+        let mut condensed_buckets = 0.0;
+        for component in &self.components {
+            let index = component.substance.as_usize();
+            condensed_buckets += component.amount_in_phases(&liquid_phases())
+                * properties.molar_mass_grams[index]
+                / properties.liquid_density_grams_per_bucket[index];
+            condensed_buckets += component.amount_in_phase(MixturePhase::Solid)
+                * properties.molar_mass_grams[index]
+                / properties.solid_density_grams_per_bucket[index];
+        }
+        if !condensed_buckets.is_finite() || condensed_buckets < 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "calculated condensed volume must be non-negative and finite, got {condensed_buckets}"
+            )));
+        }
+        Ok(condensed_buckets * DEFAULT_GAS_VOLUME_CUBIC_METERS)
+    }
+
     pub fn mix(
         registry: &ChemistryRegistry,
         mixtures: &[(Mixture, f64)],

@@ -1,8 +1,11 @@
-use crate::chemistry::error::ChemistryResult;
+use crate::chemistry::error::{ChemistryError, ChemistryResult};
 use crate::chemistry::mixture::{Mixture, DEFAULT_TEMPERATURE_KELVIN};
+use crate::chemistry::registry::ChemistryRegistry;
 use crate::chemistry::substance::SubstanceId;
 
 use super::peripheral::Peripheral;
+
+const MIN_HEADSPACE_CUBIC_METERS: f64 = 1.0e-9;
 
 #[derive(Debug, Clone)]
 pub struct ReactorZone {
@@ -78,8 +81,13 @@ impl ReactorZone {
     }
 
     pub fn set_volume_cubic_meters(&mut self, volume: f64) -> ChemistryResult<()> {
-        self.mixture.set_gas_volume_cubic_meters(volume)?;
+        if !volume.is_finite() || volume <= MIN_HEADSPACE_CUBIC_METERS {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "reactor zone volume must be finite and greater than {MIN_HEADSPACE_CUBIC_METERS}, got {volume}"
+            )));
+        }
         self.volume_cubic_meters = volume;
+        self.mixture.set_gas_volume_cubic_meters(volume)?;
         Ok(())
     }
 
@@ -107,11 +115,82 @@ impl ReactorZone {
         self.mixture.concentration_of(substance_id)
     }
 
-    pub fn tick(
+    pub fn condensed_volume_cubic_meters(
+        &self,
+        registry: &ChemistryRegistry,
+    ) -> ChemistryResult<f64> {
+        self.mixture.condensed_volume_cubic_meters(registry)
+    }
+
+    pub fn headspace_volume_cubic_meters(
+        &self,
+        registry: &ChemistryRegistry,
+    ) -> ChemistryResult<f64> {
+        let condensed = self.condensed_volume_cubic_meters(registry)?;
+        let headspace = self.volume_cubic_meters - condensed;
+        if !headspace.is_finite() {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "reactor zone headspace is not finite: volume={}, condensed={condensed}",
+                self.volume_cubic_meters
+            )));
+        }
+        Ok(headspace.max(0.0))
+    }
+
+    pub fn refresh_headspace_volume(
         &mut self,
-        registry: &crate::chemistry::registry::ChemistryRegistry,
-        dt_seconds: f64,
+        registry: &ChemistryRegistry,
     ) -> ChemistryResult<()> {
+        let condensed = self.condensed_volume_cubic_meters(registry)?;
+        let headspace = self.volume_cubic_meters - condensed;
+        if !headspace.is_finite() || headspace <= MIN_HEADSPACE_CUBIC_METERS {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "reactor zone is overfilled: volume={} m^3, condensed={} m^3, required positive headspace>{MIN_HEADSPACE_CUBIC_METERS} m^3",
+                self.volume_cubic_meters, condensed
+            )));
+        }
+        self.mixture.set_gas_volume_cubic_meters(headspace)
+    }
+
+    pub fn can_accept_substance(
+        &self,
+        registry: &ChemistryRegistry,
+        substance_id: &SubstanceId,
+        mol_per_bucket: f64,
+    ) -> ChemistryResult<()> {
+        if !mol_per_bucket.is_finite() || mol_per_bucket <= 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "inserted amount must be positive and finite, got {mol_per_bucket}"
+            )));
+        }
+        let mut predicted = self.mixture.clone();
+        predicted.add_substance(registry, substance_id.clone(), mol_per_bucket)?;
+        predicted.equilibrate_phases(registry)?;
+        predicted.equilibrate_vapor_liquid(registry, 1.0)?;
+        let condensed = predicted.condensed_volume_cubic_meters(registry)?;
+        let headspace = self.volume_cubic_meters - condensed;
+        if !headspace.is_finite() || headspace <= MIN_HEADSPACE_CUBIC_METERS {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "reactor zone cannot accept {mol_per_bucket} mol/bucket of '{substance_id}': volume={} m^3, predicted condensed={} m^3, required positive headspace>{MIN_HEADSPACE_CUBIC_METERS} m^3",
+                self.volume_cubic_meters, condensed
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn add_substance_checked(
+        &mut self,
+        registry: &ChemistryRegistry,
+        substance_id: SubstanceId,
+        mol_per_bucket: f64,
+    ) -> ChemistryResult<()> {
+        self.can_accept_substance(registry, &substance_id, mol_per_bucket)?;
+        self.mixture
+            .add_substance(registry, substance_id, mol_per_bucket)?;
+        self.refresh_headspace_volume(registry)
+    }
+
+    pub fn tick(&mut self, registry: &ChemistryRegistry, dt_seconds: f64) -> ChemistryResult<()> {
         self.elapsed_seconds += dt_seconds;
         let mut peripherals = std::mem::take(&mut self.peripherals);
         let mut result = Ok(());
@@ -122,6 +201,7 @@ impl ReactorZone {
             }
         }
         self.peripherals = peripherals;
-        result
+        result?;
+        self.refresh_headspace_volume(registry)
     }
 }

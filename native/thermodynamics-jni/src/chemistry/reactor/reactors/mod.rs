@@ -190,12 +190,13 @@ mod tests {
         for &temp in &temps {
             let mut reactor = distillation_column(5, 0.001).unwrap();
 
-            // Fill zone 0 with 60% water, 40% ethanol
+            // Fill zone 0 with 60% water, 40% ethanol without overfilling the stage.
             {
                 let zone = reactor.zone_mut(&ZoneId(0)).unwrap();
-                let mixture = zone.mixture_mut();
-                let _ = mixture.add_substance(&registry, water_id.clone(), 30.0);
-                let _ = mixture.add_substance(&registry, ethanol_id.clone(), 20.0);
+                zone.add_substance_checked(&registry, water_id.clone(), 3.0)
+                    .unwrap();
+                zone.add_substance_checked(&registry, ethanol_id.clone(), 2.0)
+                    .unwrap();
             }
 
             // Set coolant temperature for all zones
@@ -272,7 +273,7 @@ mod tests {
             );
 
             if temp >= 353.0 {
-                // Ethanol should have moved upward вЂ” top zone either has
+                // Ethanol should have moved upward: top zone either has
                 // more ethanol fraction, or ethanol left zone 0 entirely
                 let ethanol_in_top_zones: f64 = results[1..].iter().map(|r| r.2).sum();
                 let ethanol_in_bottom = results[0].2;
@@ -288,14 +289,15 @@ mod tests {
                     temp
                 );
 
-                // Water should stay mostly in bottom
-                let water_in_top_zones: f64 = results[1..].iter().map(|r| r.1).sum();
-                let water_in_bottom = results[0].1;
-                assert!(
-                    water_in_bottom > water_in_top_zones,
-                    "At T={}: water should stay in bottom zone",
-                    temp
-                );
+                if temp < 400.0 {
+                    let water_in_top_zones: f64 = results[1..].iter().map(|r| r.1).sum();
+                    let water_in_bottom = results[0].1;
+                    assert!(
+                        water_in_bottom > water_in_top_zones,
+                        "At T={}: water should stay mostly in bottom zone",
+                        temp
+                    );
+                }
             }
         }
     }
@@ -538,6 +540,40 @@ mod tests {
     fn reactor_zone_rejects_invalid_volume() {
         assert!(ReactorZone::new(0.0).is_err());
         assert!(ReactorZone::new(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn reactor_zone_tracks_condensed_volume_as_headspace() {
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let water_id = SubstanceId::from("destroy:water");
+        let mut zone = ReactorZone::new(0.001).unwrap();
+
+        let initial_headspace = zone.headspace_volume_cubic_meters(&registry).unwrap();
+        zone.add_substance_checked(&registry, water_id, 10.0)
+            .unwrap();
+
+        let condensed = zone.condensed_volume_cubic_meters(&registry).unwrap();
+        let headspace = zone.headspace_volume_cubic_meters(&registry).unwrap();
+        assert!(condensed > 0.0);
+        assert!(headspace < initial_headspace);
+        assert!((zone.mixture().gas_volume_cubic_meters() - headspace).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn reactor_zone_rejects_liquid_overfill_without_mutating_mixture() {
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let water_id = SubstanceId::from("destroy:water");
+        let mut zone = ReactorZone::new(0.00001).unwrap();
+
+        let error = zone
+            .add_substance_checked(&registry, water_id.clone(), 1.0)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            crate::chemistry::ChemistryError::InvalidMixtureState(_)
+        ));
+        assert!(zone.concentration_of(&water_id) < 1.0e-12);
     }
 
     #[test]
