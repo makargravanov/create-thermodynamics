@@ -5,7 +5,7 @@ use crate::chemistry::reactor::peripheral::{
 use crate::chemistry::reactor::reactor::{
     PhaseEntry, Reactor, SubstanceEntry, TransitionMode, ZoneId, ZoneTransition,
 };
-use crate::chemistry::reactor::zone::{ReactorVolumeMode, ReactorZone};
+use crate::chemistry::reactor::zone::ReactorZone;
 use crate::chemistry::substance::SubstanceId;
 use crate::chemistry::ChemistryResult;
 
@@ -178,6 +178,7 @@ mod tests {
     use super::*;
     use crate::chemistry::destroy_registry_builder;
     use crate::chemistry::reactor::io;
+    use crate::chemistry::reactor::zone::ReactorVolumeMode;
     use crate::chemistry::registry::ChemistryRegistry;
 
     fn liquid_amount_for_condensed_volume(
