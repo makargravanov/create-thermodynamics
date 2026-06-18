@@ -7,6 +7,7 @@ plugins {
 
 dependencies {
     api(project(":modules:core"))
+    api("ru.lazyhat:kraft-ui-dsl")
 }
 
 rustJni {

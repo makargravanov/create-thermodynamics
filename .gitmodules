@@ -1,0 +1,3 @@
+[submodule "external/ui-dsl"]
+	path = external/ui-dsl
+	url = https://github.com/CertifiedBadIdeas/ui-dsl

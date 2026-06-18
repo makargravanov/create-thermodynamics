@@ -18,6 +18,7 @@ dependencyResolutionManagement {
 }
 
 includeBuild("build-scripts")
+includeBuild("external/ui-dsl")
 
 rootProject.name = "create-thermodynamics"
 
