@@ -2,6 +2,7 @@ package dev.makargravanov.create_thermodynamics.common.reactor.multiblock.assemb
 
 data class ReactorMultiblockRules(
     val chamberVolumeCubicMeters: Double,
+    val chamberShapeStrategy: ReactorChamberShapeStrategy = VerticalTankChamberShapeStrategy,
     val minimumChamberBlocks: Int = 1,
     val maximumChamberBlocks: Int? = null,
 ) {

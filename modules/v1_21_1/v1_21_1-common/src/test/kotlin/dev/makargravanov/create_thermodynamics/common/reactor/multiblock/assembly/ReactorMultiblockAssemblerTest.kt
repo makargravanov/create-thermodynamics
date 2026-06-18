@@ -22,9 +22,7 @@ class ReactorMultiblockAssemblerTest {
 
         val definition = assembler.assemble(
             structureId = structureId,
-            blocks = listOf(
-                block(0, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
-                block(1, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
+            blocks = squareTank(baseSize = 2, height = 1) + listOf(
                 block(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
                 block(0, 1, 0, ReactorMultiblockBlockKind.ITEM_INPUT_PORT),
                 block(1, 1, 0, ReactorMultiblockBlockKind.FLUID_OUTPUT_PORT),
@@ -33,8 +31,9 @@ class ReactorMultiblockAssemblerTest {
 
         assertEquals(ReactorStructureId(structureId), definition.structureId)
         assertEquals(pos(-1, 0, 0), definition.controllerPosition)
-        assertEquals(0.004, definition.totalVolumeCubicMeters)
-        assertEquals(2, definition.zone.chamberPositions.size)
+        assertEquals(0.008, definition.totalVolumeCubicMeters)
+        assertEquals(4, definition.zone.chamberPositions.size)
+        assertEquals(4, definition.zone.volumePositions.size)
         assertEquals(
             listOf(ReactorPortKind.ITEM_INPUT, ReactorPortKind.FLUID_OUTPUT),
             definition.ports.map { it.kind },
@@ -59,9 +58,15 @@ class ReactorMultiblockAssemblerTest {
     }
 
     @Test
-    fun `rejects disconnected chamber blocks`() {
+    fun `freeform strategy rejects disconnected chamber blocks`() {
+        val freeformAssembler = ReactorMultiblockAssembler(
+            ReactorMultiblockRules(
+                chamberVolumeCubicMeters = 0.002,
+                chamberShapeStrategy = FreeformChamberShapeStrategy,
+            ),
+        )
         val error = assertFailsWith<ReactorMultiblockValidationException> {
-            assembler.assemble(
+            freeformAssembler.assemble(
                 structureId = UUID.randomUUID(),
                 blocks = listOf(
                     block(0, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
@@ -75,18 +80,32 @@ class ReactorMultiblockAssemblerTest {
     }
 
     @Test
+    fun `vertical tank strategy does not absorb non rectangular adjacent chamber`() {
+        val definition = assembler.assemble(
+            structureId = UUID.randomUUID(),
+            blocks = listOf(
+                block(0, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
+                block(1, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
+                block(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
+            ),
+        )
+
+        assertEquals(setOf(pos(0, 0, 0)), definition.zone.chamberPositions)
+    }
+
+    @Test
     fun `rejects controller that does not touch chamber`() {
         val error = assertFailsWith<ReactorMultiblockValidationException> {
             assembler.assemble(
                 structureId = UUID.randomUUID(),
                 blocks = listOf(
                     block(0, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
-                    block(3, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
+                    block(0, 5, 0, ReactorMultiblockBlockKind.CONTROLLER),
                 ),
             )
         }
 
-        assertEquals(true, error.validationErrors.any { it.contains("controller") && it.contains("must touch") })
+        assertEquals(true, error.validationErrors.any { it.contains("complete vertical tank") })
     }
 
     @Test
@@ -106,24 +125,128 @@ class ReactorMultiblockAssemblerTest {
     }
 
     @Test
+    fun `rejects port touching multiple chamber faces`() {
+        val error = assertFailsWith<ReactorMultiblockValidationException> {
+            assembler.assemble(
+                structureId = UUID.randomUUID(),
+                blocks = listOf(
+                    block(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
+                    block(1, 0, 0, ReactorMultiblockBlockKind.ITEM_INPUT_PORT),
+                    block(0, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
+                    block(0, 0, 1, ReactorMultiblockBlockKind.CHAMBER),
+                    block(1, 0, 1, ReactorMultiblockBlockKind.CHAMBER),
+                ),
+            )
+        }
+
+        assertEquals(true, error.validationErrors.any { it.contains("exactly one chamber face") })
+    }
+
+    @Test
     fun `assigns port indexes deterministically within each port kind`() {
         val definition = assembler.assemble(
             structureId = UUID.randomUUID(),
-            blocks = listOf(
-                block(0, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
-                block(1, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
-                block(2, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
+            blocks = squareTank(baseSize = 2, height = 1) + listOf(
                 block(0, -1, 0, ReactorMultiblockBlockKind.CONTROLLER),
-                block(2, 1, 0, ReactorMultiblockBlockKind.ITEM_INPUT_PORT),
+                block(2, 0, 0, ReactorMultiblockBlockKind.ITEM_INPUT_PORT),
                 block(0, 1, 0, ReactorMultiblockBlockKind.ITEM_INPUT_PORT),
                 block(1, 1, 0, ReactorMultiblockBlockKind.ITEM_OUTPUT_PORT),
             ),
         )
 
         val itemInputs = definition.portsOfKind(ReactorPortKind.ITEM_INPUT)
-        assertEquals(listOf(pos(0, 1, 0), pos(2, 1, 0)), itemInputs.map { it.position })
+        assertEquals(listOf(pos(0, 1, 0), pos(2, 0, 0)), itemInputs.map { it.position })
         assertEquals(listOf(0, 1), itemInputs.map { it.portIndex })
         assertEquals(0, definition.portsOfKind(ReactorPortKind.ITEM_OUTPUT).single().portIndex)
+    }
+
+    @Test
+    fun `vertical tank allows configured maximum heights by base size`() {
+        val oneByOne = assembler.assemble(
+            structureId = UUID.randomUUID(),
+            blocks = squareTank(baseSize = 1, height = 4) + block(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
+        )
+        val twoByTwo = assembler.assemble(
+            structureId = UUID.randomUUID(),
+            blocks = squareTank(baseSize = 2, height = 8) + block(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
+        )
+        val threeByThree = assembler.assemble(
+            structureId = UUID.randomUUID(),
+            blocks = squareTank(baseSize = 3, height = 16) + block(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
+        )
+
+        assertEquals(4, oneByOne.zone.chamberPositions.size)
+        assertEquals(32, twoByTwo.zone.chamberPositions.size)
+        assertEquals(144, threeByThree.zone.chamberPositions.size)
+    }
+
+    @Test
+    fun `vertical tank does not absorb extra chamber next to maximum structure`() {
+        val blocks = squareTank(baseSize = 2, height = 8) + listOf(
+            block(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
+            block(2, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
+        )
+
+        val definition = assembler.assemble(
+            structureId = UUID.randomUUID(),
+            blocks = blocks,
+        )
+
+        assertEquals(32, definition.zone.chamberPositions.size)
+        assertEquals(setOf(pos(2, 0, 0)), definition.inactiveChamberPositions)
+        assertEquals(false, pos(2, 0, 0) in definition.zone.chamberPositions)
+    }
+
+    @Test
+    fun `maximum chamber blocks chooses smaller valid tank instead of rejecting larger candidates`() {
+        val limitedAssembler = ReactorMultiblockAssembler(
+            ReactorMultiblockRules(
+                chamberVolumeCubicMeters = 0.002,
+                maximumChamberBlocks = 4,
+            ),
+        )
+
+        val definition = limitedAssembler.assemble(
+            structureId = UUID.randomUUID(),
+            blocks = squareTank(baseSize = 2, height = 2) + block(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
+        )
+
+        assertEquals(4, definition.zone.chamberPositions.size)
+        assertEquals(4, definition.inactiveChamberPositions.size)
+    }
+
+    @Test
+    fun `embedded controller and ports count as reactor volume without being chamber contacts`() {
+        val definition = assembler.assemble(
+            structureId = UUID.randomUUID(),
+            blocks = listOf(
+                block(0, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
+                block(0, 1, 0, ReactorMultiblockBlockKind.ITEM_INPUT_PORT),
+                block(0, 2, 0, ReactorMultiblockBlockKind.CHAMBER),
+            ),
+        )
+
+        assertEquals(pos(0, 0, 0), definition.controllerPosition)
+        assertEquals(setOf(pos(0, 2, 0)), definition.zone.chamberPositions)
+        assertEquals(setOf(pos(0, 0, 0), pos(0, 1, 0), pos(0, 2, 0)), definition.zone.volumePositions)
+        assertEquals(0.006, definition.totalVolumeCubicMeters)
+        assertEquals(pos(0, 2, 0), definition.portsOfKind(ReactorPortKind.ITEM_INPUT).single().attachedChamberPosition)
+    }
+
+    @Test
+    fun `port attached only to extra chamber is rejected`() {
+        val error = assertFailsWith<ReactorMultiblockValidationException> {
+            assembler.assemble(
+                structureId = UUID.randomUUID(),
+                blocks = squareTank(baseSize = 2, height = 8) + listOf(
+                    block(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
+                    block(2, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
+                    block(3, 0, 0, ReactorMultiblockBlockKind.ITEM_INPUT_PORT),
+                ),
+            )
+        }
+
+        assertEquals(true, error.validationErrors.any { it.contains("ITEM_INPUT") && it.contains("must touch") })
     }
 
     private fun block(
@@ -133,6 +256,17 @@ class ReactorMultiblockAssemblerTest {
         kind: ReactorMultiblockBlockKind,
     ): ReactorMultiblockBlock =
         ReactorMultiblockBlock(pos(x, y, z), kind)
+
+    private fun squareTank(baseSize: Int, height: Int): List<ReactorMultiblockBlock> =
+        buildList {
+            for (x in 0 until baseSize) {
+                for (y in 0 until height) {
+                    for (z in 0 until baseSize) {
+                        add(block(x, y, z, ReactorMultiblockBlockKind.CHAMBER))
+                    }
+                }
+            }
+        }
 
     private fun pos(x: Int, y: Int, z: Int): ReactorBlockPosition =
         ReactorBlockPosition(x, y, z)

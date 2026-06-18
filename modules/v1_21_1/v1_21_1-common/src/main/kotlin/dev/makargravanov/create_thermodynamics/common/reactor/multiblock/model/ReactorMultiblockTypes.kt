@@ -26,6 +26,7 @@ data class ReactorMultiblockBlock(
 data class ReactorZoneDescriptor(
     val zoneIndex: Int,
     val chamberPositions: Set<ReactorBlockPosition>,
+    val volumePositions: Set<ReactorBlockPosition> = chamberPositions,
     val volumeCubicMeters: Double,
 )
 
@@ -35,6 +36,7 @@ data class ReactorPortDescriptor(
     val position: ReactorBlockPosition,
     val zoneIndex: Int,
     val attachedChamberPosition: ReactorBlockPosition,
+    val contactDirection: ReactorBlockDirection,
 )
 
 @JvmInline
@@ -43,8 +45,10 @@ value class ReactorStructureId(val value: UUID)
 data class ReactorMultiblockDefinition(
     val structureId: ReactorStructureId,
     val controllerPosition: ReactorBlockPosition,
+    val controllerContactDirection: ReactorBlockDirection?,
     val zone: ReactorZoneDescriptor,
     val ports: List<ReactorPortDescriptor>,
+    val inactiveChamberPositions: Set<ReactorBlockPosition> = emptySet(),
 ) {
     val totalVolumeCubicMeters: Double
         get() = zone.volumeCubicMeters

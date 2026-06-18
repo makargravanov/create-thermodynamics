@@ -8,7 +8,6 @@ import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.R
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorPortDescriptor
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorPortKind
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorStructureId
-import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorZoneDescriptor
 import java.util.UUID
 
 class ReactorMultiblockAssembler(
@@ -46,43 +45,40 @@ class ReactorMultiblockAssembler(
         if (controllers.size != 1) {
             errors += "reactor multiblock must contain exactly one controller, got ${controllers.size}"
         }
-        if (chambers.size < rules.minimumChamberBlocks) {
-            errors += "reactor multiblock must contain at least ${rules.minimumChamberBlocks} chamber blocks, got ${chambers.size}"
-        }
-        if (rules.maximumChamberBlocks != null && chambers.size > rules.maximumChamberBlocks) {
-            errors += "reactor multiblock may contain at most ${rules.maximumChamberBlocks} chamber blocks, got ${chambers.size}"
-        }
+        val controller = controllers.firstOrNull()
+        val shapeResult = rules.chamberShapeStrategy.buildZone(
+            chambers = chambers,
+            volumeCapableBlocks = blocksByPosition.filterValues { it.isVolumeCapable() },
+            controller = controller,
+            chamberVolumeCubicMeters = rules.chamberVolumeCubicMeters,
+            maximumChamberBlocks = rules.maximumChamberBlocks,
+        )
+        errors += shapeResult.errors
+        val zone = shapeResult.zone
 
-        if (chambers.isNotEmpty()) {
-            val connectedChambers = connectedChamberComponent(chambers)
-            if (connectedChambers.size != chambers.size) {
-                val disconnected = (chambers - connectedChambers).sorted()
-                errors += "reactor chamber blocks must form one face-connected zone; disconnected chambers: $disconnected"
+        if (zone != null) {
+            val selectedChambers = zone.chamberPositions
+            if (selectedChambers.size < rules.minimumChamberBlocks) {
+                errors += "reactor multiblock must contain at least ${rules.minimumChamberBlocks} chamber blocks, got ${selectedChambers.size}"
+            }
+            if (controller != null && controller !in zone.volumePositions && contactDirections(controller, selectedChambers).isEmpty()) {
+                errors += "reactor controller at $controller must touch a chamber block by a face"
             }
         }
 
-        val controller = controllers.firstOrNull()
-        if (controller != null && controller.faceNeighbours().none { it in chambers }) {
-            errors += "reactor controller at $controller must touch a chamber block by a face"
-        }
-
-        val portDescriptors = buildPortDescriptors(blocksByPosition, chambers, errors)
+        val portDescriptors = buildPortDescriptors(blocksByPosition, zone?.chamberPositions.orEmpty(), errors)
 
         if (errors.isNotEmpty()) {
             throw ReactorMultiblockValidationException(errors)
         }
 
-        val chamberPositions = chambers.toSortedSet()
-        val volume = chamberPositions.size * rules.chamberVolumeCubicMeters
         return ReactorMultiblockDefinition(
             structureId = structureId,
             controllerPosition = requireNotNull(controller),
-            zone = ReactorZoneDescriptor(
-                zoneIndex = 0,
-                chamberPositions = chamberPositions,
-                volumeCubicMeters = volume,
-            ),
+            controllerContactDirection = contactDirections(controller, requireNotNull(zone).chamberPositions).singleOrNull(),
+            zone = requireNotNull(zone),
             ports = portDescriptors,
+            inactiveChamberPositions = shapeResult.inactiveChamberPositions,
         )
     }
 
@@ -98,11 +94,17 @@ class ReactorMultiblockAssembler(
         val nextIndexByKind = mutableMapOf<ReactorPortKind, Int>()
         val descriptors = mutableListOf<ReactorPortDescriptor>()
         for ((position, portKind) in portEntries) {
-            val attachedChambers = position.faceNeighbours().filter { it in chambers }.sorted()
-            if (attachedChambers.isEmpty()) {
+            val contactDirections = contactDirections(position, chambers)
+            if (contactDirections.isEmpty()) {
                 errors += "reactor port $portKind at $position must touch a chamber block by a face"
                 continue
             }
+            if (contactDirections.size > 1) {
+                errors += "reactor port $portKind at $position must touch exactly one chamber face, got ${contactDirections.size}"
+                continue
+            }
+            val contactDirection = contactDirections.single()
+            val attachedChamber = position.neighbour(contactDirection)
             val portIndex = nextIndexByKind.getOrDefault(portKind, 0)
             nextIndexByKind[portKind] = portIndex + 1
             descriptors += ReactorPortDescriptor(
@@ -110,30 +112,19 @@ class ReactorMultiblockAssembler(
                 kind = portKind,
                 position = position,
                 zoneIndex = 0,
-                attachedChamberPosition = attachedChambers.first(),
+                attachedChamberPosition = attachedChamber,
+                contactDirection = contactDirection,
             )
         }
         return descriptors
     }
 
-    private fun connectedChamberComponent(chambers: Set<ReactorBlockPosition>): Set<ReactorBlockPosition> {
-        val start = chambers.minOrNull() ?: return emptySet()
-        val visited = mutableSetOf<ReactorBlockPosition>()
-        val queue = ArrayDeque<ReactorBlockPosition>()
-        queue += start
-        while (queue.isNotEmpty()) {
-            val current = queue.removeFirst()
-            if (!visited.add(current)) {
-                continue
-            }
-            for (neighbour in current.faceNeighbours()) {
-                if (neighbour in chambers && neighbour !in visited) {
-                    queue += neighbour
-                }
-            }
-        }
-        return visited
-    }
+    private fun contactDirections(
+        position: ReactorBlockPosition,
+        chambers: Set<ReactorBlockPosition>,
+    ) = position.faceNeighbours()
+        .mapNotNull { neighbour -> position.directionTo(neighbour)?.takeIf { neighbour in chambers } }
+        .sorted()
 
     private fun ReactorMultiblockBlockKind.toPortKind(): ReactorPortKind? =
         when (this) {
@@ -145,5 +136,16 @@ class ReactorMultiblockAssembler(
             ReactorMultiblockBlockKind.ITEM_OUTPUT_PORT -> ReactorPortKind.ITEM_OUTPUT
             ReactorMultiblockBlockKind.FLUID_INPUT_PORT -> ReactorPortKind.FLUID_INPUT
             ReactorMultiblockBlockKind.FLUID_OUTPUT_PORT -> ReactorPortKind.FLUID_OUTPUT
+        }
+
+    private fun ReactorMultiblockBlockKind.isVolumeCapable(): Boolean =
+        when (this) {
+            ReactorMultiblockBlockKind.CONTROLLER,
+            ReactorMultiblockBlockKind.CHAMBER,
+            ReactorMultiblockBlockKind.ITEM_INPUT_PORT,
+            ReactorMultiblockBlockKind.ITEM_OUTPUT_PORT,
+            ReactorMultiblockBlockKind.FLUID_INPUT_PORT,
+            ReactorMultiblockBlockKind.FLUID_OUTPUT_PORT,
+            -> true
         }
 }
