@@ -1,6 +1,7 @@
 package dev.makargravanov.create_thermodynamics.common.reactor.multiblock.assembly
 
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorBlockPosition
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorBlockDirection
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockBlock
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockBlockKind
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockValidationException
@@ -125,7 +126,7 @@ class ReactorMultiblockAssemblerTest {
     }
 
     @Test
-    fun `rejects port touching multiple chamber faces`() {
+    fun `rejects embedded port without explicit facing`() {
         val error = assertFailsWith<ReactorMultiblockValidationException> {
             assembler.assemble(
                 structureId = UUID.randomUUID(),
@@ -139,7 +140,7 @@ class ReactorMultiblockAssemblerTest {
             )
         }
 
-        assertEquals(true, error.validationErrors.any { it.contains("exactly one chamber face") })
+        assertEquals(true, error.validationErrors.any { it.contains("embedded reactor port") && it.contains("must have explicit facing") })
     }
 
     @Test
@@ -221,7 +222,7 @@ class ReactorMultiblockAssemblerTest {
             structureId = UUID.randomUUID(),
             blocks = listOf(
                 block(0, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
-                block(0, 1, 0, ReactorMultiblockBlockKind.ITEM_INPUT_PORT),
+                block(0, 1, 0, ReactorMultiblockBlockKind.ITEM_INPUT_PORT, ReactorBlockDirection.NORTH),
                 block(0, 2, 0, ReactorMultiblockBlockKind.CHAMBER),
             ),
         )
@@ -230,7 +231,9 @@ class ReactorMultiblockAssemblerTest {
         assertEquals(setOf(pos(0, 2, 0)), definition.zone.plainChamberPositions)
         assertEquals(setOf(pos(0, 0, 0), pos(0, 1, 0), pos(0, 2, 0)), definition.zone.volumePositions)
         assertEquals(0.006, definition.totalVolumeCubicMeters)
-        assertEquals(pos(0, 2, 0), definition.portsOfKind(ReactorPortKind.ITEM_INPUT).single().attachedChamberPosition)
+        val inputPort = definition.portsOfKind(ReactorPortKind.ITEM_INPUT).single()
+        assertEquals(pos(0, 1, 0), inputPort.attachedChamberPosition)
+        assertEquals(ReactorBlockDirection.NORTH, inputPort.contactDirection)
     }
 
     @Test
@@ -254,8 +257,9 @@ class ReactorMultiblockAssemblerTest {
         y: Int,
         z: Int,
         kind: ReactorMultiblockBlockKind,
+        facing: ReactorBlockDirection? = null,
     ): ReactorMultiblockBlock =
-        ReactorMultiblockBlock(pos(x, y, z), kind)
+        ReactorMultiblockBlock(pos(x, y, z), kind, facing)
 
     private fun squareTank(baseSize: Int, height: Int): List<ReactorMultiblockBlock> =
         buildList {

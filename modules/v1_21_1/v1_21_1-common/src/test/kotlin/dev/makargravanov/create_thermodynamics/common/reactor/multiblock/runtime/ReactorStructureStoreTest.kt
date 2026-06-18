@@ -5,6 +5,7 @@ import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.access.
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.access.ReactorOperationResult
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.assembly.ReactorMultiblockAssembler
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.assembly.ReactorMultiblockRules
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorBlockDirection
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorBlockPosition
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockBlock
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockBlockKind
@@ -306,8 +307,8 @@ class ReactorStructureStoreTest {
             blocks = listOf(
                 block(0, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
                 block(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
-                block(0, 1, 0, ReactorMultiblockBlockKind.ITEM_INPUT_PORT),
-                block(0, -1, 0, ReactorMultiblockBlockKind.FLUID_INPUT_PORT),
+                block(0, 1, 0, ReactorMultiblockBlockKind.ITEM_INPUT_PORT, ReactorBlockDirection.UP),
+                block(0, -1, 0, ReactorMultiblockBlockKind.FLUID_INPUT_PORT, ReactorBlockDirection.DOWN),
                 block(1, 0, 0, ReactorMultiblockBlockKind.ITEM_OUTPUT_PORT),
                 block(0, 0, 1, ReactorMultiblockBlockKind.FLUID_OUTPUT_PORT),
             ),
@@ -318,8 +319,9 @@ class ReactorStructureStoreTest {
         y: Int,
         z: Int,
         kind: ReactorMultiblockBlockKind,
+        facing: ReactorBlockDirection? = null,
     ): ReactorMultiblockBlock =
-        ReactorMultiblockBlock(ReactorBlockPosition(x, y, z), kind)
+        ReactorMultiblockBlock(ReactorBlockPosition(x, y, z), kind, facing)
 
     private class FakeNativeReactorBridge : NativeReactorBridge {
         val created = mutableListOf<ReactorStructureId>()

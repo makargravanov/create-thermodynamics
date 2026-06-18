@@ -1,7 +1,6 @@
 package dev.makargravanov.create_thermodynamics.neoforge.registry
 
 import dev.makargravanov.create_thermodynamics.neoforge.CreateThermodynamicsMod
-import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorChamberBlock
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockBlock
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockBlockEntity
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockKind
@@ -27,8 +26,8 @@ object CreateThermodynamicsRegistries {
     private val creativeModeTabs = DeferredRegister.create(Registries.CREATIVE_MODE_TAB, CreateThermodynamicsMod.MOD_ID)
     private val blockEntityTypes = DeferredRegister.create(Registries.BLOCK_ENTITY_TYPE, CreateThermodynamicsMod.MOD_ID)
 
-    val reactorChamber: DeferredHolder<Block, ReactorChamberBlock> =
-        blocks.register("reactor_chamber", Supplier { ReactorChamberBlock(reactorBlockProperties()) })
+    val reactorChamber: DeferredHolder<Block, ReactorMultiblockBlock> =
+        registerReactorBlock("reactor_chamber", ReactorMultiblockKind.CHAMBER)
     val reactorController: DeferredHolder<Block, ReactorMultiblockBlock> =
         registerReactorBlock("reactor_controller", ReactorMultiblockKind.CONTROLLER)
     val reactorItemInputPort: DeferredHolder<Block, ReactorMultiblockBlock> =
@@ -40,6 +39,7 @@ object CreateThermodynamicsRegistries {
     val reactorFluidOutputPort: DeferredHolder<Block, ReactorMultiblockBlock> =
         registerReactorBlock("reactor_fluid_output_port", ReactorMultiblockKind.FLUID_OUTPUT_PORT)
 
+    @Suppress("NULLABILITY_MISMATCH_BASED_ON_JAVA_ANNOTATIONS")
     val reactorMultiblockBlockEntity: DeferredHolder<BlockEntityType<*>, BlockEntityType<ReactorMultiblockBlockEntity>> =
         blockEntityTypes.register(
             "reactor_multiblock",

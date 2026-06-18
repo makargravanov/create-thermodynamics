@@ -194,7 +194,11 @@ private class ReactorChamberAssetGenerator(
     private fun writeBlockState() {
         writeJson(
             outputAssetsRoot.resolve("blockstates/$blockId.json"),
-            mapOf("variants" to mapOf("" to mapOf("model" to "$namespace:block/$blockId"))),
+            mapOf(
+                "variants" to listOf("down", "up", "north", "south", "west", "east").associate { facing ->
+                    "facing=$facing" to mapOf("model" to "$namespace:block/$blockId")
+                },
+            ),
         )
     }
 

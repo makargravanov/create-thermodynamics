@@ -1,6 +1,7 @@
 package dev.makargravanov.create_thermodynamics.common.reactor.multiblock.assembly
 
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorBlockPosition
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorBlockDirection
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockBlock
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockBlockKind
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockDefinition
@@ -25,12 +26,14 @@ class ReactorMultiblockAssembler(
     ): ReactorMultiblockDefinition {
         val errors = mutableListOf<String>()
         val blocksByPosition = mutableMapOf<ReactorBlockPosition, ReactorMultiblockBlockKind>()
+        val facingByPosition = mutableMapOf<ReactorBlockPosition, ReactorBlockDirection?>()
 
         for (block in blocks) {
             val previous = blocksByPosition.put(block.position, block.kind)
             if (previous != null) {
                 errors += "duplicate reactor multiblock block at ${block.position}: $previous and ${block.kind}"
             }
+            facingByPosition[block.position] = block.facing
         }
 
         val controllers = blocksByPosition.entries
@@ -66,7 +69,13 @@ class ReactorMultiblockAssembler(
             }
         }
 
-        val portDescriptors = buildPortDescriptors(blocksByPosition, zone?.plainChamberPositions.orEmpty(), errors)
+        val portDescriptors = buildPortDescriptors(
+            blocksByPosition = blocksByPosition,
+            facingByPosition = facingByPosition,
+            zoneVolume = zone?.volumePositions.orEmpty(),
+            plainChambers = zone?.plainChamberPositions.orEmpty(),
+            errors = errors,
+        )
 
         if (errors.isNotEmpty()) {
             throw ReactorMultiblockValidationException(errors)
@@ -84,7 +93,9 @@ class ReactorMultiblockAssembler(
 
     private fun buildPortDescriptors(
         blocksByPosition: Map<ReactorBlockPosition, ReactorMultiblockBlockKind>,
-        chambers: Set<ReactorBlockPosition>,
+        facingByPosition: Map<ReactorBlockPosition, ReactorBlockDirection?>,
+        zoneVolume: Set<ReactorBlockPosition>,
+        plainChambers: Set<ReactorBlockPosition>,
         errors: MutableList<String>,
     ): List<ReactorPortDescriptor> {
         val portEntries = blocksByPosition.entries
@@ -94,17 +105,8 @@ class ReactorMultiblockAssembler(
         val nextIndexByKind = mutableMapOf<ReactorPortKind, Int>()
         val descriptors = mutableListOf<ReactorPortDescriptor>()
         for ((position, portKind) in portEntries) {
-            val contactDirections = contactDirections(position, chambers)
-            if (contactDirections.isEmpty()) {
-                errors += "reactor port $portKind at $position must touch a chamber block by a face"
-                continue
-            }
-            if (contactDirections.size > 1) {
-                errors += "reactor port $portKind at $position must touch exactly one chamber face, got ${contactDirections.size}"
-                continue
-            }
-            val contactDirection = contactDirections.single()
-            val attachedChamber = position.neighbour(contactDirection)
+            val facing = facingByPosition[position]
+            val contact = portContact(position, portKind, facing, zoneVolume, plainChambers, errors) ?: continue
             val portIndex = nextIndexByKind.getOrDefault(portKind, 0)
             nextIndexByKind[portKind] = portIndex + 1
             descriptors += ReactorPortDescriptor(
@@ -112,11 +114,40 @@ class ReactorMultiblockAssembler(
                 kind = portKind,
                 position = position,
                 zoneIndex = 0,
-                attachedChamberPosition = attachedChamber,
-                contactDirection = contactDirection,
+                attachedChamberPosition = contact.attachedPosition,
+                contactDirection = contact.contactDirection,
             )
         }
         return descriptors
+    }
+
+    private fun portContact(
+        position: ReactorBlockPosition,
+        portKind: ReactorPortKind,
+        facing: ReactorBlockDirection?,
+        zoneVolume: Set<ReactorBlockPosition>,
+        plainChambers: Set<ReactorBlockPosition>,
+        errors: MutableList<String>,
+    ): PortContact? {
+        if (position in zoneVolume) {
+            if (facing == null) {
+                errors += "embedded reactor port $portKind at $position must have explicit facing"
+                return null
+            }
+            return PortContact(attachedPosition = position, contactDirection = facing)
+        }
+
+        val contactDirections = contactDirections(position, plainChambers)
+        if (contactDirections.isEmpty()) {
+            errors += "external reactor port $portKind at $position must touch a chamber block by a face"
+            return null
+        }
+        if (contactDirections.size > 1) {
+            errors += "external reactor port $portKind at $position must touch exactly one chamber face, got ${contactDirections.size}"
+            return null
+        }
+        val contactDirection = contactDirections.single()
+        return PortContact(attachedPosition = position.neighbour(contactDirection), contactDirection = contactDirection)
     }
 
     private fun contactDirections(
@@ -148,4 +179,9 @@ class ReactorMultiblockAssembler(
             ReactorMultiblockBlockKind.FLUID_OUTPUT_PORT,
             -> true
         }
+
+    private data class PortContact(
+        val attachedPosition: ReactorBlockPosition,
+        val contactDirection: ReactorBlockDirection,
+    )
 }

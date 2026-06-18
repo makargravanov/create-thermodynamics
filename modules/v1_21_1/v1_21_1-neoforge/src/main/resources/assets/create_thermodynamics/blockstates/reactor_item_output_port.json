@@ -1,7 +1,27 @@
 {
   "variants": {
-    "": {
+    "facing=down": {
+      "model": "create_thermodynamics:block/reactor_item_output_port",
+      "x": 90
+    },
+    "facing=up": {
+      "model": "create_thermodynamics:block/reactor_item_output_port",
+      "x": 270
+    },
+    "facing=north": {
       "model": "create_thermodynamics:block/reactor_item_output_port"
+    },
+    "facing=south": {
+      "model": "create_thermodynamics:block/reactor_item_output_port",
+      "y": 180
+    },
+    "facing=west": {
+      "model": "create_thermodynamics:block/reactor_item_output_port",
+      "y": 270
+    },
+    "facing=east": {
+      "model": "create_thermodynamics:block/reactor_item_output_port",
+      "y": 90
     }
   }
 }

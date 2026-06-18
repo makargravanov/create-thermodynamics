@@ -21,6 +21,7 @@ enum class ReactorPortKind {
 data class ReactorMultiblockBlock(
     val position: ReactorBlockPosition,
     val kind: ReactorMultiblockBlockKind,
+    val facing: ReactorBlockDirection? = null,
 )
 
 data class ReactorZoneDescriptor(

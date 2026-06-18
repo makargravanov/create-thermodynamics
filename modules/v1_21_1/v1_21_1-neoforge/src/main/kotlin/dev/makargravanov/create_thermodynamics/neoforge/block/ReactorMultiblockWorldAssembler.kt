@@ -2,6 +2,7 @@ package dev.makargravanov.create_thermodynamics.neoforge.block
 
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.assembly.ReactorMultiblockAssembler
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.assembly.ReactorMultiblockRules
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorBlockDirection
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorBlockPosition
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockDefinition
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockBlock as ModelReactorMultiblockBlock
@@ -126,7 +127,13 @@ object ReactorMultiblockWorldAssembler {
         positions: Set<BlockPos>,
     ): ReactorMultiblockDefinition? {
         val blocks = positions.mapNotNull { pos ->
-            blockKind(level, pos)?.let { ModelReactorMultiblockBlock(toReactorPosition(pos), it.modelKind) }
+            val state = level.getBlockState(pos)
+            val block = state.block as? ReactorMultiblockBlock ?: return@mapNotNull null
+            ModelReactorMultiblockBlock(
+                position = toReactorPosition(pos),
+                kind = block.kind.modelKind,
+                facing = block.modelFacing(state)?.toReactorDirection(),
+            )
         }
         return try {
             assembler.assemble(ReactorStructureId(structureId), blocks)
@@ -197,6 +204,16 @@ object ReactorMultiblockWorldAssembler {
 
     private fun blockKind(level: ServerLevel, pos: BlockPos): ReactorMultiblockKind? =
         (level.getBlockState(pos).block as? ReactorMultiblockBlock)?.kind
+
+    private fun Direction.toReactorDirection(): ReactorBlockDirection =
+        when (this) {
+            Direction.EAST -> ReactorBlockDirection.EAST
+            Direction.WEST -> ReactorBlockDirection.WEST
+            Direction.UP -> ReactorBlockDirection.UP
+            Direction.DOWN -> ReactorBlockDirection.DOWN
+            Direction.SOUTH -> ReactorBlockDirection.SOUTH
+            Direction.NORTH -> ReactorBlockDirection.NORTH
+        }
 
     private fun reactorBlockEntity(level: ServerLevel, pos: BlockPos): ReactorMultiblockBlockEntity? {
         if (level.getBlockState(pos).block !is ReactorMultiblockBlock) {

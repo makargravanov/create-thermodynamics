@@ -1,6 +1,12 @@
 {
-  "parent": "minecraft:block/cube_all",
+  "parent": "minecraft:block/cube",
   "textures": {
-    "all": "create_thermodynamics:block/reactor_controller"
+    "particle": "create_thermodynamics:block/reactor_chamber_north",
+    "down": "create_thermodynamics:block/reactor_chamber_down",
+    "up": "create_thermodynamics:block/reactor_chamber_up",
+    "north": "create_thermodynamics:block/reactor_controller",
+    "south": "create_thermodynamics:block/reactor_chamber_south",
+    "west": "create_thermodynamics:block/reactor_chamber_west",
+    "east": "create_thermodynamics:block/reactor_chamber_east"
   }
 }

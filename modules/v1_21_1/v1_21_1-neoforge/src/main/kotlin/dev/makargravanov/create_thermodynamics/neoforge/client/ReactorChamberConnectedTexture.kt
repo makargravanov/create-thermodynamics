@@ -21,14 +21,22 @@ import net.neoforged.neoforge.client.event.ModelEvent
 
 object ReactorChamberConnectedTexture {
     private val blockId = id("reactor_chamber")
-    private val modelLocation = ModelResourceLocation(blockId, "")
+    private val modelLocations = Direction.entries.map { direction ->
+        ModelResourceLocation(blockId, "facing=${direction.getSerializedName()}")
+    }
     private val behaviour = ReactorChamberConnectedTextureBehaviour()
 
     fun onModifyBakingResult(event: ModelEvent.ModifyBakingResult) {
         val models = event.models
-        val originalModel = models[modelLocation]
-            ?: error("Missing baked model for reactor chamber: $modelLocation")
-        models[modelLocation] = CTModel(originalModel, behaviour)
+        var replacedModels = 0
+        for (modelLocation in modelLocations) {
+            val originalModel = models[modelLocation] ?: continue
+            models[modelLocation] = CTModel(originalModel, behaviour)
+            replacedModels += 1
+        }
+        check(replacedModels == modelLocations.size) {
+            "Expected ${modelLocations.size} baked reactor chamber models, replaced $replacedModels: $modelLocations"
+        }
     }
 
     private fun id(path: String): ResourceLocation =
