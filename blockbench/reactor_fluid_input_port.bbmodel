@@ -1,0 +1,132 @@
+{
+  "meta": {
+    "format_version": "5.0",
+    "model_format": "java_block",
+    "box_uv": true
+  },
+  "name": "Reactor Fluid Input Port",
+  "model_identifier": "create_thermodynamics:reactor_fluid_input_port",
+  "visible_box": [
+    1,
+    1,
+    1
+  ],
+  "variable_placeholders": "",
+  "variable_placeholder_buttons": [],
+  "timeline_setups": [],
+  "resolution": {
+    "width": 16,
+    "height": 16
+  },
+  "elements": [
+    {
+      "name": "reactor_fluid_input_port",
+      "box_uv": true,
+      "rescale": false,
+      "locked": false,
+      "from": [
+        0,
+        0,
+        0
+      ],
+      "to": [
+        16,
+        16,
+        16
+      ],
+      "autouv": 0,
+      "color": 0,
+      "origin": [
+        8,
+        8,
+        8
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0
+        },
+        "east": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0
+        },
+        "south": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0
+        },
+        "west": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0
+        },
+        "up": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0
+        },
+        "down": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0
+        }
+      },
+      "type": "cube",
+      "uuid": "3eb0335c-7ce0-40f5-8779-971c89e625c6"
+    }
+  ],
+  "outliner": [
+    "3eb0335c-7ce0-40f5-8779-971c89e625c6"
+  ],
+  "textures": [
+    {
+      "path": "../modules/v1_21_1/v1_21_1-neoforge/src/main/resources/assets/create_thermodynamics/textures/block/reactor_fluid_input_port.png",
+      "name": "reactor_fluid_input_port",
+      "folder": "block",
+      "namespace": "create_thermodynamics",
+      "id": "0",
+      "particle": true,
+      "render_mode": "default",
+      "render_sides": "auto",
+      "frame_time": 1,
+      "frame_order_type": "loop",
+      "frame_order": "",
+      "frame_interpolate": false,
+      "visible": true,
+      "mode": "link",
+      "saved": true,
+      "uuid": "3eb0335c-7ce0-40f5-8788-902f90f629b7",
+      "relative_path": "../modules/v1_21_1/v1_21_1-neoforge/src/main/resources/assets/create_thermodynamics/textures/block/reactor_fluid_input_port.png",
+      "source": ""
+    }
+  ],
+  "groups": [],
+  "animations": [],
+  "display": {}
+}

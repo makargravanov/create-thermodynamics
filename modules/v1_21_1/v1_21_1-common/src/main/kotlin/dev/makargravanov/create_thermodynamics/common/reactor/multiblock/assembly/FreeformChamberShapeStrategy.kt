@@ -10,16 +10,16 @@ object FreeformChamberShapeStrategy : ReactorChamberShapeStrategy {
         volumeCapableBlocks: Map<ReactorBlockPosition, ReactorMultiblockBlockKind>,
         controller: ReactorBlockPosition?,
         chamberVolumeCubicMeters: Double,
-        maximumChamberBlocks: Int?,
+        maximumVolumeBlocks: Int?,
     ): ReactorChamberShapeResult {
         if (chambers.isEmpty()) {
             return ReactorChamberShapeResult(null, errors = listOf("reactor multiblock must contain chamber blocks"))
         }
-        if (maximumChamberBlocks != null && chambers.size > maximumChamberBlocks) {
+        if (maximumVolumeBlocks != null && chambers.size > maximumVolumeBlocks) {
             return ReactorChamberShapeResult(
                 zone = null,
                 inactiveChamberPositions = emptySet(),
-                errors = listOf("reactor multiblock may contain at most $maximumChamberBlocks chamber blocks, got ${chambers.size}"),
+                errors = listOf("reactor multiblock may contain at most $maximumVolumeBlocks volume blocks, got ${chambers.size}"),
             )
         }
 
@@ -33,13 +33,13 @@ object FreeformChamberShapeStrategy : ReactorChamberShapeStrategy {
             )
         }
 
-        val chamberPositions = chambers.toSortedSet()
+        val plainChamberPositions = chambers.toSortedSet()
         return ReactorChamberShapeResult(
             zone = ReactorZoneDescriptor(
                 zoneIndex = 0,
-                chamberPositions = chamberPositions,
-                volumePositions = chamberPositions,
-                volumeCubicMeters = chamberPositions.size * chamberVolumeCubicMeters,
+                volumePositions = plainChamberPositions,
+                plainChamberPositions = plainChamberPositions,
+                volumeCubicMeters = plainChamberPositions.size * chamberVolumeCubicMeters,
             ),
             inactiveChamberPositions = emptySet(),
             errors = emptyList(),

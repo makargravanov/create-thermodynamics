@@ -1,0 +1,132 @@
+{
+  "meta": {
+    "format_version": "5.0",
+    "model_format": "java_block",
+    "box_uv": true
+  },
+  "name": "Reactor Controller",
+  "model_identifier": "create_thermodynamics:reactor_controller",
+  "visible_box": [
+    1,
+    1,
+    1
+  ],
+  "variable_placeholders": "",
+  "variable_placeholder_buttons": [],
+  "timeline_setups": [],
+  "resolution": {
+    "width": 16,
+    "height": 16
+  },
+  "elements": [
+    {
+      "name": "reactor_controller",
+      "box_uv": true,
+      "rescale": false,
+      "locked": false,
+      "from": [
+        0,
+        0,
+        0
+      ],
+      "to": [
+        16,
+        16,
+        16
+      ],
+      "autouv": 0,
+      "color": 0,
+      "origin": [
+        8,
+        8,
+        8
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0
+        },
+        "east": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0
+        },
+        "south": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0
+        },
+        "west": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0
+        },
+        "up": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0
+        },
+        "down": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": 0
+        }
+      },
+      "type": "cube",
+      "uuid": "33adec62-78d6-4be6-abe5-6e74726f6c6c"
+    }
+  ],
+  "outliner": [
+    "33adec62-78d6-4be6-abe5-6e74726f6c6c"
+  ],
+  "textures": [
+    {
+      "path": "../modules/v1_21_1/v1_21_1-neoforge/src/main/resources/assets/create_thermodynamics/textures/block/reactor_controller.png",
+      "name": "reactor_controller",
+      "folder": "block",
+      "namespace": "create_thermodynamics",
+      "id": "0",
+      "particle": true,
+      "render_mode": "default",
+      "render_sides": "auto",
+      "frame_time": 1,
+      "frame_order_type": "loop",
+      "frame_order": "",
+      "frame_interpolate": false,
+      "visible": true,
+      "mode": "link",
+      "saved": true,
+      "uuid": "33adec71-71e9-42f6-afd6-6e74726f6c6c",
+      "relative_path": "../modules/v1_21_1/v1_21_1-neoforge/src/main/resources/assets/create_thermodynamics/textures/block/reactor_controller.png",
+      "source": ""
+    }
+  ],
+  "groups": [],
+  "animations": [],
+  "display": {}
+}

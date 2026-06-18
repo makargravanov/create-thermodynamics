@@ -51,22 +51,22 @@ class ReactorMultiblockAssembler(
             volumeCapableBlocks = blocksByPosition.filterValues { it.isVolumeCapable() },
             controller = controller,
             chamberVolumeCubicMeters = rules.chamberVolumeCubicMeters,
-            maximumChamberBlocks = rules.maximumChamberBlocks,
+            maximumVolumeBlocks = rules.maximumVolumeBlocks,
         )
         errors += shapeResult.errors
         val zone = shapeResult.zone
 
         if (zone != null) {
-            val selectedChambers = zone.chamberPositions
-            if (selectedChambers.size < rules.minimumChamberBlocks) {
-                errors += "reactor multiblock must contain at least ${rules.minimumChamberBlocks} chamber blocks, got ${selectedChambers.size}"
+            val selectedVolume = zone.volumePositions
+            if (selectedVolume.size < rules.minimumVolumeBlocks) {
+                errors += "reactor multiblock must contain at least ${rules.minimumVolumeBlocks} volume blocks, got ${selectedVolume.size}"
             }
-            if (controller != null && controller !in zone.volumePositions && contactDirections(controller, selectedChambers).isEmpty()) {
+            if (controller != null && controller !in zone.volumePositions && contactDirections(controller, zone.plainChamberPositions).isEmpty()) {
                 errors += "reactor controller at $controller must touch a chamber block by a face"
             }
         }
 
-        val portDescriptors = buildPortDescriptors(blocksByPosition, zone?.chamberPositions.orEmpty(), errors)
+        val portDescriptors = buildPortDescriptors(blocksByPosition, zone?.plainChamberPositions.orEmpty(), errors)
 
         if (errors.isNotEmpty()) {
             throw ReactorMultiblockValidationException(errors)
@@ -75,7 +75,7 @@ class ReactorMultiblockAssembler(
         return ReactorMultiblockDefinition(
             structureId = structureId,
             controllerPosition = requireNotNull(controller),
-            controllerContactDirection = contactDirections(controller, requireNotNull(zone).chamberPositions).singleOrNull(),
+            controllerContactDirection = contactDirections(controller, requireNotNull(zone).plainChamberPositions).singleOrNull(),
             zone = requireNotNull(zone),
             ports = portDescriptors,
             inactiveChamberPositions = shapeResult.inactiveChamberPositions,

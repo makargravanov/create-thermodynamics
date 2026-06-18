@@ -1,3 +1,8 @@
 {
+  "block.create_thermodynamics.reactor_controller": "Reactor Controller",
+  "block.create_thermodynamics.reactor_fluid_input_port": "Reactor Fluid Input Port",
+  "block.create_thermodynamics.reactor_fluid_output_port": "Reactor Fluid Output Port",
+  "block.create_thermodynamics.reactor_item_input_port": "Reactor Item Input Port",
+  "block.create_thermodynamics.reactor_item_output_port": "Reactor Item Output Port",
   "create_thermodynamics.configuration.title": "create-thermodynamics"
 }

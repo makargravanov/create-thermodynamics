@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "create_thermodynamics:block/reactor_item_input_port"
+    }
+  }
+}

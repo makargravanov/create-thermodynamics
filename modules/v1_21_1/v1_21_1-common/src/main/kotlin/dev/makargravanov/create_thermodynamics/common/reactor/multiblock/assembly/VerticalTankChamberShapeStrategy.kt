@@ -16,7 +16,7 @@ object VerticalTankChamberShapeStrategy : ReactorChamberShapeStrategy {
         volumeCapableBlocks: Map<ReactorBlockPosition, ReactorMultiblockBlockKind>,
         controller: ReactorBlockPosition?,
         chamberVolumeCubicMeters: Double,
-        maximumChamberBlocks: Int?,
+        maximumVolumeBlocks: Int?,
     ): ReactorChamberShapeResult {
         if (chambers.isEmpty()) {
             return ReactorChamberShapeResult(null, errors = listOf("reactor multiblock must contain chamber blocks"))
@@ -25,7 +25,7 @@ object VerticalTankChamberShapeStrategy : ReactorChamberShapeStrategy {
             return ReactorChamberShapeResult(null, errors = listOf("reactor vertical tank chamber requires a controller"))
         }
 
-        val selected = findBestTank(chambers, volumeCapableBlocks, controller, maximumChamberBlocks)
+        val selected = findBestTank(chambers, volumeCapableBlocks, controller, maximumVolumeBlocks)
         if (selected == null) {
             return ReactorChamberShapeResult(
                 zone = null,
@@ -36,13 +36,13 @@ object VerticalTankChamberShapeStrategy : ReactorChamberShapeStrategy {
             )
         }
 
-        val chamberPositions = selected.positions.toSortedSet()
+        val plainChamberPositions = selected.positions.toSortedSet()
         val inactiveChambers = (chambers - selected.positions).toSortedSet()
         return ReactorChamberShapeResult(
             zone = ReactorZoneDescriptor(
                 zoneIndex = 0,
-                chamberPositions = chamberPositions,
                 volumePositions = selected.volumePositions.toSortedSet(),
+                plainChamberPositions = plainChamberPositions,
                 volumeCubicMeters = selected.volumePositions.size * chamberVolumeCubicMeters,
             ),
             inactiveChamberPositions = inactiveChambers,
@@ -54,7 +54,7 @@ object VerticalTankChamberShapeStrategy : ReactorChamberShapeStrategy {
         chambers: Set<ReactorBlockPosition>,
         volumeCapableBlocks: Map<ReactorBlockPosition, ReactorMultiblockBlockKind>,
         controller: ReactorBlockPosition,
-        maximumChamberBlocks: Int?,
+        maximumVolumeBlocks: Int?,
     ): TankCandidate? {
         val candidates = mutableListOf<TankCandidate>()
         val ys = volumeCapableBlocks.keys.map { it.y }.toSet()
@@ -67,18 +67,18 @@ object VerticalTankChamberShapeStrategy : ReactorChamberShapeStrategy {
                     for (minY in ys) {
                         for (height in 1..maxHeight) {
                             val volumePositions = tankPositions(minX, minY, minZ, baseSize, height)
-                            val chamberPositions = volumePositions.filterTo(linkedSetOf()) { volumeCapableBlocks[it] == ReactorMultiblockBlockKind.CHAMBER }
+                            val plainChamberPositions = volumePositions.filterTo(linkedSetOf()) { volumeCapableBlocks[it] == ReactorMultiblockBlockKind.CHAMBER }
                             if (
                                 volumePositions.all { it in volumeCapableBlocks } &&
-                                chamberPositions.isNotEmpty() &&
-                                (maximumChamberBlocks == null || chamberPositions.size <= maximumChamberBlocks) &&
-                                (controller in volumePositions || chamberPositions.any { it in controller.faceNeighbours() })
+                                plainChamberPositions.isNotEmpty() &&
+                                (maximumVolumeBlocks == null || volumePositions.size <= maximumVolumeBlocks) &&
+                                (controller in volumePositions || plainChamberPositions.any { it in controller.faceNeighbours() })
                             ) {
                                 candidates += TankCandidate(
                                     baseSize = baseSize,
                                     height = height,
                                     minPosition = ReactorBlockPosition(minX, minY, minZ),
-                                    positions = chamberPositions,
+                                    positions = plainChamberPositions,
                                     volumePositions = volumePositions,
                                 )
                             }

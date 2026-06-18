@@ -25,8 +25,8 @@ data class ReactorMultiblockBlock(
 
 data class ReactorZoneDescriptor(
     val zoneIndex: Int,
-    val chamberPositions: Set<ReactorBlockPosition>,
-    val volumePositions: Set<ReactorBlockPosition> = chamberPositions,
+    val volumePositions: Set<ReactorBlockPosition>,
+    val plainChamberPositions: Set<ReactorBlockPosition>,
     val volumeCubicMeters: Double,
 )
 

@@ -32,7 +32,7 @@ class ReactorMultiblockAssemblerTest {
         assertEquals(ReactorStructureId(structureId), definition.structureId)
         assertEquals(pos(-1, 0, 0), definition.controllerPosition)
         assertEquals(0.008, definition.totalVolumeCubicMeters)
-        assertEquals(4, definition.zone.chamberPositions.size)
+        assertEquals(4, definition.zone.plainChamberPositions.size)
         assertEquals(4, definition.zone.volumePositions.size)
         assertEquals(
             listOf(ReactorPortKind.ITEM_INPUT, ReactorPortKind.FLUID_OUTPUT),
@@ -90,7 +90,7 @@ class ReactorMultiblockAssemblerTest {
             ),
         )
 
-        assertEquals(setOf(pos(0, 0, 0)), definition.zone.chamberPositions)
+        assertEquals(setOf(pos(0, 0, 0)), definition.zone.plainChamberPositions)
     }
 
     @Test
@@ -175,9 +175,9 @@ class ReactorMultiblockAssemblerTest {
             blocks = squareTank(baseSize = 3, height = 16) + block(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
         )
 
-        assertEquals(4, oneByOne.zone.chamberPositions.size)
-        assertEquals(32, twoByTwo.zone.chamberPositions.size)
-        assertEquals(144, threeByThree.zone.chamberPositions.size)
+        assertEquals(4, oneByOne.zone.volumePositions.size)
+        assertEquals(32, twoByTwo.zone.volumePositions.size)
+        assertEquals(144, threeByThree.zone.volumePositions.size)
     }
 
     @Test
@@ -192,9 +192,9 @@ class ReactorMultiblockAssemblerTest {
             blocks = blocks,
         )
 
-        assertEquals(32, definition.zone.chamberPositions.size)
+        assertEquals(32, definition.zone.volumePositions.size)
         assertEquals(setOf(pos(2, 0, 0)), definition.inactiveChamberPositions)
-        assertEquals(false, pos(2, 0, 0) in definition.zone.chamberPositions)
+        assertEquals(false, pos(2, 0, 0) in definition.zone.volumePositions)
     }
 
     @Test
@@ -202,7 +202,7 @@ class ReactorMultiblockAssemblerTest {
         val limitedAssembler = ReactorMultiblockAssembler(
             ReactorMultiblockRules(
                 chamberVolumeCubicMeters = 0.002,
-                maximumChamberBlocks = 4,
+                maximumVolumeBlocks = 4,
             ),
         )
 
@@ -211,7 +211,7 @@ class ReactorMultiblockAssemblerTest {
             blocks = squareTank(baseSize = 2, height = 2) + block(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
         )
 
-        assertEquals(4, definition.zone.chamberPositions.size)
+        assertEquals(4, definition.zone.volumePositions.size)
         assertEquals(4, definition.inactiveChamberPositions.size)
     }
 
@@ -227,7 +227,7 @@ class ReactorMultiblockAssemblerTest {
         )
 
         assertEquals(pos(0, 0, 0), definition.controllerPosition)
-        assertEquals(setOf(pos(0, 2, 0)), definition.zone.chamberPositions)
+        assertEquals(setOf(pos(0, 2, 0)), definition.zone.plainChamberPositions)
         assertEquals(setOf(pos(0, 0, 0), pos(0, 1, 0), pos(0, 2, 0)), definition.zone.volumePositions)
         assertEquals(0.006, definition.totalVolumeCubicMeters)
         assertEquals(pos(0, 2, 0), definition.portsOfKind(ReactorPortKind.ITEM_INPUT).single().attachedChamberPosition)

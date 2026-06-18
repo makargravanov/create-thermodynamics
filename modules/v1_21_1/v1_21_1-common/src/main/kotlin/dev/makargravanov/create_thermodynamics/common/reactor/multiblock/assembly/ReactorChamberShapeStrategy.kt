@@ -10,7 +10,7 @@ interface ReactorChamberShapeStrategy {
         volumeCapableBlocks: Map<ReactorBlockPosition, ReactorMultiblockBlockKind>,
         controller: ReactorBlockPosition?,
         chamberVolumeCubicMeters: Double,
-        maximumChamberBlocks: Int?,
+        maximumVolumeBlocks: Int?,
     ): ReactorChamberShapeResult
 }
 
