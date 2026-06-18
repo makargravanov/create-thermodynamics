@@ -38,6 +38,7 @@ bin/
 run/
 !**/src/**/run/
 **/src/generated/**/.cache/
+modules/v1_21_1/v1_21_1-neoforge/src/generated/resources/assets/create_thermodynamics/atlases/blocks.json
 modules/v1_21_1/v1_21_1-neoforge/src/generated/resources/assets/create_thermodynamics/blockstates/reactor_chamber.json
 modules/v1_21_1/v1_21_1-neoforge/src/generated/resources/assets/create_thermodynamics/models/block/reactor_chamber*.json
 modules/v1_21_1/v1_21_1-neoforge/src/generated/resources/assets/create_thermodynamics/models/item/reactor_chamber.json

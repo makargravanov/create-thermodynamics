@@ -26,6 +26,11 @@ base {
     archivesName.set(prop("mod_id"))
 }
 
+repositories {
+    maven("https://maven.createmod.net")
+    maven("https://maven.ithundxr.dev/snapshots")
+}
+
 extensions.configure<NeoForgeExtension>("neoForge") {
     version = prop("neo_version")
 

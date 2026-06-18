@@ -12,6 +12,8 @@ plugins {
 dependencyResolutionManagement {
     repositories {
         mavenCentral()
+        maven("https://maven.createmod.net")
+        maven("https://maven.ithundxr.dev/snapshots")
     }
 }
 
