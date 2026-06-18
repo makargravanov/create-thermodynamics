@@ -180,7 +180,13 @@ object ReactorMultiblockWorldAssembler {
             val assignment = state.assignmentAt(pos)
             requireNotNull(reactorBlockEntity(level, pos)) {
                 "cannot assign reactor membership to non-reactor block at $pos"
-            }.setStructureMembership(assignment?.structureId, assignment?.activeVolumeBlock ?: false)
+            }.setStructureMembership(
+                newStructureId = assignment?.structureId,
+                newActiveVolumeBlock = assignment?.activeVolumeBlock ?: false,
+                newZoneCount = assignment?.zoneCount ?: 0,
+                newChamberBlockCount = assignment?.chamberBlockCount ?: 0,
+                newPortCount = assignment?.portCount ?: 0,
+            )
         }
     }
 
@@ -241,6 +247,9 @@ object ReactorMultiblockWorldAssembler {
         return StructureAssignment(
             structureId = structureId.value,
             activeVolumeBlock = toReactorPosition(pos) in zone.volumePositions,
+            zoneCount = 1,
+            chamberBlockCount = zone.volumePositions.size,
+            portCount = ports.size,
         )
     }
 
@@ -317,5 +326,8 @@ object ReactorMultiblockWorldAssembler {
     private data class StructureAssignment(
         val structureId: UUID,
         val activeVolumeBlock: Boolean,
+        val zoneCount: Int,
+        val chamberBlockCount: Int,
+        val portCount: Int,
     )
 }

@@ -3,6 +3,7 @@ plugins {
 }
 
 dependencies {
+    implementation(project(":modules:ui"))
     implementation("ru.lazyhat:kraft-ui-dsl")
 }
 

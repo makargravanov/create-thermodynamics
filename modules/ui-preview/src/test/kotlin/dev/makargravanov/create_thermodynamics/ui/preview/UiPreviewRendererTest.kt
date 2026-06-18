@@ -47,8 +47,14 @@ class UiPreviewRendererTest {
     }
 
     @Test
-    fun reactorPortPreviewIsNotBlank() {
-        val image = UiPreviewRenderer.render(ReactorPortPreviews.all().single())
+    fun reactorPreviewsAreNotBlank() {
+        for (preview in ReactorPortPreviews.all()) {
+            assertPreviewIsNotBlank(preview)
+        }
+    }
+
+    private fun assertPreviewIsNotBlank(preview: UiPreviewSpec) {
+        val image = UiPreviewRenderer.render(preview)
         val pixels =
             sequence {
                 for (y in 0 until image.height) {
@@ -58,6 +64,6 @@ class UiPreviewRendererTest {
                 }
             }.toSet()
 
-        assert(pixels.size > 4) { "preview should contain several colors" }
+        assert(pixels.size > 4) { "${preview.id} preview should contain several colors" }
     }
 }

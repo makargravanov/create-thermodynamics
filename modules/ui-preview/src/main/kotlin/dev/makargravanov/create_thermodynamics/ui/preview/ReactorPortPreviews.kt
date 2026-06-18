@@ -1,5 +1,7 @@
 package dev.makargravanov.create_thermodynamics.ui.preview
 
+import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUi
+import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUiState
 import ru.lazyhat.kraftui.foundation.Color
 import ru.lazyhat.kraftui.foundation.modifier.Modifier
 import ru.lazyhat.kraftui.foundation.modifier.background
@@ -10,6 +12,23 @@ import ru.lazyhat.kraftui.foundation.ui
 object ReactorPortPreviews {
     fun all(): List<UiPreviewSpec> =
         listOf(
+            UiPreviewSpec(
+                id = "reactor_controller",
+                width = ReactorControllerUi.Width,
+                height = ReactorControllerUi.Height,
+                root =
+                    ReactorControllerUi.build {
+                        ReactorControllerUiState(
+                            title = "Reactor Controller",
+                            status = "formed",
+                            structureId = "9f1a4c71-8b55-48df-9fb5-5f8ad7e1a334",
+                            active = true,
+                            zoneCount = 1,
+                            chamberBlocks = 12,
+                            portCount = 4,
+                        )
+                    },
+            ),
             UiPreviewSpec(
                 id = "reactor_port_inventory",
                 width = 176,

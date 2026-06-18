@@ -4,12 +4,15 @@ import dev.makargravanov.create_thermodynamics.neoforge.CreateThermodynamicsMod
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockBlock
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockBlockEntity
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockKind
+import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorControllerMenu
 import net.minecraft.core.registries.Registries
 import net.minecraft.network.chat.Component
+import net.minecraft.world.flag.FeatureFlags
 import net.minecraft.world.item.BlockItem
 import net.minecraft.world.item.CreativeModeTab
 import net.minecraft.world.item.Item
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.inventory.MenuType
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.entity.BlockEntityType
 import net.minecraft.world.level.block.SoundType
@@ -25,6 +28,7 @@ object CreateThermodynamicsRegistries {
     private val items = DeferredRegister.create(Registries.ITEM, CreateThermodynamicsMod.MOD_ID)
     private val creativeModeTabs = DeferredRegister.create(Registries.CREATIVE_MODE_TAB, CreateThermodynamicsMod.MOD_ID)
     private val blockEntityTypes = DeferredRegister.create(Registries.BLOCK_ENTITY_TYPE, CreateThermodynamicsMod.MOD_ID)
+    private val menuTypes = DeferredRegister.create(Registries.MENU, CreateThermodynamicsMod.MOD_ID)
 
     val reactorChamber: DeferredHolder<Block, ReactorMultiblockBlock> =
         registerReactorBlock("reactor_chamber", ReactorMultiblockKind.CHAMBER)
@@ -53,6 +57,14 @@ object CreateThermodynamicsRegistries {
                     reactorFluidInputPort.get(),
                     reactorFluidOutputPort.get(),
                 ).build(null)
+            },
+        )
+
+    val reactorControllerMenu: DeferredHolder<MenuType<*>, MenuType<ReactorControllerMenu>> =
+        menuTypes.register(
+            "reactor_controller",
+            Supplier {
+                MenuType({ containerId, _ -> ReactorControllerMenu(containerId) }, FeatureFlags.DEFAULT_FLAGS)
             },
         )
 
@@ -87,6 +99,7 @@ object CreateThermodynamicsRegistries {
         items.register(eventBus)
         creativeModeTabs.register(eventBus)
         blockEntityTypes.register(eventBus)
+        menuTypes.register(eventBus)
     }
 
     private fun registerReactorBlock(

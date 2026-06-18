@@ -43,7 +43,7 @@ class ReactorMultiblockBlock(
         player: Player,
         hitResult: BlockHitResult,
     ): InteractionResult {
-        if (!kind.isPort) {
+        if (!kind.opensMenu) {
             return super.useWithoutItem(state, level, pos, player, hitResult)
         }
         if (!level.isClientSide) {

@@ -15,6 +15,7 @@ import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.inventory.AbstractContainerMenu
 import net.minecraft.world.inventory.ChestMenu
+import net.minecraft.world.inventory.ContainerData
 import net.minecraft.world.inventory.MenuType
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.level.block.entity.BlockEntity
@@ -33,17 +34,41 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         private set
     var activeVolumeBlock: Boolean = false
         private set
+    var zoneCount: Int = 0
+        private set
+    var chamberBlockCount: Int = 0
+        private set
+    var portCount: Int = 0
+        private set
 
     fun visualGroupKey(): UUID? =
         structureId?.takeIf { activeVolumeBlock }
 
-    fun setStructureMembership(newStructureId: UUID?, newActiveVolumeBlock: Boolean): Boolean {
+    fun setStructureMembership(
+        newStructureId: UUID?,
+        newActiveVolumeBlock: Boolean,
+        newZoneCount: Int = 0,
+        newChamberBlockCount: Int = 0,
+        newPortCount: Int = 0,
+    ): Boolean {
         val normalizedActive = newStructureId != null && newActiveVolumeBlock
-        if (structureId == newStructureId && activeVolumeBlock == normalizedActive) {
+        val normalizedZoneCount = if (newStructureId != null) newZoneCount else 0
+        val normalizedChamberBlockCount = if (newStructureId != null) newChamberBlockCount else 0
+        val normalizedPortCount = if (newStructureId != null) newPortCount else 0
+        if (
+            structureId == newStructureId &&
+            activeVolumeBlock == normalizedActive &&
+            zoneCount == normalizedZoneCount &&
+            chamberBlockCount == normalizedChamberBlockCount &&
+            portCount == normalizedPortCount
+        ) {
             return false
         }
         structureId = newStructureId
         activeVolumeBlock = normalizedActive
+        zoneCount = normalizedZoneCount
+        chamberBlockCount = normalizedChamberBlockCount
+        portCount = normalizedPortCount
         setChanged()
         refreshVisualModel()
         return true
@@ -55,6 +80,9 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         super.loadAdditional(tag, registries)
         structureId = if (tag.hasUUID(STRUCTURE_ID_TAG)) tag.getUUID(STRUCTURE_ID_TAG) else null
         activeVolumeBlock = structureId != null && tag.getBoolean(ACTIVE_VOLUME_TAG)
+        zoneCount = if (structureId != null) tag.getInt(ZONE_COUNT_TAG) else 0
+        chamberBlockCount = if (structureId != null) tag.getInt(CHAMBER_BLOCK_COUNT_TAG) else 0
+        portCount = if (structureId != null) tag.getInt(PORT_COUNT_TAG) else 0
         ContainerHelper.loadAllItems(tag, items, registries)
         if (structureId != oldStructureId || activeVolumeBlock != oldActiveVolumeBlock) {
             refreshVisualModel()
@@ -65,6 +93,9 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         super.saveAdditional(tag, registries)
         structureId?.let { tag.putUUID(STRUCTURE_ID_TAG, it) }
         tag.putBoolean(ACTIVE_VOLUME_TAG, activeVolumeBlock)
+        tag.putInt(ZONE_COUNT_TAG, zoneCount)
+        tag.putInt(CHAMBER_BLOCK_COUNT_TAG, chamberBlockCount)
+        tag.putInt(PORT_COUNT_TAG, portCount)
         ContainerHelper.saveAllItems(tag, items, registries)
     }
 
@@ -115,14 +146,70 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
     }
 
     override fun getDisplayName(): Component =
-        Component.translatable("container.create_thermodynamics.reactor_port")
+        if (reactorKind() == ReactorMultiblockKind.CONTROLLER) {
+            Component.translatable("container.create_thermodynamics.reactor_controller")
+        } else {
+            Component.translatable("container.create_thermodynamics.reactor_port")
+        }
 
     override fun createMenu(containerId: Int, playerInventory: Inventory, player: Player): AbstractContainerMenu =
-        ChestMenu(MenuType.GENERIC_9x1, containerId, playerInventory, this, 1)
+        when (reactorKind()) {
+            ReactorMultiblockKind.CONTROLLER -> ReactorControllerMenu(containerId, this)
+            ReactorMultiblockKind.ITEM_INPUT_PORT,
+            ReactorMultiblockKind.ITEM_OUTPUT_PORT,
+            ReactorMultiblockKind.FLUID_INPUT_PORT,
+            ReactorMultiblockKind.FLUID_OUTPUT_PORT,
+            -> ChestMenu(MenuType.GENERIC_9x1, containerId, playerInventory, this, 1)
+
+            ReactorMultiblockKind.CHAMBER,
+            null,
+            -> error("reactor block entity at $blockPos cannot create a menu for ${blockState.block}")
+        }
+
+    fun controllerScreenState(): ReactorControllerScreenState =
+        ReactorControllerScreenState(
+            structureId = structureId?.toString(),
+            formed = structureId != null,
+            zoneCount = zoneCount,
+            chamberBlockCount = chamberBlockCount,
+            portCount = portCount,
+        )
+
+    fun controllerMenuData(): ContainerData =
+        object : ContainerData {
+            override fun get(index: Int): Int =
+                when (index) {
+                    CONTROLLER_FORMED_DATA_SLOT -> if (structureId != null) 1 else 0
+                    CONTROLLER_ZONE_COUNT_DATA_SLOT -> zoneCount
+                    CONTROLLER_CHAMBER_BLOCK_COUNT_DATA_SLOT -> chamberBlockCount
+                    CONTROLLER_PORT_COUNT_DATA_SLOT -> portCount
+                    else -> error("unknown reactor controller data slot $index")
+                }
+
+            override fun set(index: Int, value: Int) {
+                check(index in 0 until CONTROLLER_DATA_SLOT_COUNT) {
+                    "unknown reactor controller data slot $index"
+                }
+            }
+
+            override fun getCount(): Int =
+                CONTROLLER_DATA_SLOT_COUNT
+        }
+
+    private fun reactorKind(): ReactorMultiblockKind? =
+        (blockState.block as? ReactorMultiblockBlock)?.kind
 
     companion object {
         private const val CONTAINER_SIZE = 9
         private const val STRUCTURE_ID_TAG = "structure_id"
         private const val ACTIVE_VOLUME_TAG = "active_volume"
+        private const val ZONE_COUNT_TAG = "zone_count"
+        private const val CHAMBER_BLOCK_COUNT_TAG = "chamber_block_count"
+        private const val PORT_COUNT_TAG = "port_count"
+        private const val CONTROLLER_FORMED_DATA_SLOT = 0
+        private const val CONTROLLER_ZONE_COUNT_DATA_SLOT = 1
+        private const val CONTROLLER_CHAMBER_BLOCK_COUNT_DATA_SLOT = 2
+        private const val CONTROLLER_PORT_COUNT_DATA_SLOT = 3
+        private const val CONTROLLER_DATA_SLOT_COUNT = 4
     }
 }
