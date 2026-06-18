@@ -1,4 +1,5 @@
 {
+  "block.create_thermodynamics.reactor_chamber": "Reactor Chamber",
   "block.create_thermodynamics.reactor_controller": "Reactor Controller",
   "block.create_thermodynamics.reactor_fluid_input_port": "Reactor Fluid Input Port",
   "block.create_thermodynamics.reactor_fluid_output_port": "Reactor Fluid Output Port",
