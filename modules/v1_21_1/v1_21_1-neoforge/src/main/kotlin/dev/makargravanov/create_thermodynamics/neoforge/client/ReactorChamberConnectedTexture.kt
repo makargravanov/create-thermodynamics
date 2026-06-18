@@ -7,6 +7,7 @@ import com.simibubi.create.foundation.block.connected.CTSpriteShifter
 import com.simibubi.create.foundation.block.connected.CTType
 import com.simibubi.create.foundation.block.connected.ConnectedTextureBehaviour
 import dev.makargravanov.create_thermodynamics.neoforge.CreateThermodynamicsMod
+import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockBlockEntity
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockBlock
 import net.minecraft.client.renderer.texture.TextureAtlasSprite
 import net.minecraft.client.resources.model.ModelResourceLocation
@@ -68,6 +69,12 @@ object ReactorChamberConnectedTexture {
             face: Direction,
         ): Boolean {
             if (other.block !is ReactorMultiblockBlock) {
+                return false
+            }
+
+            val currentGroup = (reader.getBlockEntity(pos) as? ReactorMultiblockBlockEntity)?.visualGroupKey()
+            val otherGroup = (reader.getBlockEntity(otherPos) as? ReactorMultiblockBlockEntity)?.visualGroupKey()
+            if (currentGroup == null || currentGroup != otherGroup) {
                 return false
             }
 

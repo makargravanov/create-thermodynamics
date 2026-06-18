@@ -3,6 +3,8 @@ package dev.makargravanov.create_thermodynamics.neoforge.registry
 import dev.makargravanov.create_thermodynamics.neoforge.CreateThermodynamicsMod
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorChamberBlock
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockBlock
+import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockBlockEntity
+import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockKind
 import net.minecraft.core.registries.Registries
 import net.minecraft.network.chat.Component
 import net.minecraft.world.item.BlockItem
@@ -10,6 +12,7 @@ import net.minecraft.world.item.CreativeModeTab
 import net.minecraft.world.item.Item
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.level.block.Block
+import net.minecraft.world.level.block.entity.BlockEntityType
 import net.minecraft.world.level.block.SoundType
 import net.minecraft.world.level.block.state.BlockBehaviour
 import net.minecraft.world.level.material.MapColor
@@ -22,14 +25,36 @@ object CreateThermodynamicsRegistries {
     private val blocks = DeferredRegister.create(Registries.BLOCK, CreateThermodynamicsMod.MOD_ID)
     private val items = DeferredRegister.create(Registries.ITEM, CreateThermodynamicsMod.MOD_ID)
     private val creativeModeTabs = DeferredRegister.create(Registries.CREATIVE_MODE_TAB, CreateThermodynamicsMod.MOD_ID)
+    private val blockEntityTypes = DeferredRegister.create(Registries.BLOCK_ENTITY_TYPE, CreateThermodynamicsMod.MOD_ID)
 
     val reactorChamber: DeferredHolder<Block, ReactorChamberBlock> =
         blocks.register("reactor_chamber", Supplier { ReactorChamberBlock(reactorBlockProperties()) })
-    val reactorController: DeferredHolder<Block, ReactorMultiblockBlock> = registerReactorBlock("reactor_controller")
-    val reactorItemInputPort: DeferredHolder<Block, ReactorMultiblockBlock> = registerReactorBlock("reactor_item_input_port")
-    val reactorItemOutputPort: DeferredHolder<Block, ReactorMultiblockBlock> = registerReactorBlock("reactor_item_output_port")
-    val reactorFluidInputPort: DeferredHolder<Block, ReactorMultiblockBlock> = registerReactorBlock("reactor_fluid_input_port")
-    val reactorFluidOutputPort: DeferredHolder<Block, ReactorMultiblockBlock> = registerReactorBlock("reactor_fluid_output_port")
+    val reactorController: DeferredHolder<Block, ReactorMultiblockBlock> =
+        registerReactorBlock("reactor_controller", ReactorMultiblockKind.CONTROLLER)
+    val reactorItemInputPort: DeferredHolder<Block, ReactorMultiblockBlock> =
+        registerReactorBlock("reactor_item_input_port", ReactorMultiblockKind.ITEM_INPUT_PORT)
+    val reactorItemOutputPort: DeferredHolder<Block, ReactorMultiblockBlock> =
+        registerReactorBlock("reactor_item_output_port", ReactorMultiblockKind.ITEM_OUTPUT_PORT)
+    val reactorFluidInputPort: DeferredHolder<Block, ReactorMultiblockBlock> =
+        registerReactorBlock("reactor_fluid_input_port", ReactorMultiblockKind.FLUID_INPUT_PORT)
+    val reactorFluidOutputPort: DeferredHolder<Block, ReactorMultiblockBlock> =
+        registerReactorBlock("reactor_fluid_output_port", ReactorMultiblockKind.FLUID_OUTPUT_PORT)
+
+    val reactorMultiblockBlockEntity: DeferredHolder<BlockEntityType<*>, BlockEntityType<ReactorMultiblockBlockEntity>> =
+        blockEntityTypes.register(
+            "reactor_multiblock",
+            Supplier {
+                BlockEntityType.Builder.of(
+                    ::ReactorMultiblockBlockEntity,
+                    reactorChamber.get(),
+                    reactorController.get(),
+                    reactorItemInputPort.get(),
+                    reactorItemOutputPort.get(),
+                    reactorFluidInputPort.get(),
+                    reactorFluidOutputPort.get(),
+                ).build(null)
+            },
+        )
 
     val reactorChamberItem: DeferredHolder<Item, BlockItem> = registerBlockItem("reactor_chamber", reactorChamber)
     val reactorControllerItem: DeferredHolder<Item, BlockItem> = registerBlockItem("reactor_controller", reactorController)
@@ -61,10 +86,14 @@ object CreateThermodynamicsRegistries {
         blocks.register(eventBus)
         items.register(eventBus)
         creativeModeTabs.register(eventBus)
+        blockEntityTypes.register(eventBus)
     }
 
-    private fun registerReactorBlock(id: String): DeferredHolder<Block, ReactorMultiblockBlock> =
-        blocks.register(id, Supplier { ReactorMultiblockBlock(reactorBlockProperties()) })
+    private fun registerReactorBlock(
+        id: String,
+        kind: ReactorMultiblockKind,
+    ): DeferredHolder<Block, ReactorMultiblockBlock> =
+        blocks.register(id, Supplier { ReactorMultiblockBlock(reactorBlockProperties(), kind) })
 
     private fun registerBlockItem(id: String, block: DeferredHolder<Block, out Block>): DeferredHolder<Item, BlockItem> =
         items.register(id, Supplier { BlockItem(block.get(), Item.Properties()) })

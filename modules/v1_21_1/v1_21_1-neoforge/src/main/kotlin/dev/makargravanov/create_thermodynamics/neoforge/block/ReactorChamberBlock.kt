@@ -6,14 +6,12 @@ import net.minecraft.world.level.BlockGetter
 import net.minecraft.world.level.block.state.BlockBehaviour
 import net.minecraft.world.level.block.state.BlockState
 
-class ReactorChamberBlock(properties: BlockBehaviour.Properties) : ReactorMultiblockBlock(properties) {
+class ReactorChamberBlock(properties: BlockBehaviour.Properties) : ReactorMultiblockBlock(properties, ReactorMultiblockKind.CHAMBER) {
     override fun skipRendering(state: BlockState, adjacentBlockState: BlockState, direction: Direction): Boolean =
-        canConnectTo(adjacentBlockState) || super.skipRendering(state, adjacentBlockState, direction)
+        super.skipRendering(state, adjacentBlockState, direction)
 
     override fun useShapeForLightOcclusion(state: BlockState): Boolean = false
 
     override fun propagatesSkylightDown(state: BlockState, level: BlockGetter, pos: BlockPos): Boolean = false
 
-    private fun canConnectTo(state: BlockState): Boolean =
-        state.block is ReactorMultiblockBlock
 }
