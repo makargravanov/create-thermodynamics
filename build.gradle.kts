@@ -13,5 +13,8 @@ tasks.register("checkArchitecture") {
 }
 
 tasks.named("check") {
-    dependsOn("checkArchitecture")
+    dependsOn(
+        "checkArchitecture",
+        ":modules:ui-preview:check",
+    )
 }
