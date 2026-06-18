@@ -1,4 +1,4 @@
-package dev.makargravanov.create_thermodynamics.common.reactor.multiblock
+package dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model
 
 import java.util.UUID
 
@@ -23,24 +23,6 @@ data class ReactorMultiblockBlock(
     val kind: ReactorMultiblockBlockKind,
 )
 
-data class ReactorMultiblockRules(
-    val chamberVolumeCubicMeters: Double,
-    val minimumChamberBlocks: Int = 1,
-    val maximumChamberBlocks: Int? = null,
-) {
-    init {
-        require(chamberVolumeCubicMeters.isFinite() && chamberVolumeCubicMeters > 0.0) {
-            "chamberVolumeCubicMeters must be positive and finite"
-        }
-        require(minimumChamberBlocks > 0) {
-            "minimumChamberBlocks must be positive"
-        }
-        require(maximumChamberBlocks == null || maximumChamberBlocks >= minimumChamberBlocks) {
-            "maximumChamberBlocks must be absent or not smaller than minimumChamberBlocks"
-        }
-    }
-}
-
 data class ReactorZoneDescriptor(
     val zoneIndex: Int,
     val chamberPositions: Set<ReactorBlockPosition>,
@@ -55,8 +37,11 @@ data class ReactorPortDescriptor(
     val attachedChamberPosition: ReactorBlockPosition,
 )
 
+@JvmInline
+value class ReactorStructureId(val value: UUID)
+
 data class ReactorMultiblockDefinition(
-    val structureId: UUID,
+    val structureId: ReactorStructureId,
     val controllerPosition: ReactorBlockPosition,
     val zone: ReactorZoneDescriptor,
     val ports: List<ReactorPortDescriptor>,

@@ -1,7 +1,10 @@
-package dev.makargravanov.create_thermodynamics.common.reactor.multiblock
+package dev.makargravanov.create_thermodynamics.common.reactor.multiblock.runtime
 
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockDefinition
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorPortDescriptor
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorPortKind
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorStructureId
 import dev.makargravanov.create_thermodynamics.common.rust.ThermodynamicsNative
-import java.util.UUID
 
 data class NativeReactorPortBinding(
     val port: ReactorPortDescriptor,
@@ -9,7 +12,7 @@ data class NativeReactorPortBinding(
 )
 
 data class NativeReactorMultiblockBinding(
-    val structureId: UUID,
+    val structureId: ReactorStructureId,
     val nativeReactorId: ThermodynamicsNative.NativeReactorId,
     val itemInputs: List<NativeReactorPortBinding>,
     val itemOutputs: List<NativeReactorPortBinding>,
@@ -20,8 +23,8 @@ data class NativeReactorMultiblockBinding(
         itemInputs + itemOutputs + fluidInputs + fluidOutputs
 }
 
-object ReactorMultiblockNativeBridge {
-    fun createNativeReactor(definition: ReactorMultiblockDefinition): NativeReactorMultiblockBinding {
+object ReactorMultiblockNativeBridge : NativeReactorBridge {
+    override fun createNativeReactor(definition: ReactorMultiblockDefinition): NativeReactorMultiblockBinding {
         val itemInputs = definition.portsOfKind(ReactorPortKind.ITEM_INPUT)
         val itemOutputs = definition.portsOfKind(ReactorPortKind.ITEM_OUTPUT)
         val fluidInputs = definition.portsOfKind(ReactorPortKind.FLUID_INPUT)
@@ -45,15 +48,15 @@ object ReactorMultiblockNativeBridge {
         )
     }
 
-    fun removeNativeReactor(binding: NativeReactorMultiblockBinding) {
+    override fun removeNativeReactor(binding: NativeReactorMultiblockBinding) {
         ThermodynamicsNative.removeReactor(binding.nativeReactorId)
     }
 
-    fun tickNativeReactor(binding: NativeReactorMultiblockBinding, dtSeconds: Double) {
+    override fun tickNativeReactor(binding: NativeReactorMultiblockBinding, dtSeconds: Double) {
         ThermodynamicsNative.tickReactor(binding.nativeReactorId, dtSeconds)
     }
 
-    fun insertItemStack(
+    override fun insertItemStack(
         binding: NativeReactorMultiblockBinding,
         itemInputPort: ReactorPortDescriptor,
         itemId: String,

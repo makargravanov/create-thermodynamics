@@ -1,4 +1,4 @@
-package dev.makargravanov.create_thermodynamics.common.reactor.multiblock
+package dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model
 
 data class ReactorBlockPosition(
     val x: Int,

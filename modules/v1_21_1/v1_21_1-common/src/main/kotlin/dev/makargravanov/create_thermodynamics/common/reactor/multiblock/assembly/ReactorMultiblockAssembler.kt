@@ -1,5 +1,14 @@
-package dev.makargravanov.create_thermodynamics.common.reactor.multiblock
+package dev.makargravanov.create_thermodynamics.common.reactor.multiblock.assembly
 
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorBlockPosition
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockBlock
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockBlockKind
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockDefinition
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockValidationException
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorPortDescriptor
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorPortKind
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorStructureId
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorZoneDescriptor
 import java.util.UUID
 
 class ReactorMultiblockAssembler(
@@ -7,6 +16,12 @@ class ReactorMultiblockAssembler(
 ) {
     fun assemble(
         structureId: UUID,
+        blocks: Iterable<ReactorMultiblockBlock>,
+    ): ReactorMultiblockDefinition =
+        assemble(ReactorStructureId(structureId), blocks)
+
+    fun assemble(
+        structureId: ReactorStructureId,
         blocks: Iterable<ReactorMultiblockBlock>,
     ): ReactorMultiblockDefinition {
         val errors = mutableListOf<String>()

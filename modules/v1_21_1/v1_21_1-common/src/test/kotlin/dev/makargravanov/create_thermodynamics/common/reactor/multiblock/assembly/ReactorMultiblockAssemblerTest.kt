@@ -1,5 +1,11 @@
-package dev.makargravanov.create_thermodynamics.common.reactor.multiblock
+package dev.makargravanov.create_thermodynamics.common.reactor.multiblock.assembly
 
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorBlockPosition
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockBlock
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockBlockKind
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorMultiblockValidationException
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorPortKind
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorStructureId
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -25,7 +31,7 @@ class ReactorMultiblockAssemblerTest {
             ),
         )
 
-        assertEquals(structureId, definition.structureId)
+        assertEquals(ReactorStructureId(structureId), definition.structureId)
         assertEquals(pos(-1, 0, 0), definition.controllerPosition)
         assertEquals(0.004, definition.totalVolumeCubicMeters)
         assertEquals(2, definition.zone.chamberPositions.size)

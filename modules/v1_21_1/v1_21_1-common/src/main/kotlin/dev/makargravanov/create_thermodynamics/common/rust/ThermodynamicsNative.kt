@@ -1,15 +1,11 @@
 package dev.makargravanov.create_thermodynamics.common.rust
 
+import dev.makargravanov.create_thermodynamics.common.chemistry.binding.ItemChemicalBinding
+
 object ThermodynamicsNative {
     init {
         NativeLibraryLoader.load()
     }
-
-    data class ItemChemicalBinding(
-        val itemId: String,
-        val substanceId: String,
-        val molPerItem: Double,
-    )
 
     @JvmInline
     value class NativeReactorId(val value: Long)
@@ -18,10 +14,6 @@ object ThermodynamicsNative {
         nativeIdealGasPressure(moles, temperatureKelvin, volumeCubicMeters)
 
     fun abiVersion(): Int = nativeAbiVersion()
-
-    fun configureDefaultItemChemicalBindings() {
-        configureItemChemicalBindings(DefaultItemChemicalBindings.bindings)
-    }
 
     fun configureItemChemicalBindings(bindings: Collection<ItemChemicalBinding>) {
         val itemIds = Array(bindings.size) { "" }
