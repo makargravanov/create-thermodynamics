@@ -5,8 +5,12 @@ use crate::chemistry::minecraft::mregistry::item_to_substance::MinecraftId;
 use crate::chemistry::minecraft::mregistry::mregistry::{
     MinecraftChemicalRegistry, RegistrationError,
 };
+use crate::chemistry::minecraft::worker::reactors_worker::{ReactorInstanceId, ReactorsWorker};
+use crate::chemistry::reactor::{Input, Output, Reactor, ReactorZone, TransitionMode};
 use crate::chemistry::registry::ChemistryRegistry;
 use crate::chemistry::substance::SubstanceId;
+
+const DEFAULT_MULTIBLOCK_OUTPUT_RATE_MOL_PER_SECOND: f64 = 1.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemChemicalBinding {
@@ -32,6 +36,7 @@ impl ItemChemicalBinding {
 pub struct MinecraftChemistryState {
     chemistry_registry: ChemistryRegistry,
     item_bindings: MinecraftChemicalRegistry,
+    reactors_worker: ReactorsWorker,
 }
 
 impl MinecraftChemistryState {
@@ -39,6 +44,7 @@ impl MinecraftChemistryState {
         Ok(Self {
             chemistry_registry: crate::chemistry::destroy_registry_builder()?.build()?,
             item_bindings: MinecraftChemicalRegistry::new(),
+            reactors_worker: ReactorsWorker::new(),
         })
     }
 
@@ -48,6 +54,10 @@ impl MinecraftChemistryState {
 
     pub fn item_bindings(&self) -> &MinecraftChemicalRegistry {
         &self.item_bindings
+    }
+
+    pub fn reactors_worker(&self) -> &ReactorsWorker {
+        &self.reactors_worker
     }
 }
 
@@ -115,6 +125,80 @@ pub fn static_substance_ids() -> ChemistryResult<Vec<String>> {
             .substances()
             .map(|substance| substance.id.as_str().to_string())
             .collect())
+    })
+}
+
+pub fn register_single_zone_reactor(
+    volume_cubic_meters: f64,
+    item_input_count: usize,
+    item_output_count: usize,
+    fluid_input_count: usize,
+    fluid_output_count: usize,
+) -> ChemistryResult<ReactorInstanceId> {
+    if !volume_cubic_meters.is_finite() || volume_cubic_meters <= 0.0 {
+        return Err(ChemistryError::InvalidMixtureState(format!(
+            "reactor volume must be positive and finite, got {volume_cubic_meters}"
+        )));
+    }
+    with_minecraft_chemistry_state_mut(|state| {
+        let mut reactor = Reactor::new();
+        let zone = reactor.add_zone(ReactorZone::new(volume_cubic_meters)?);
+        for _ in 0..item_input_count + fluid_input_count {
+            reactor.add_input(Input::new(
+                zone,
+                TransitionMode::All {
+                    rate_mol_per_second: f64::MAX,
+                },
+            ));
+        }
+        for _ in 0..item_output_count + fluid_output_count {
+            reactor.add_output(Output::new(
+                zone,
+                TransitionMode::All {
+                    rate_mol_per_second: DEFAULT_MULTIBLOCK_OUTPUT_RATE_MOL_PER_SECOND,
+                },
+            ));
+        }
+        Ok(state.reactors_worker.register_reactor(reactor))
+    })
+}
+
+pub fn remove_reactor(reactor_id: ReactorInstanceId) -> ChemistryResult<()> {
+    with_minecraft_chemistry_state_mut(|state| {
+        state.reactors_worker.remove_reactor(reactor_id)?;
+        Ok(())
+    })
+}
+
+pub fn reactor_count() -> ChemistryResult<usize> {
+    with_minecraft_chemistry_state(|state| Ok(state.reactors_worker.reactor_count()))
+}
+
+pub fn tick_reactor(reactor_id: ReactorInstanceId, dt_seconds: f64) -> ChemistryResult<()> {
+    with_minecraft_chemistry_state_mut(|state| {
+        state
+            .reactors_worker
+            .tick_reactor(&state.chemistry_registry, reactor_id, dt_seconds)?;
+        Ok(())
+    })
+}
+
+pub fn insert_item_stack_to_reactor_input(
+    reactor_id: ReactorInstanceId,
+    input_index: usize,
+    item_id: &str,
+    item_count: u32,
+) -> ChemistryResult<f64> {
+    with_minecraft_chemistry_state_mut(|state| {
+        let report = state.reactors_worker.insert_item_stack_to_input(
+            &state.chemistry_registry,
+            &state.item_bindings,
+            reactor_id,
+            input_index,
+            item_id,
+            item_count,
+        )?;
+        Ok(report.mol_inserted)
     })
 }
 

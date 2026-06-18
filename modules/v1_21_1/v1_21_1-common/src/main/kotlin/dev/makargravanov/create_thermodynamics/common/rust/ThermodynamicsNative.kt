@@ -11,6 +11,9 @@ object ThermodynamicsNative {
         val molPerItem: Double,
     )
 
+    @JvmInline
+    value class NativeReactorId(val value: Long)
+
     fun idealGasPressure(moles: Double, temperatureKelvin: Double, volumeCubicMeters: Double): Double =
         nativeIdealGasPressure(moles, temperatureKelvin, volumeCubicMeters)
 
@@ -44,6 +47,41 @@ object ThermodynamicsNative {
     fun staticSubstanceIds(): List<String> =
         nativeStaticSubstanceIds().asList()
 
+    fun createSingleZoneReactor(
+        volumeCubicMeters: Double,
+        itemInputCount: Int,
+        itemOutputCount: Int,
+        fluidInputCount: Int,
+        fluidOutputCount: Int,
+    ): NativeReactorId =
+        NativeReactorId(
+            nativeCreateSingleZoneReactor(
+                volumeCubicMeters,
+                itemInputCount,
+                itemOutputCount,
+                fluidInputCount,
+                fluidOutputCount,
+            ),
+        )
+
+    fun removeReactor(reactorId: NativeReactorId) {
+        nativeRemoveReactor(reactorId.value)
+    }
+
+    fun reactorCount(): Int = nativeReactorCount()
+
+    fun tickReactor(reactorId: NativeReactorId, dtSeconds: Double) {
+        nativeTickReactor(reactorId.value, dtSeconds)
+    }
+
+    fun insertItemStackToReactorInput(
+        reactorId: NativeReactorId,
+        inputIndex: Int,
+        itemId: String,
+        itemCount: Int,
+    ): Double =
+        nativeInsertItemStackToReactorInput(reactorId.value, inputIndex, itemId, itemCount)
+
     @JvmStatic
     private external fun nativeIdealGasPressure(
         moles: Double,
@@ -72,4 +110,30 @@ object ThermodynamicsNative {
 
     @JvmStatic
     private external fun nativeStaticSubstanceIds(): Array<String>
+
+    @JvmStatic
+    private external fun nativeCreateSingleZoneReactor(
+        volumeCubicMeters: Double,
+        itemInputCount: Int,
+        itemOutputCount: Int,
+        fluidInputCount: Int,
+        fluidOutputCount: Int,
+    ): Long
+
+    @JvmStatic
+    private external fun nativeRemoveReactor(reactorId: Long)
+
+    @JvmStatic
+    private external fun nativeReactorCount(): Int
+
+    @JvmStatic
+    private external fun nativeTickReactor(reactorId: Long, dtSeconds: Double)
+
+    @JvmStatic
+    private external fun nativeInsertItemStackToReactorInput(
+        reactorId: Long,
+        inputIndex: Int,
+        itemId: String,
+        itemCount: Int,
+    ): Double
 }

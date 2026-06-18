@@ -1,5 +1,5 @@
 use jni::objects::{JClass, JDoubleArray, JObject, JObjectArray, JString};
-use jni::sys::{jboolean, jdouble, jint, jobjectArray, JNI_FALSE, JNI_TRUE};
+use jni::sys::{jboolean, jdouble, jint, jlong, jobjectArray, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 
 pub mod chemistry;
@@ -26,7 +26,7 @@ pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust
     _: JNIEnv,
     _: JClass,
 ) -> jint {
-    3
+    4
 }
 
 #[no_mangle]
@@ -131,6 +131,156 @@ pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust
     }
 }
 
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeCreateSingleZoneReactor(
+    mut env: JNIEnv,
+    _: JClass,
+    volume_cubic_meters: jdouble,
+    item_input_count: jint,
+    item_output_count: jint,
+    fluid_input_count: jint,
+    fluid_output_count: jint,
+) -> jlong {
+    let result = read_non_negative_count("itemInputCount", item_input_count)
+        .and_then(|item_inputs| {
+            Ok((
+                item_inputs,
+                read_non_negative_count("itemOutputCount", item_output_count)?,
+                read_non_negative_count("fluidInputCount", fluid_input_count)?,
+                read_non_negative_count("fluidOutputCount", fluid_output_count)?,
+            ))
+        })
+        .and_then(|(item_inputs, item_outputs, fluid_inputs, fluid_outputs)| {
+            chemistry::minecraft::chem_api::register_single_zone_reactor(
+                volume_cubic_meters,
+                item_inputs,
+                item_outputs,
+                fluid_inputs,
+                fluid_outputs,
+            )
+        });
+    match result {
+        Ok(reactor_id) if reactor_id.0 <= jlong::MAX as u64 => reactor_id.0 as jlong,
+        Ok(reactor_id) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalStateException",
+                &format!("reactor id {} does not fit into Long", reactor_id.0),
+            );
+            -1
+        }
+        Err(error) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalArgumentException",
+                &error.to_string(),
+            );
+            -1
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeRemoveReactor(
+    mut env: JNIEnv,
+    _: JClass,
+    reactor_id: jlong,
+) {
+    let result =
+        read_reactor_id(reactor_id).and_then(chemistry::minecraft::chem_api::remove_reactor);
+    if let Err(error) = result {
+        throw_java_exception(
+            &mut env,
+            "java/lang/IllegalArgumentException",
+            &error.to_string(),
+        );
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeReactorCount(
+    mut env: JNIEnv,
+    _: JClass,
+) -> jint {
+    match chemistry::minecraft::chem_api::reactor_count() {
+        Ok(count) if count <= jint::MAX as usize => count as jint,
+        Ok(count) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalStateException",
+                &format!("reactor count {count} does not fit into Int"),
+            );
+            -1
+        }
+        Err(error) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalStateException",
+                &error.to_string(),
+            );
+            -1
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeTickReactor(
+    mut env: JNIEnv,
+    _: JClass,
+    reactor_id: jlong,
+    dt_seconds: jdouble,
+) {
+    let result = read_reactor_id(reactor_id).and_then(|reactor_id| {
+        chemistry::minecraft::chem_api::tick_reactor(reactor_id, dt_seconds)
+    });
+    if let Err(error) = result {
+        throw_java_exception(
+            &mut env,
+            "java/lang/IllegalArgumentException",
+            &error.to_string(),
+        );
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeInsertItemStackToReactorInput(
+    mut env: JNIEnv,
+    _: JClass,
+    reactor_id: jlong,
+    input_index: jint,
+    item_id: JString,
+    item_count: jint,
+) -> jdouble {
+    let result = read_reactor_id(reactor_id)
+        .and_then(|reactor_id| {
+            Ok((
+                reactor_id,
+                read_non_negative_count("inputIndex", input_index)?,
+                read_positive_u32("itemCount", item_count)?,
+                read_java_string(&mut env, item_id)?,
+            ))
+        })
+        .and_then(|(reactor_id, input_index, item_count, item_id)| {
+            chemistry::minecraft::chem_api::insert_item_stack_to_reactor_input(
+                reactor_id,
+                input_index,
+                &item_id,
+                item_count,
+            )
+        });
+    match result {
+        Ok(mol_inserted) => mol_inserted,
+        Err(error) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalArgumentException",
+                &error.to_string(),
+            );
+            f64::NAN
+        }
+    }
+}
+
 fn read_item_chemical_bindings_from_jvm(
     env: &mut JNIEnv,
     item_ids: JObjectArray,
@@ -184,6 +334,35 @@ fn read_java_string(env: &mut JNIEnv, value: JString) -> chemistry::ChemistryRes
     env.get_string(&value)
         .map(|value| value.into())
         .map_err(|error| jni_error_to_chemistry_error("String", error))
+}
+
+fn read_non_negative_count(name: &str, value: jint) -> chemistry::ChemistryResult<usize> {
+    if value < 0 {
+        return Err(chemistry::ChemistryError::InvalidMixtureState(format!(
+            "{name} must be non-negative, got {value}"
+        )));
+    }
+    Ok(value as usize)
+}
+
+fn read_positive_u32(name: &str, value: jint) -> chemistry::ChemistryResult<u32> {
+    if value <= 0 {
+        return Err(chemistry::ChemistryError::InvalidMixtureState(format!(
+            "{name} must be positive, got {value}"
+        )));
+    }
+    Ok(value as u32)
+}
+
+fn read_reactor_id(
+    reactor_id: jlong,
+) -> chemistry::ChemistryResult<chemistry::minecraft::worker::reactors_worker::ReactorInstanceId> {
+    if reactor_id < 0 {
+        return Err(chemistry::ChemistryError::InvalidMixtureState(format!(
+            "reactorId must be non-negative, got {reactor_id}"
+        )));
+    }
+    Ok(chemistry::minecraft::worker::reactors_worker::ReactorInstanceId(reactor_id as u64))
 }
 
 fn jni_error_to_chemistry_error(

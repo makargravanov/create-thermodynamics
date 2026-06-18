@@ -1,0 +1,191 @@
+{
+  "tile_size": 16,
+  "atlas_size": [
+    64,
+    64
+  ],
+  "mask_bits": {
+    "up": 1,
+    "right": 2,
+    "down": 4,
+    "left": 8
+  },
+  "tiles": [
+    {
+      "mask": 0,
+      "x": 0,
+      "y": 0,
+      "connected": {
+        "up": false,
+        "right": false,
+        "down": false,
+        "left": false
+      }
+    },
+    {
+      "mask": 1,
+      "x": 16,
+      "y": 0,
+      "connected": {
+        "up": true,
+        "right": false,
+        "down": false,
+        "left": false
+      }
+    },
+    {
+      "mask": 2,
+      "x": 32,
+      "y": 0,
+      "connected": {
+        "up": false,
+        "right": true,
+        "down": false,
+        "left": false
+      }
+    },
+    {
+      "mask": 3,
+      "x": 48,
+      "y": 0,
+      "connected": {
+        "up": true,
+        "right": true,
+        "down": false,
+        "left": false
+      }
+    },
+    {
+      "mask": 4,
+      "x": 0,
+      "y": 16,
+      "connected": {
+        "up": false,
+        "right": false,
+        "down": true,
+        "left": false
+      }
+    },
+    {
+      "mask": 5,
+      "x": 16,
+      "y": 16,
+      "connected": {
+        "up": true,
+        "right": false,
+        "down": true,
+        "left": false
+      }
+    },
+    {
+      "mask": 6,
+      "x": 32,
+      "y": 16,
+      "connected": {
+        "up": false,
+        "right": true,
+        "down": true,
+        "left": false
+      }
+    },
+    {
+      "mask": 7,
+      "x": 48,
+      "y": 16,
+      "connected": {
+        "up": true,
+        "right": true,
+        "down": true,
+        "left": false
+      }
+    },
+    {
+      "mask": 8,
+      "x": 0,
+      "y": 32,
+      "connected": {
+        "up": false,
+        "right": false,
+        "down": false,
+        "left": true
+      }
+    },
+    {
+      "mask": 9,
+      "x": 16,
+      "y": 32,
+      "connected": {
+        "up": true,
+        "right": false,
+        "down": false,
+        "left": true
+      }
+    },
+    {
+      "mask": 10,
+      "x": 32,
+      "y": 32,
+      "connected": {
+        "up": false,
+        "right": true,
+        "down": false,
+        "left": true
+      }
+    },
+    {
+      "mask": 11,
+      "x": 48,
+      "y": 32,
+      "connected": {
+        "up": true,
+        "right": true,
+        "down": false,
+        "left": true
+      }
+    },
+    {
+      "mask": 12,
+      "x": 0,
+      "y": 48,
+      "connected": {
+        "up": false,
+        "right": false,
+        "down": true,
+        "left": true
+      }
+    },
+    {
+      "mask": 13,
+      "x": 16,
+      "y": 48,
+      "connected": {
+        "up": true,
+        "right": false,
+        "down": true,
+        "left": true
+      }
+    },
+    {
+      "mask": 14,
+      "x": 32,
+      "y": 48,
+      "connected": {
+        "up": false,
+        "right": true,
+        "down": true,
+        "left": true
+      }
+    },
+    {
+      "mask": 15,
+      "x": 48,
+      "y": 48,
+      "connected": {
+        "up": true,
+        "right": true,
+        "down": true,
+        "left": true
+      }
+    }
+  ]
+}
