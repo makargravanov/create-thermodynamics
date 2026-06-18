@@ -66,6 +66,7 @@ tasks.register<CheckArchitectureBoundaryTask>("checkThinLoaderBoundary") {
     sourceRoot.set(layout.projectDirectory.dir("src/main/kotlin"))
     forbiddenImports.set(emptyList())
     forbiddenPathSegments.set(listOf("/content/", "\\content\\"))
+    forbiddenText.set(listOf("ScreenProgramCompiler"))
     failureMessage.set("NeoForge loader module must not contain content packages")
 }
 

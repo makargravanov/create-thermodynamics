@@ -1,5 +1,9 @@
 package dev.makargravanov.create_thermodynamics.neoforge.block
 
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorStructureId
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorBlockMembership
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorControllerFormationState
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorControllerViewState
 import dev.makargravanov.create_thermodynamics.neoforge.registry.CreateThermodynamicsRegistries
 import net.minecraft.core.BlockPos
 import net.minecraft.core.HolderLookup
@@ -40,27 +44,34 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         private set
     var portCount: Int = 0
         private set
+    var formationState: ReactorControllerFormationState = ReactorControllerFormationState.NOT_FORMED
+        private set
+    var diagnostic: String? = null
+        private set
 
     fun visualGroupKey(): UUID? =
         structureId?.takeIf { activeVolumeBlock }
 
-    fun setStructureMembership(
-        newStructureId: UUID?,
-        newActiveVolumeBlock: Boolean,
-        newZoneCount: Int = 0,
-        newChamberBlockCount: Int = 0,
-        newPortCount: Int = 0,
+    fun applyWorldProjection(
+        membership: ReactorBlockMembership?,
+        controllerViewState: ReactorControllerViewState? = null,
     ): Boolean {
-        val normalizedActive = newStructureId != null && newActiveVolumeBlock
-        val normalizedZoneCount = if (newStructureId != null) newZoneCount else 0
-        val normalizedChamberBlockCount = if (newStructureId != null) newChamberBlockCount else 0
-        val normalizedPortCount = if (newStructureId != null) newPortCount else 0
+        val newStructureId = membership?.structureId?.value ?: controllerViewState?.structureId?.value
+        val normalizedActive = membership?.activeVolumeBlock == true
+        val normalizedZoneCount = membership?.summary?.zoneCount ?: controllerViewState?.zoneCount ?: 0
+        val normalizedChamberBlockCount = membership?.summary?.chamberBlockCount ?: controllerViewState?.chamberBlockCount ?: 0
+        val normalizedPortCount = membership?.summary?.portCount ?: controllerViewState?.portCount ?: 0
+        val normalizedFormationState = controllerViewState?.formationState
+            ?: if (membership != null) ReactorControllerFormationState.FORMED else ReactorControllerFormationState.NOT_FORMED
+        val normalizedDiagnostic = controllerViewState?.diagnostic
         if (
             structureId == newStructureId &&
             activeVolumeBlock == normalizedActive &&
             zoneCount == normalizedZoneCount &&
             chamberBlockCount == normalizedChamberBlockCount &&
-            portCount == normalizedPortCount
+            portCount == normalizedPortCount &&
+            formationState == normalizedFormationState &&
+            diagnostic == normalizedDiagnostic
         ) {
             return false
         }
@@ -69,6 +80,8 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         zoneCount = normalizedZoneCount
         chamberBlockCount = normalizedChamberBlockCount
         portCount = normalizedPortCount
+        formationState = normalizedFormationState
+        diagnostic = normalizedDiagnostic
         setChanged()
         refreshVisualModel()
         return true
@@ -83,6 +96,11 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         zoneCount = if (structureId != null) tag.getInt(ZONE_COUNT_TAG) else 0
         chamberBlockCount = if (structureId != null) tag.getInt(CHAMBER_BLOCK_COUNT_TAG) else 0
         portCount = if (structureId != null) tag.getInt(PORT_COUNT_TAG) else 0
+        formationState = tag.getString(FORMATION_STATE_TAG)
+            .takeIf { it.isNotBlank() }
+            ?.let(ReactorControllerFormationState::valueOf)
+            ?: if (structureId != null) ReactorControllerFormationState.FORMED else ReactorControllerFormationState.NOT_FORMED
+        diagnostic = tag.getString(DIAGNOSTIC_TAG).takeIf { it.isNotBlank() }
         ContainerHelper.loadAllItems(tag, items, registries)
         if (structureId != oldStructureId || activeVolumeBlock != oldActiveVolumeBlock) {
             refreshVisualModel()
@@ -96,6 +114,8 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         tag.putInt(ZONE_COUNT_TAG, zoneCount)
         tag.putInt(CHAMBER_BLOCK_COUNT_TAG, chamberBlockCount)
         tag.putInt(PORT_COUNT_TAG, portCount)
+        tag.putString(FORMATION_STATE_TAG, formationState.name)
+        diagnostic?.let { tag.putString(DIAGNOSTIC_TAG, it) }
         ContainerHelper.saveAllItems(tag, items, registries)
     }
 
@@ -166,20 +186,21 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
             -> error("reactor block entity at $blockPos cannot create a menu for ${blockState.block}")
         }
 
-    fun controllerScreenState(): ReactorControllerScreenState =
-        ReactorControllerScreenState(
-            structureId = structureId?.toString(),
-            formed = structureId != null,
+    fun controllerScreenState(): ReactorControllerViewState =
+        ReactorControllerViewState(
+            formationState = formationState,
+            structureId = structureId?.let(::ReactorStructureId),
             zoneCount = zoneCount,
             chamberBlockCount = chamberBlockCount,
             portCount = portCount,
+            diagnostic = diagnostic,
         )
 
     fun controllerMenuData(): ContainerData =
         object : ContainerData {
             override fun get(index: Int): Int =
                 when (index) {
-                    CONTROLLER_FORMED_DATA_SLOT -> if (structureId != null) 1 else 0
+                    CONTROLLER_FORMATION_STATE_DATA_SLOT -> formationState.ordinal
                     CONTROLLER_ZONE_COUNT_DATA_SLOT -> zoneCount
                     CONTROLLER_CHAMBER_BLOCK_COUNT_DATA_SLOT -> chamberBlockCount
                     CONTROLLER_PORT_COUNT_DATA_SLOT -> portCount
@@ -206,7 +227,9 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         private const val ZONE_COUNT_TAG = "zone_count"
         private const val CHAMBER_BLOCK_COUNT_TAG = "chamber_block_count"
         private const val PORT_COUNT_TAG = "port_count"
-        private const val CONTROLLER_FORMED_DATA_SLOT = 0
+        private const val FORMATION_STATE_TAG = "formation_state"
+        private const val DIAGNOSTIC_TAG = "diagnostic"
+        private const val CONTROLLER_FORMATION_STATE_DATA_SLOT = 0
         private const val CONTROLLER_ZONE_COUNT_DATA_SLOT = 1
         private const val CONTROLLER_CHAMBER_BLOCK_COUNT_DATA_SLOT = 2
         private const val CONTROLLER_PORT_COUNT_DATA_SLOT = 3

@@ -23,7 +23,16 @@ class ReactorMultiblockAssembler(
     fun assemble(
         structureId: ReactorStructureId,
         blocks: Iterable<ReactorMultiblockBlock>,
-    ): ReactorMultiblockDefinition {
+    ): ReactorMultiblockDefinition =
+        when (val result = tryAssemble(structureId, blocks)) {
+            is ReactorAssemblyResult.Formed -> result.definition
+            is ReactorAssemblyResult.Rejected -> throw ReactorMultiblockValidationException(result.errors)
+        }
+
+    fun tryAssemble(
+        structureId: ReactorStructureId,
+        blocks: Iterable<ReactorMultiblockBlock>,
+    ): ReactorAssemblyResult {
         val errors = mutableListOf<String>()
         val blocksByPosition = mutableMapOf<ReactorBlockPosition, ReactorMultiblockBlockKind>()
         val facingByPosition = mutableMapOf<ReactorBlockPosition, ReactorBlockDirection?>()
@@ -78,16 +87,18 @@ class ReactorMultiblockAssembler(
         )
 
         if (errors.isNotEmpty()) {
-            throw ReactorMultiblockValidationException(errors)
+            return ReactorAssemblyResult.Rejected(errors)
         }
 
-        return ReactorMultiblockDefinition(
-            structureId = structureId,
-            controllerPosition = requireNotNull(controller),
-            controllerContactDirection = contactDirections(controller, requireNotNull(zone).plainChamberPositions).singleOrNull(),
-            zone = requireNotNull(zone),
-            ports = portDescriptors,
-            inactiveChamberPositions = shapeResult.inactiveChamberPositions,
+        return ReactorAssemblyResult.Formed(
+            ReactorMultiblockDefinition(
+                structureId = structureId,
+                controllerPosition = requireNotNull(controller),
+                controllerContactDirection = contactDirections(controller, requireNotNull(zone).plainChamberPositions).singleOrNull(),
+                zone = requireNotNull(zone),
+                ports = portDescriptors,
+                inactiveChamberPositions = shapeResult.inactiveChamberPositions,
+            ),
         )
     }
 

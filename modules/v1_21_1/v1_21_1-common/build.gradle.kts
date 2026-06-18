@@ -21,6 +21,7 @@ tasks.register<CheckArchitectureBoundaryTask>("checkCommonLoaderBoundary") {
     sourceRoot.set(layout.projectDirectory.dir("src/main/kotlin"))
     forbiddenImports.set(listOf("net.neoforged."))
     forbiddenPathSegments.set(emptyList())
+    forbiddenText.set(listOf("ReactorMultiblockDefinition?"))
     failureMessage.set("Common module must not import NeoForge APIs")
 }
 

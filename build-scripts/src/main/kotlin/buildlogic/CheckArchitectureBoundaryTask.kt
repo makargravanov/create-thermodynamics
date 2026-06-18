@@ -23,6 +23,9 @@ abstract class CheckArchitectureBoundaryTask : DefaultTask() {
     abstract val forbiddenPathSegments: ListProperty<String>
 
     @get:Input
+    abstract val forbiddenText: ListProperty<String>
+
+    @get:Input
     @get:Optional
     abstract val failureMessage: Property<String>
 
@@ -44,10 +47,15 @@ abstract class CheckArchitectureBoundaryTask : DefaultTask() {
                     val forbidden = forbiddenImports.get().firstOrNull { trimmed.startsWith("import $it") }
                     if (forbidden == null) null else "${file.relativeTo(root)}:${index + 1}: $trimmed"
                 }
+                val textViolations = file.readLines().mapIndexedNotNull { index, line ->
+                    val forbidden = forbiddenText.getOrElse(emptyList()).firstOrNull { text -> line.contains(text) }
+                    if (forbidden == null) null else "${file.relativeTo(root)}:${index + 1}: forbidden text '$forbidden'"
+                }
 
                 sequence {
                     if (pathViolation) yield(file.relativeTo(root).path)
                     yieldAll(importViolations)
+                    yieldAll(textViolations)
                 }
             }
             .toList()

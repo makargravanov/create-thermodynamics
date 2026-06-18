@@ -1,5 +1,6 @@
 package dev.makargravanov.create_thermodynamics.neoforge.client
 
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorControllerFormationState
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorControllerMenu
 import dev.makargravanov.create_thermodynamics.neoforge.client.generated.GeneratedReactorControllerProgram
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUiState
@@ -87,11 +88,16 @@ class ReactorControllerScreen(
 
     private fun uiState(): ReactorControllerUiState {
         val state = menu.state
+        val formed = state.formationState == ReactorControllerFormationState.FORMED
         return ReactorControllerUiState(
             title = title.string,
-            status = if (state.formed) "formed" else "not formed",
-            structureId = state.structureId ?: if (state.formed) "formed" else null,
-            active = state.formed,
+            status = when (state.formationState) {
+                ReactorControllerFormationState.FORMED -> "formed"
+                ReactorControllerFormationState.NOT_FORMED -> "not formed"
+                ReactorControllerFormationState.UNKNOWN -> "unknown"
+            },
+            structureId = state.structureId?.value?.toString() ?: state.diagnostic,
+            active = formed,
             zoneCount = state.zoneCount,
             chamberBlocks = state.chamberBlockCount,
             portCount = state.portCount,
