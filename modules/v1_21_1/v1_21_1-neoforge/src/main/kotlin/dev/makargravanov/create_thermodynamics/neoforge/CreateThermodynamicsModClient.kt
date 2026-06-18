@@ -8,6 +8,7 @@ import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent
 @EventBusSubscriber(modid = CreateThermodynamicsMod.MOD_ID, value = [Dist.CLIENT])
 object CreateThermodynamicsModClient {
     @SubscribeEvent
+    @JvmStatic
     fun onClientSetup(event: FMLClientSetupEvent) {
     }
 }

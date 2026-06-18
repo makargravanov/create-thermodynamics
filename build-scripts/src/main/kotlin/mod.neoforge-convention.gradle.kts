@@ -72,6 +72,8 @@ extensions.configure<NeoForgeExtension>("neoForge") {
 
     mods {
         register(prop("mod_id")) {
+            sourceSet(project(":modules:core").sourceSets.main.get())
+            sourceSet(project(":modules:v1_21_1:v1_21_1-common").sourceSets.main.get())
             sourceSet(sourceSets.main.get())
         }
     }
@@ -90,6 +92,11 @@ configurations {
     named("runtimeClasspath") {
         extendsFrom(configurations.named("localRuntime").get())
     }
+}
+
+dependencies {
+    add("additionalRuntimeClasspath", kotlin("stdlib"))
+    add("jarJar", kotlin("stdlib"))
 }
 
 tasks.named<Jar>("jar") {
