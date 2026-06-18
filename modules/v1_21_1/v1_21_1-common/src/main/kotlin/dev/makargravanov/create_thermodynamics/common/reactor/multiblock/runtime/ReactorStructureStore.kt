@@ -13,7 +13,12 @@ import java.util.LinkedHashMap
 class ReactorStructureStore(
     private val nativeBridge: NativeReactorBridge = ReactorMultiblockNativeBridge,
 ) : ReactorPortAccess {
+    private companion object {
+        const val DEFAULT_ITEM_INPUT_BUFFER_CAPACITY = 64
+    }
+
     private val records = LinkedHashMap<ReactorStructureId, ReactorStructureRecord>()
+    private val itemInputBuffers = LinkedHashMap<PortBufferKey, ReactorPortItemBuffer>()
 
     fun register(definition: ReactorMultiblockDefinition): ReactorStructureRecord {
         val existing = records[definition.structureId]
@@ -29,6 +34,10 @@ class ReactorStructureStore(
             state = ReactorStructureState.ACTIVE,
         )
         records[definition.structureId] = record
+        for (port in definition.portsOfKind(ReactorPortKind.ITEM_INPUT)) {
+            itemInputBuffers[PortBufferKey(definition.structureId, port.position)] =
+                ReactorPortItemBuffer(DEFAULT_ITEM_INPUT_BUFFER_CAPACITY)
+        }
         return record
     }
 
@@ -48,6 +57,7 @@ class ReactorStructureStore(
         return try {
             nativeBridge.removeNativeReactor(record.nativeBinding)
             records[structureId] = record.copy(state = ReactorStructureState.REMOVED)
+            itemInputBuffers.keys.removeAll { it.structureId == structureId }
             ReactorOperationResult.Completed
         } catch (error: RuntimeException) {
             ReactorOperationResult.Failed("failed to remove native reactor for structure ${structureId.value}: ${error.message}")
@@ -77,20 +87,39 @@ class ReactorStructureStore(
         itemId: String,
         itemCount: Int,
     ): ReactorOperationResult {
+        if (itemId.isBlank()) {
+            return rejected(ReactorOperationRejection.INVALID_ITEM_ID, "itemId must not be blank")
+        }
+        if (itemCount <= 0) {
+            return rejected(ReactorOperationRejection.INVALID_ITEM_COUNT, "itemCount must be positive")
+        }
         val record = activeRecord(structureId) ?: return inactiveOrMissing(structureId)
         val port = record.inputPort(portPosition, ReactorPortKind.ITEM_INPUT) ?: return portRejected(record, portPosition, ReactorPortKind.ITEM_INPUT)
+        val buffer = itemInputBuffer(structureId, portPosition)
+        if (!buffer.canAccept(itemCount)) {
+            return rejected(
+                ReactorOperationRejection.ITEM_BUFFER_FULL,
+                "reactor item input buffer at $portPosition cannot accept $itemCount items",
+            )
+        }
+
+        buffer.add(itemId, itemCount)
 
         return try {
-            ReactorOperationResult.ItemInserted(
-                nativeBridge.insertItemStack(
-                    binding = record.nativeBinding,
-                    itemInputPort = port,
-                    itemId = itemId,
-                    itemCount = itemCount,
-                ),
+            val inserted = nativeBridge.insertItemStack(
+                binding = record.nativeBinding,
+                itemInputPort = port,
+                itemId = itemId,
+                itemCount = itemCount,
             )
+            buffer.remove(itemId, itemCount)
+            ReactorOperationResult.ItemInserted(inserted)
         } catch (error: RuntimeException) {
-            ReactorOperationResult.Failed("failed to insert item stack into reactor ${structureId.value}: ${error.message}")
+            ReactorOperationResult.ItemBuffered(
+                itemId = itemId,
+                itemCount = itemCount,
+                message = "item stack is buffered at reactor input $portPosition because native insertion failed: ${error.message}",
+            )
         }
     }
 
@@ -175,4 +204,24 @@ class ReactorStructureStore(
         message: String,
     ): ReactorOperationResult.Rejected =
         ReactorOperationResult.Rejected(reason, message)
+
+    fun bufferedItemCount(
+        structureId: ReactorStructureId,
+        portPosition: ReactorBlockPosition,
+        itemId: String,
+    ): Int =
+        itemInputBuffers[PortBufferKey(structureId, portPosition)]?.storedCount(itemId) ?: 0
+
+    private fun itemInputBuffer(
+        structureId: ReactorStructureId,
+        portPosition: ReactorBlockPosition,
+    ): ReactorPortItemBuffer =
+        requireNotNull(itemInputBuffers[PortBufferKey(structureId, portPosition)]) {
+            "missing item input buffer for reactor structure ${structureId.value} at $portPosition"
+        }
+
+    private data class PortBufferKey(
+        val structureId: ReactorStructureId,
+        val portPosition: ReactorBlockPosition,
+    )
 }

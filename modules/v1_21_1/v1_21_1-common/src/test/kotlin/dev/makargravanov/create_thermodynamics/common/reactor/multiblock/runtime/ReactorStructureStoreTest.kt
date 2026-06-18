@@ -89,6 +89,90 @@ class ReactorStructureStoreTest {
 
         assertEquals(ReactorOperationResult.ItemInserted(2.0), result)
         assertEquals(listOf(itemInput.position), nativeBridge.itemInsertPorts)
+        assertEquals(0, store.bufferedItemCount(definition.structureId, itemInput.position, "minecraft:water_bucket"))
+    }
+
+    @Test
+    fun `keeps accepted item in input buffer when native insertion fails`() {
+        val nativeBridge = FakeNativeReactorBridge()
+        nativeBridge.failItemInsertion = true
+        val store = ReactorStructureStore(nativeBridge)
+        val definition = testDefinition()
+        store.register(definition)
+        val itemInput = definition.portsOfKind(ReactorPortKind.ITEM_INPUT).single()
+
+        val result = store.insertItem(
+            structureId = definition.structureId,
+            portPosition = itemInput.position,
+            itemId = "minecraft:water_bucket",
+            itemCount = 2,
+        )
+
+        val buffered = assertIs<ReactorOperationResult.ItemBuffered>(result)
+        assertEquals("minecraft:water_bucket", buffered.itemId)
+        assertEquals(2, buffered.itemCount)
+        assertEquals(2, store.bufferedItemCount(definition.structureId, itemInput.position, "minecraft:water_bucket"))
+    }
+
+    @Test
+    fun `rejects invalid item count before touching input buffer`() {
+        val nativeBridge = FakeNativeReactorBridge()
+        val store = ReactorStructureStore(nativeBridge)
+        val definition = testDefinition()
+        store.register(definition)
+        val itemInput = definition.portsOfKind(ReactorPortKind.ITEM_INPUT).single()
+
+        val result = store.insertItem(
+            structureId = definition.structureId,
+            portPosition = itemInput.position,
+            itemId = "minecraft:water_bucket",
+            itemCount = 0,
+        )
+
+        val rejected = assertIs<ReactorOperationResult.Rejected>(result)
+        assertEquals(ReactorOperationRejection.INVALID_ITEM_COUNT, rejected.reason)
+        assertEquals(0, nativeBridge.itemInsertPorts.size)
+        assertEquals(0, store.bufferedItemCount(definition.structureId, itemInput.position, "minecraft:water_bucket"))
+    }
+
+    @Test
+    fun `rejects blank item id before touching input buffer`() {
+        val nativeBridge = FakeNativeReactorBridge()
+        val store = ReactorStructureStore(nativeBridge)
+        val definition = testDefinition()
+        store.register(definition)
+        val itemInput = definition.portsOfKind(ReactorPortKind.ITEM_INPUT).single()
+
+        val result = store.insertItem(
+            structureId = definition.structureId,
+            portPosition = itemInput.position,
+            itemId = " ",
+            itemCount = 1,
+        )
+
+        val rejected = assertIs<ReactorOperationResult.Rejected>(result)
+        assertEquals(ReactorOperationRejection.INVALID_ITEM_ID, rejected.reason)
+        assertEquals(0, nativeBridge.itemInsertPorts.size)
+    }
+
+    @Test
+    fun `rejects item stack that does not fit input buffer`() {
+        val nativeBridge = FakeNativeReactorBridge()
+        val store = ReactorStructureStore(nativeBridge)
+        val definition = testDefinition()
+        store.register(definition)
+        val itemInput = definition.portsOfKind(ReactorPortKind.ITEM_INPUT).single()
+
+        val result = store.insertItem(
+            structureId = definition.structureId,
+            portPosition = itemInput.position,
+            itemId = "minecraft:water_bucket",
+            itemCount = 65,
+        )
+
+        val rejected = assertIs<ReactorOperationResult.Rejected>(result)
+        assertEquals(ReactorOperationRejection.ITEM_BUFFER_FULL, rejected.reason)
+        assertEquals(0, nativeBridge.itemInsertPorts.size)
     }
 
     @Test
@@ -242,6 +326,7 @@ class ReactorStructureStoreTest {
         val removed = mutableListOf<ReactorStructureId>()
         val ticked = mutableListOf<ReactorStructureId>()
         val itemInsertPorts = mutableListOf<ReactorBlockPosition>()
+        var failItemInsertion = false
 
         override fun createNativeReactor(definition: ReactorMultiblockDefinition): NativeReactorMultiblockBinding {
             created += definition.structureId
@@ -273,6 +358,9 @@ class ReactorStructureStoreTest {
             itemId: String,
             itemCount: Int,
         ): Double {
+            if (failItemInsertion) {
+                throw IllegalStateException("configured item insertion failure")
+            }
             itemInsertPorts += itemInputPort.position
             return itemCount.toDouble()
         }
