@@ -275,6 +275,94 @@ class ReactorWorldRuntimeTest {
         assertEquals(1, bridge.tickCount)
     }
 
+    @Test
+    fun `tick scheduler queues simulation ticks only on configured interval`() {
+        val bridge = FakeNativeReactorBridge()
+        val runtime = testRuntime(nativeBridge = bridge)
+        val definition = testDefinition()
+        runtime.registerStructure(definition)
+        val scheduler = ReactorRuntimeTickScheduler(
+            runtime = runtime,
+            nativeSession = ReactorNativeSession(runtime.structures, runtime.blobStorage),
+            config = ReactorRuntimeTickSchedulerConfig(
+                simulationIntervalTicks = 2,
+                dtSeconds = 0.05,
+                maxReportsAppliedPerTick = 8,
+                maxCommandsSubmittedPerTick = 8,
+            ),
+        )
+
+        val first = scheduler.tick()
+        val second = scheduler.tick()
+
+        assertEquals(1, first.tickIndex)
+        assertEquals(2, second.tickIndex)
+        assertEquals(null, first.tickQueueResult)
+        assertIs<ReactorWorldRuntimeResult.BatchQueued>(second.tickQueueResult)
+        assertEquals(1, bridge.tickCount)
+        assertEquals(ReactorSnapshotVersion(1), runtime.structures.record(definition.structureId)?.snapshotVersion)
+    }
+
+    @Test
+    fun `tick scheduler submits already queued port commands between simulation ticks`() {
+        val bridge = FakeNativeReactorBridge()
+        val runtime = testRuntime(nativeBridge = bridge)
+        val definition = testDefinition()
+        runtime.registerStructure(definition)
+        assertIs<ReactorWorldRuntimeResult.CommandQueued>(
+            runtime.queueInsertItem(
+                structureId = definition.structureId,
+                portPosition = definition.ports.single().position,
+                itemId = "minecraft:water_bucket",
+                itemCount = 1,
+            ),
+        )
+        val scheduler = ReactorRuntimeTickScheduler(
+            runtime = runtime,
+            nativeSession = ReactorNativeSession(runtime.structures, runtime.blobStorage),
+            config = ReactorRuntimeTickSchedulerConfig(
+                simulationIntervalTicks = 20,
+                dtSeconds = 1.0,
+                maxReportsAppliedPerTick = 8,
+                maxCommandsSubmittedPerTick = 8,
+            ),
+        )
+
+        val cycle = scheduler.tick()
+
+        assertEquals(null, cycle.tickQueueResult)
+        assertEquals(1, bridge.itemInsertCount)
+        assertEquals(0, bridge.tickCount)
+        assertEquals(ReactorSnapshotVersion(1), runtime.structures.record(definition.structureId)?.snapshotVersion)
+    }
+
+    @Test
+    fun `invalid command parameters are rejected without throwing`() {
+        val runtime = testRuntime()
+        val definition = testDefinition()
+        runtime.registerStructure(definition)
+
+        val badTick = assertIs<ReactorWorldRuntimeResult.Rejected>(
+            runtime.queueTick(definition.structureId, Double.NaN),
+        )
+        val badItem = assertIs<ReactorWorldRuntimeResult.Rejected>(
+            runtime.queueInsertItem(
+                structureId = definition.structureId,
+                portPosition = definition.ports.single().position,
+                itemId = "",
+                itemCount = 1,
+            ),
+        )
+        val badSnapshot = assertIs<ReactorWorldRuntimeResult.Rejected>(
+            runtime.queueSnapshotRequest(definition.structureId, ""),
+        )
+
+        assertEquals(ReactorWorldRuntimeRejection.INVALID_COMMAND, badTick.reason)
+        assertEquals(ReactorWorldRuntimeRejection.INVALID_COMMAND, badItem.reason)
+        assertEquals(ReactorWorldRuntimeRejection.INVALID_COMMAND, badSnapshot.reason)
+        assertEquals(0, runtime.commandOutbox.size)
+    }
+
     private fun testRuntime(
         commandOutbox: ReactorCommandOutbox = ReactorCommandOutbox(),
         reportInbox: ReactorReportInbox = ReactorReportInbox(),
@@ -356,6 +444,9 @@ class ReactorWorldRuntimeTest {
         var tickCount: Int = 0
             private set
 
+        var itemInsertCount: Int = 0
+            private set
+
         override fun createNativeReactor(definition: ReactorMultiblockDefinition): NativeReactorMultiblockBinding =
             NativeReactorMultiblockBinding(
                 structureId = definition.structureId,
@@ -394,8 +485,10 @@ class ReactorWorldRuntimeTest {
             itemInputPort: ReactorPortDescriptor,
             itemId: String,
             itemCount: Int,
-        ): Double =
-            itemCount.toDouble()
+        ): Double {
+            itemInsertCount += 1
+            return itemCount.toDouble()
+        }
     }
 
     private class FakeNativeCatalogBridge : NativeCatalogBridge {

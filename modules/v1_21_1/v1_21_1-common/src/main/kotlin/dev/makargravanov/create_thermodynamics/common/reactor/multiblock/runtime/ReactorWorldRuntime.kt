@@ -22,6 +22,7 @@ enum class ReactorWorldRuntimeRejection {
     STRUCTURE_NOT_ACTIVE,
     QUEUE_FULL,
     WRONG_BLOB_KIND,
+    INVALID_COMMAND,
     INVALID_PORT_OPERATION,
     CATALOG_EXPORT_FAILED,
     BLOB_STORAGE_REJECTED,
@@ -135,6 +136,12 @@ class ReactorWorldRuntime(
         structureId: ReactorStructureId,
         dtSeconds: Double,
     ): ReactorWorldRuntimeResult {
+        if (!dtSeconds.isFinite() || dtSeconds < 0.0) {
+            return rejected(
+                ReactorWorldRuntimeRejection.INVALID_COMMAND,
+                "reactor tick duration must be non-negative and finite",
+            )
+        }
         val record = structures.record(structureId)
             ?: return rejected(
                 ReactorWorldRuntimeRejection.STRUCTURE_NOT_FOUND,
@@ -207,6 +214,12 @@ class ReactorWorldRuntime(
         structureId: ReactorStructureId,
         reason: String,
     ): ReactorWorldRuntimeResult {
+        if (reason.isBlank()) {
+            return rejected(
+                ReactorWorldRuntimeRejection.INVALID_COMMAND,
+                "snapshot export reason must not be blank",
+            )
+        }
         val record = structures.record(structureId)
             ?: return rejected(
                 ReactorWorldRuntimeRejection.STRUCTURE_NOT_FOUND,
@@ -232,6 +245,12 @@ class ReactorWorldRuntime(
         structureId: ReactorStructureId,
         reason: String,
     ): ReactorWorldRuntimeResult {
+        if (reason.isBlank()) {
+            return rejected(
+                ReactorWorldRuntimeRejection.INVALID_COMMAND,
+                "reactor removal reason must not be blank",
+            )
+        }
         val record = structures.record(structureId)
             ?: return rejected(
                 ReactorWorldRuntimeRejection.STRUCTURE_NOT_FOUND,
@@ -259,6 +278,18 @@ class ReactorWorldRuntime(
         itemId: String,
         itemCount: Int,
     ): ReactorWorldRuntimeResult {
+        if (itemId.isBlank()) {
+            return rejected(
+                ReactorWorldRuntimeRejection.INVALID_COMMAND,
+                "reactor item id must not be blank",
+            )
+        }
+        if (itemCount <= 0) {
+            return rejected(
+                ReactorWorldRuntimeRejection.INVALID_COMMAND,
+                "reactor item count must be positive",
+            )
+        }
         val record = structures.record(structureId)
             ?: return rejected(
                 ReactorWorldRuntimeRejection.STRUCTURE_NOT_FOUND,
@@ -286,6 +317,12 @@ class ReactorWorldRuntime(
         structureId: ReactorStructureId,
         reason: String,
     ): ReactorWorldRuntimeResult {
+        if (reason.isBlank()) {
+            return rejected(
+                ReactorWorldRuntimeRejection.INVALID_COMMAND,
+                "snapshot request reason must not be blank",
+            )
+        }
         val record = structures.record(structureId)
             ?: return rejected(
                 ReactorWorldRuntimeRejection.STRUCTURE_NOT_FOUND,
