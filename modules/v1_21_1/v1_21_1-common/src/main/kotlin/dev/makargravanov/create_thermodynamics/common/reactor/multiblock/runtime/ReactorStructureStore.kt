@@ -8,6 +8,9 @@ import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.R
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorPortDescriptor
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorPortKind
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorStructureId
+import dev.makargravanov.create_thermodynamics.common.rust.blob.NativeBlobKind
+import dev.makargravanov.create_thermodynamics.common.rust.blob.NativeBlobStorage
+import dev.makargravanov.create_thermodynamics.common.rust.blob.NativeBlobStorageResult
 import java.util.LinkedHashMap
 
 class ReactorStructureStore(
@@ -47,16 +50,107 @@ class ReactorStructureStore(
     fun activeRecords(): List<ReactorStructureRecord> =
         records.values.filter { it.state == ReactorStructureState.ACTIVE }
 
+    fun suspendToCheckpoint(
+        structureId: ReactorStructureId,
+        blobStorage: NativeBlobStorage,
+        contentVersion: Long,
+    ): ReactorOperationResult {
+        if (contentVersion < 0) {
+            return rejected(ReactorOperationRejection.INVALID_CONTENT_VERSION, "contentVersion must be non-negative")
+        }
+        val record = activeRecord(structureId) ?: return inactiveOrMissing(structureId)
+        val binding = record.activeBinding() ?: return inactiveOrMissing(structureId)
+
+        val encoded = try {
+            nativeBridge.exportReactorCheckpoint(binding, contentVersion)
+        } catch (error: RuntimeException) {
+            return ReactorOperationResult.Failed("failed to export reactor checkpoint for structure ${structureId.value}: ${error.message}")
+        }
+
+        val stored = when (val result = blobStorage.store(reactorCheckpointStorageKey(structureId, contentVersion), encoded)) {
+            is NativeBlobStorageResult.Stored -> result
+            is NativeBlobStorageResult.Rejected -> {
+                return rejected(
+                    ReactorOperationRejection.SNAPSHOT_STORAGE_REJECTED,
+                    "failed to store reactor checkpoint for structure ${structureId.value}: ${result.message}",
+                )
+            }
+            is NativeBlobStorageResult.Loaded -> {
+                return ReactorOperationResult.Failed("native blob storage returned Loaded while storing reactor checkpoint")
+            }
+        }
+        if (stored.ref.kind != NativeBlobKind.ReactorSnapshot) {
+            return ReactorOperationResult.Failed("native checkpoint for structure ${structureId.value} is ${stored.ref.kind}, expected ${NativeBlobKind.ReactorSnapshot}")
+        }
+
+        return try {
+            nativeBridge.removeNativeReactor(binding)
+            records[structureId] = record.copy(
+                nativeBinding = null,
+                reactorCheckpoint = stored.ref,
+                state = ReactorStructureState.SUSPENDED_UNLOADED,
+            )
+            ReactorOperationResult.ReactorSuspended("reactor structure ${structureId.value} was suspended to ${stored.ref.storageKey}")
+        } catch (error: RuntimeException) {
+            ReactorOperationResult.Failed("failed to remove native reactor after checkpoint for structure ${structureId.value}: ${error.message}")
+        }
+    }
+
+    fun resumeFromCheckpoint(
+        structureId: ReactorStructureId,
+        blobStorage: NativeBlobStorage,
+    ): ReactorOperationResult {
+        val record = records[structureId]
+            ?: return rejected(ReactorOperationRejection.STRUCTURE_NOT_FOUND, "reactor structure ${structureId.value} is not registered")
+        if (record.state != ReactorStructureState.SUSPENDED_UNLOADED) {
+            return rejected(
+                ReactorOperationRejection.STRUCTURE_NOT_SUSPENDED,
+                "reactor structure ${structureId.value} is ${record.state}, expected ${ReactorStructureState.SUSPENDED_UNLOADED}",
+            )
+        }
+        val checkpoint = record.reactorCheckpoint
+            ?: return ReactorOperationResult.Failed("reactor structure ${structureId.value} is suspended without a checkpoint reference")
+
+        val bytes = when (val result = blobStorage.load(checkpoint)) {
+            is NativeBlobStorageResult.Loaded -> result.bytes
+            is NativeBlobStorageResult.Rejected -> {
+                return rejected(
+                    ReactorOperationRejection.SNAPSHOT_STORAGE_REJECTED,
+                    "failed to load reactor checkpoint for structure ${structureId.value}: ${result.message}",
+                )
+            }
+            is NativeBlobStorageResult.Stored -> {
+                return ReactorOperationResult.Failed("native blob storage returned Stored while loading reactor checkpoint")
+            }
+        }
+
+        return try {
+            val binding = nativeBridge.createNativeReactorFromCheckpoint(record.definition, bytes)
+            records[structureId] = record.copy(
+                nativeBinding = binding,
+                state = ReactorStructureState.ACTIVE,
+            )
+            ensureItemInputBuffers(record.definition)
+            ReactorOperationResult.ReactorResumed("reactor structure ${structureId.value} was resumed from ${checkpoint.storageKey}")
+        } catch (error: RuntimeException) {
+            ReactorOperationResult.Failed("failed to create native reactor from checkpoint for structure ${structureId.value}: ${error.message}")
+        }
+    }
+
     fun remove(structureId: ReactorStructureId): ReactorOperationResult {
         val record = records[structureId]
             ?: return rejected(ReactorOperationRejection.STRUCTURE_NOT_FOUND, "reactor structure ${structureId.value} is not registered")
-        if (record.state != ReactorStructureState.ACTIVE) {
+        if (record.state == ReactorStructureState.REMOVED) {
             return rejected(ReactorOperationRejection.STRUCTURE_NOT_ACTIVE, "reactor structure ${structureId.value} is ${record.state}")
         }
 
         return try {
-            nativeBridge.removeNativeReactor(record.nativeBinding)
-            records[structureId] = record.copy(state = ReactorStructureState.REMOVED)
+            record.nativeBinding?.let { nativeBridge.removeNativeReactor(it) }
+            records[structureId] = record.copy(
+                nativeBinding = null,
+                reactorCheckpoint = null,
+                state = ReactorStructureState.REMOVED,
+            )
             itemInputBuffers.keys.removeAll { it.structureId == structureId }
             ReactorOperationResult.Completed
         } catch (error: RuntimeException) {
@@ -69,9 +163,10 @@ class ReactorStructureStore(
             return ReactorOperationResult.Failed("dtSeconds must be non-negative and finite")
         }
         val record = activeRecord(structureId) ?: return inactiveOrMissing(structureId)
+        val binding = record.activeBinding() ?: return inactiveOrMissing(structureId)
 
         return try {
-            nativeBridge.tickNativeReactor(record.nativeBinding, dtSeconds)
+            nativeBridge.tickNativeReactor(binding, dtSeconds)
             ReactorOperationResult.Completed
         } catch (error: RuntimeException) {
             ReactorOperationResult.Failed("failed to tick native reactor for structure ${structureId.value}: ${error.message}")
@@ -107,7 +202,7 @@ class ReactorStructureStore(
 
         return try {
             val inserted = nativeBridge.insertItemStack(
-                binding = record.nativeBinding,
+                binding = record.activeBinding() ?: return inactiveOrMissing(structureId),
                 itemInputPort = port,
                 itemId = itemId,
                 itemCount = itemCount,
@@ -155,6 +250,9 @@ class ReactorStructureStore(
 
     private fun activeRecord(structureId: ReactorStructureId): ReactorStructureRecord? =
         records[structureId]?.takeIf { it.state == ReactorStructureState.ACTIVE }
+
+    private fun ReactorStructureRecord.activeBinding(): NativeReactorMultiblockBinding? =
+        nativeBinding?.takeIf { state == ReactorStructureState.ACTIVE }
 
     private fun inactiveOrMissing(structureId: ReactorStructureId): ReactorOperationResult {
         val record = records[structureId]
@@ -219,6 +317,20 @@ class ReactorStructureStore(
         requireNotNull(itemInputBuffers[PortBufferKey(structureId, portPosition)]) {
             "missing item input buffer for reactor structure ${structureId.value} at $portPosition"
         }
+
+    private fun ensureItemInputBuffers(definition: ReactorMultiblockDefinition) {
+        for (port in definition.portsOfKind(ReactorPortKind.ITEM_INPUT)) {
+            itemInputBuffers.getOrPut(PortBufferKey(definition.structureId, port.position)) {
+                ReactorPortItemBuffer(DEFAULT_ITEM_INPUT_BUFFER_CAPACITY)
+            }
+        }
+    }
+
+    private fun reactorCheckpointStorageKey(
+        structureId: ReactorStructureId,
+        contentVersion: Long,
+    ): String =
+        "reactors/${structureId.value}/checkpoint_${contentVersion.toString().padStart(12, '0')}.bin.zst"
 
     private data class PortBufferKey(
         val structureId: ReactorStructureId,

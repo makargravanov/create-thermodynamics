@@ -6,9 +6,19 @@ import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.R
 interface NativeReactorBridge {
     fun createNativeReactor(definition: ReactorMultiblockDefinition): NativeReactorMultiblockBinding
 
+    fun createNativeReactorFromCheckpoint(
+        definition: ReactorMultiblockDefinition,
+        encodedCheckpoint: ByteArray,
+    ): NativeReactorMultiblockBinding
+
     fun removeNativeReactor(binding: NativeReactorMultiblockBinding)
 
     fun tickNativeReactor(binding: NativeReactorMultiblockBinding, dtSeconds: Double)
+
+    fun exportReactorCheckpoint(
+        binding: NativeReactorMultiblockBinding,
+        contentVersion: Long,
+    ): ByteArray
 
     fun insertItemStack(
         binding: NativeReactorMultiblockBinding,

@@ -14,7 +14,13 @@ import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.R
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorPortKind
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorStructureId
 import dev.makargravanov.create_thermodynamics.common.rust.ThermodynamicsNative
+import dev.makargravanov.create_thermodynamics.common.rust.blob.NativeBlobKind
+import dev.makargravanov.create_thermodynamics.common.rust.blob.NativeBlobStorage
 import java.util.UUID
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.file.Files
+import java.security.MessageDigest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -57,6 +63,61 @@ class ReactorStructureStoreTest {
         assertEquals(ReactorStructureState.REMOVED, store.record(definition.structureId)?.state)
         assertEquals(1, nativeBridge.removed.size)
         assertEquals(emptyList(), store.tickAll(0.05))
+    }
+
+    @Test
+    fun `suspends active structure to native checkpoint`() {
+        val nativeBridge = FakeNativeReactorBridge()
+        val store = ReactorStructureStore(nativeBridge)
+        val definition = testDefinition()
+        store.register(definition)
+        val storage = NativeBlobStorage(Files.createTempDirectory("ct-reactor-checkpoint-test"))
+
+        val result = store.suspendToCheckpoint(
+            structureId = definition.structureId,
+            blobStorage = storage,
+            contentVersion = 7,
+        )
+
+        assertIs<ReactorOperationResult.ReactorSuspended>(result)
+        val record = store.record(definition.structureId)!!
+        assertEquals(ReactorStructureState.SUSPENDED_UNLOADED, record.state)
+        assertEquals(NativeBlobKind.ReactorSnapshot, record.reactorCheckpoint?.kind)
+        assertEquals(1, nativeBridge.exportedCheckpoints.size)
+        assertEquals(1, nativeBridge.removed.size)
+        assertEquals(emptyList(), store.tickAll(0.05))
+    }
+
+    @Test
+    fun `resumes suspended structure from native checkpoint`() {
+        val nativeBridge = FakeNativeReactorBridge()
+        val store = ReactorStructureStore(nativeBridge)
+        val definition = testDefinition()
+        store.register(definition)
+        val storage = NativeBlobStorage(Files.createTempDirectory("ct-reactor-checkpoint-test"))
+        store.suspendToCheckpoint(definition.structureId, storage, contentVersion = 8)
+
+        val result = store.resumeFromCheckpoint(definition.structureId, storage)
+
+        assertIs<ReactorOperationResult.ReactorResumed>(result)
+        val record = store.record(definition.structureId)!!
+        assertEquals(ReactorStructureState.ACTIVE, record.state)
+        assertEquals(1, nativeBridge.restoredCheckpoints.size)
+        assertEquals(listOf(ReactorOperationResult.Completed), store.tickAll(0.05))
+    }
+
+    @Test
+    fun `rejects resume of active structure`() {
+        val nativeBridge = FakeNativeReactorBridge()
+        val store = ReactorStructureStore(nativeBridge)
+        val definition = testDefinition()
+        store.register(definition)
+        val storage = NativeBlobStorage(Files.createTempDirectory("ct-reactor-checkpoint-test"))
+
+        val result = store.resumeFromCheckpoint(definition.structureId, storage)
+
+        val rejected = assertIs<ReactorOperationResult.Rejected>(result)
+        assertEquals(ReactorOperationRejection.STRUCTURE_NOT_SUSPENDED, rejected.reason)
     }
 
     @Test
@@ -328,17 +389,31 @@ class ReactorStructureStoreTest {
         val removed = mutableListOf<ReactorStructureId>()
         val ticked = mutableListOf<ReactorStructureId>()
         val itemInsertPorts = mutableListOf<ReactorBlockPosition>()
+        val exportedCheckpoints = mutableListOf<ReactorStructureId>()
+        val restoredCheckpoints = mutableListOf<ReactorStructureId>()
         var failItemInsertion = false
 
         override fun createNativeReactor(definition: ReactorMultiblockDefinition): NativeReactorMultiblockBinding {
             created += definition.structureId
+            return bindingFor(definition)
+        }
+
+        override fun createNativeReactorFromCheckpoint(
+            definition: ReactorMultiblockDefinition,
+            encodedCheckpoint: ByteArray,
+        ): NativeReactorMultiblockBinding {
+            restoredCheckpoints += definition.structureId
+            return bindingFor(definition)
+        }
+
+        private fun bindingFor(definition: ReactorMultiblockDefinition): NativeReactorMultiblockBinding {
             val itemInputs = definition.portsOfKind(ReactorPortKind.ITEM_INPUT).toBindings(0)
             val itemOutputs = definition.portsOfKind(ReactorPortKind.ITEM_OUTPUT).toBindings(0)
             val fluidInputs = definition.portsOfKind(ReactorPortKind.FLUID_INPUT).toBindings(itemInputs.size)
             val fluidOutputs = definition.portsOfKind(ReactorPortKind.FLUID_OUTPUT).toBindings(itemOutputs.size)
             return NativeReactorMultiblockBinding(
                 structureId = definition.structureId,
-                nativeReactorId = ThermodynamicsNative.NativeReactorId(created.size.toLong()),
+                nativeReactorId = ThermodynamicsNative.NativeReactorId((created.size + restoredCheckpoints.size).toLong()),
                 itemInputs = itemInputs,
                 itemOutputs = itemOutputs,
                 fluidInputs = fluidInputs,
@@ -352,6 +427,14 @@ class ReactorStructureStoreTest {
 
         override fun tickNativeReactor(binding: NativeReactorMultiblockBinding, dtSeconds: Double) {
             ticked += binding.structureId
+        }
+
+        override fun exportReactorCheckpoint(
+            binding: NativeReactorMultiblockBinding,
+            contentVersion: Long,
+        ): ByteArray {
+            exportedCheckpoints += binding.structureId
+            return nativeBlobBytes(NativeBlobKind.ReactorSnapshot, contentVersion)
         }
 
         override fun insertItemStack(
@@ -374,5 +457,27 @@ class ReactorStructureStoreTest {
                     nativePortIndex = startIndex + offset,
                 )
             }
+
+        private fun nativeBlobBytes(
+            kind: NativeBlobKind,
+            contentVersion: Long,
+        ): ByteArray {
+            val modelVersion = "test-model".encodeToByteArray()
+            val payload = byteArrayOf(1, 2, 3, 4)
+            val payloadHash = MessageDigest.getInstance("SHA-256").digest(payload)
+            val header = ByteBuffer.allocate(8 + 2 + 2 + 2 + 8 + 8 + 8 + 32 + modelVersion.size)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .put(byteArrayOf(0x43, 0x54, 0x4e, 0x42, 0x4c, 0x42, 0x31, 0x00))
+                .putShort(1.toShort())
+                .putShort(kind.wireId.toShort())
+                .putShort(modelVersion.size.toShort())
+                .putLong(contentVersion)
+                .putLong(payload.size.toLong())
+                .putLong(payload.size.toLong())
+                .put(payloadHash)
+                .put(modelVersion)
+                .array()
+            return header + payload
+        }
     }
 }

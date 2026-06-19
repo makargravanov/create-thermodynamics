@@ -5,9 +5,13 @@ import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.R
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorPortDescriptor
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorPortKind
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorStructureId
+import dev.makargravanov.create_thermodynamics.common.rust.blob.NativeBlobRef
 
 enum class ReactorStructureState {
+    FORMED_NO_NATIVE,
     ACTIVE,
+    SUSPENDED_UNKNOWN,
+    SUSPENDED_UNLOADED,
     INVALID,
     REMOVED,
 }
@@ -15,7 +19,8 @@ enum class ReactorStructureState {
 data class ReactorStructureRecord(
     val structureId: ReactorStructureId,
     val definition: ReactorMultiblockDefinition,
-    val nativeBinding: NativeReactorMultiblockBinding,
+    val nativeBinding: NativeReactorMultiblockBinding?,
+    val reactorCheckpoint: NativeBlobRef? = null,
     val state: ReactorStructureState,
 ) {
     private val portsByPosition: Map<ReactorBlockPosition, ReactorPortDescriptor> =

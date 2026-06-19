@@ -25,21 +25,38 @@ data class NativeReactorMultiblockBinding(
 
 object ReactorMultiblockNativeBridge : NativeReactorBridge {
     override fun createNativeReactor(definition: ReactorMultiblockDefinition): NativeReactorMultiblockBinding {
-        val itemInputs = definition.portsOfKind(ReactorPortKind.ITEM_INPUT)
-        val itemOutputs = definition.portsOfKind(ReactorPortKind.ITEM_OUTPUT)
-        val fluidInputs = definition.portsOfKind(ReactorPortKind.FLUID_INPUT)
-        val fluidOutputs = definition.portsOfKind(ReactorPortKind.FLUID_OUTPUT)
-
         val reactorId = ThermodynamicsNative.createSingleZoneReactor(
             volumeCubicMeters = definition.totalVolumeCubicMeters,
-            itemInputCount = itemInputs.size,
-            itemOutputCount = itemOutputs.size,
-            fluidInputCount = fluidInputs.size,
-            fluidOutputCount = fluidOutputs.size,
+            itemInputCount = definition.portsOfKind(ReactorPortKind.ITEM_INPUT).size,
+            itemOutputCount = definition.portsOfKind(ReactorPortKind.ITEM_OUTPUT).size,
+            fluidInputCount = definition.portsOfKind(ReactorPortKind.FLUID_INPUT).size,
+            fluidOutputCount = definition.portsOfKind(ReactorPortKind.FLUID_OUTPUT).size,
         )
+        return definition.toNativeBinding(reactorId)
+    }
+
+    override fun createNativeReactorFromCheckpoint(
+        definition: ReactorMultiblockDefinition,
+        encodedCheckpoint: ByteArray,
+    ): NativeReactorMultiblockBinding =
+        definition.toNativeBinding(ThermodynamicsNative.createReactorFromCheckpoint(encodedCheckpoint))
+
+    override fun exportReactorCheckpoint(
+        binding: NativeReactorMultiblockBinding,
+        contentVersion: Long,
+    ): ByteArray =
+        ThermodynamicsNative.exportReactorCheckpoint(binding.nativeReactorId, contentVersion)
+
+    private fun ReactorMultiblockDefinition.toNativeBinding(
+        reactorId: ThermodynamicsNative.NativeReactorId,
+    ): NativeReactorMultiblockBinding {
+        val itemInputs = portsOfKind(ReactorPortKind.ITEM_INPUT)
+        val itemOutputs = portsOfKind(ReactorPortKind.ITEM_OUTPUT)
+        val fluidInputs = portsOfKind(ReactorPortKind.FLUID_INPUT)
+        val fluidOutputs = portsOfKind(ReactorPortKind.FLUID_OUTPUT)
 
         return NativeReactorMultiblockBinding(
-            structureId = definition.structureId,
+            structureId = structureId,
             nativeReactorId = reactorId,
             itemInputs = itemInputs.toBindings(startIndex = 0),
             itemOutputs = itemOutputs.toBindings(startIndex = 0),
