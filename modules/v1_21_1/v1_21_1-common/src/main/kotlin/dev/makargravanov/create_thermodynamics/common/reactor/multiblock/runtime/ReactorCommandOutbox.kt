@@ -27,6 +27,9 @@ class ReactorCommandOutbox(
     val size: Int
         get() = commands.size
 
+    val remainingCapacity: Int
+        get() = limits.maxCommands - commands.size
+
     fun isEmpty(): Boolean =
         commands.isEmpty()
 

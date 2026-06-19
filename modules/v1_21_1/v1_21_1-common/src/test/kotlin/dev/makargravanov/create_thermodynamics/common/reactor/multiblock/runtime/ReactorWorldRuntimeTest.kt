@@ -14,11 +14,13 @@ import dev.makargravanov.create_thermodynamics.common.rust.blob.NativeBlobHash
 import dev.makargravanov.create_thermodynamics.common.rust.blob.NativeBlobKind
 import dev.makargravanov.create_thermodynamics.common.rust.blob.NativeBlobRef
 import dev.makargravanov.create_thermodynamics.common.rust.blob.NativeBlobStorage
+import dev.makargravanov.create_thermodynamics.common.rust.blob.NativeBlobStorageResult
 import java.nio.file.Files
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class ReactorWorldRuntimeTest {
     @Test
@@ -102,6 +104,24 @@ class ReactorWorldRuntimeTest {
     }
 
     @Test
+    fun `catalog checkpoint export stores opaque native blob and installs reference`() {
+        val runtime = testRuntime(catalogBridge = FakeNativeCatalogBridge())
+
+        val exported = assertIs<ReactorWorldRuntimeResult.CatalogUpdated>(
+            runtime.exportCatalogCheckpoint(contentVersion = 5),
+        )
+        val loaded = assertIs<NativeBlobStorageResult.Loaded>(
+            runtime.blobStorage.load(exported.catalog.checkpoint!!),
+        )
+
+        assertEquals(5, exported.catalog.catalogVersion)
+        assertEquals(NativeBlobKind.DynamicCatalogCheckpoint, exported.catalog.checkpoint?.kind)
+        assertEquals("catalog/checkpoint_000000000005.bin.zst", exported.catalog.checkpoint?.storageKey)
+        assertEquals(5, runtime.catalog.catalogVersion)
+        assertTrue(loaded.bytes.isNotEmpty())
+    }
+
+    @Test
     fun `command queue overflow is reported by world runtime`() {
         val runtime = testRuntime(
             commandOutbox = ReactorCommandOutbox(ReactorCommandOutboxLimits(maxCommands = 1, maxDrainBatch = 8)),
@@ -156,6 +176,62 @@ class ReactorWorldRuntimeTest {
     }
 
     @Test
+    fun `unload command exports checkpoint and suspends structure`() {
+        val runtime = testRuntime()
+        val definition = testDefinition()
+        runtime.registerStructure(definition)
+        assertIs<ReactorWorldRuntimeResult.CommandQueued>(
+            runtime.queueUnloadAndExportSnapshot(definition.structureId, "chunk unload"),
+        )
+
+        assertIs<ReactorWorldRuntimeResult.CommandsSubmitted>(
+            runtime.submitQueuedCommands(ReactorNativeSession(runtime.structures, runtime.blobStorage), maxCommands = 8),
+        )
+        assertIs<ReactorWorldRuntimeResult.ReportsApplied>(runtime.applyReadyReports(8))
+
+        val record = runtime.structures.record(definition.structureId)
+        assertEquals(ReactorStructureState.SUSPENDED_UNLOADED, record?.state)
+        assertEquals(ReactorSnapshotVersion(1), record?.snapshotVersion)
+        assertEquals(NativeBlobKind.ReactorSnapshot, record?.reactorCheckpoint?.kind)
+    }
+
+    @Test
+    fun `ensure loaded command resumes structure from checkpoint`() {
+        val runtime = testRuntime()
+        val definition = testDefinition()
+        runtime.registerStructure(definition)
+        assertIs<ReactorOperationResult.ReactorSuspended>(
+            runtime.suspendStructureToCheckpoint(definition.structureId, contentVersion = 7),
+        )
+        assertIs<ReactorWorldRuntimeResult.CommandQueued>(runtime.queueEnsureLoaded(definition.structureId))
+
+        assertIs<ReactorWorldRuntimeResult.CommandsSubmitted>(
+            runtime.submitQueuedCommands(ReactorNativeSession(runtime.structures, runtime.blobStorage), maxCommands = 8),
+        )
+        assertIs<ReactorWorldRuntimeResult.ReportsApplied>(runtime.applyReadyReports(8))
+
+        val record = runtime.structures.record(definition.structureId)
+        assertEquals(ReactorStructureState.ACTIVE, record?.state)
+        assertEquals(ReactorSnapshotVersion(7), record?.snapshotVersion)
+    }
+
+    @Test
+    fun `queue ticks for active structures is rejected before partial enqueue when queue lacks capacity`() {
+        val runtime = testRuntime(
+            commandOutbox = ReactorCommandOutbox(ReactorCommandOutboxLimits(maxCommands = 1, maxDrainBatch = 8)),
+        )
+        runtime.registerStructure(testDefinition("50352d37-1e3d-45c1-beb4-885f5bd83ba1"))
+        runtime.registerStructure(testDefinition("9be6962e-3eee-4e0a-8d12-9e5d6132f5e0"))
+
+        val rejected = assertIs<ReactorWorldRuntimeResult.Rejected>(
+            runtime.queueTickForActiveStructures(0.05),
+        )
+
+        assertEquals(ReactorWorldRuntimeRejection.QUEUE_FULL, rejected.reason)
+        assertEquals(0, runtime.commandOutbox.size)
+    }
+
+    @Test
     fun `world runtime does not execute commands when report inbox has no capacity`() {
         val bridge = FakeNativeReactorBridge()
         val runtime = testRuntime(
@@ -203,10 +279,12 @@ class ReactorWorldRuntimeTest {
         commandOutbox: ReactorCommandOutbox = ReactorCommandOutbox(),
         reportInbox: ReactorReportInbox = ReactorReportInbox(),
         nativeBridge: NativeReactorBridge = FakeNativeReactorBridge(),
+        catalogBridge: NativeCatalogBridge = FakeNativeCatalogBridge(),
     ): ReactorWorldRuntime =
         ReactorWorldRuntime(
             structures = ReactorStructureStore(nativeBridge),
             blobStorage = NativeBlobStorage(Files.createTempDirectory("ct-reactor-world-runtime-test")),
+            catalogBridge = catalogBridge,
             commandOutbox = commandOutbox,
             reportInbox = reportInbox,
         )
@@ -228,8 +306,10 @@ class ReactorWorldRuntimeTest {
             ),
         )
 
-    private fun testDefinition(): ReactorMultiblockDefinition {
-        val structureId = ReactorStructureId(UUID.fromString("50352d37-1e3d-45c1-beb4-885f5bd83ba1"))
+    private fun testDefinition(
+        structureUuid: String = "50352d37-1e3d-45c1-beb4-885f5bd83ba1",
+    ): ReactorMultiblockDefinition {
+        val structureId = ReactorStructureId(UUID.fromString(structureUuid))
         val chamber = ReactorBlockPosition(0, 0, 0)
         val itemInput = ReactorBlockPosition(1, 0, 0)
         return ReactorMultiblockDefinition(
@@ -316,6 +396,15 @@ class ReactorWorldRuntimeTest {
             itemCount: Int,
         ): Double =
             itemCount.toDouble()
+    }
+
+    private class FakeNativeCatalogBridge : NativeCatalogBridge {
+        override fun exportCatalogCheckpoint(contentVersion: Long): ByteArray =
+            nativeBlobBytes(
+                kind = NativeBlobKind.DynamicCatalogCheckpoint,
+                contentVersion = contentVersion,
+                modelVersion = "test-catalog",
+            )
     }
 
     private companion object {
