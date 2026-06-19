@@ -78,7 +78,7 @@ object ReactorMultiblockNativeBridge : NativeReactorBridge {
         itemInputPort: ReactorPortDescriptor,
         itemId: String,
         itemCount: Int,
-    ): Double {
+    ): Int {
         val nativeInputIndex = binding.itemInputs
             .singleOrNull { it.port == itemInputPort }
             ?.nativePortIndex
@@ -88,6 +88,26 @@ object ReactorMultiblockNativeBridge : NativeReactorBridge {
             inputIndex = nativeInputIndex,
             itemId = itemId,
             itemCount = itemCount,
+        )
+    }
+
+    override fun extractItemStack(
+        binding: NativeReactorMultiblockBinding,
+        itemOutputPort: ReactorPortDescriptor,
+        itemId: String,
+        maxItemCount: Int,
+        dtSeconds: Double,
+    ): Int {
+        val nativeOutputIndex = binding.itemOutputs
+            .singleOrNull { it.port == itemOutputPort }
+            ?.nativePortIndex
+            ?: throw IllegalArgumentException("port ${itemOutputPort.position} is not an item output of this reactor")
+        return ThermodynamicsNative.extractItemStackFromReactorOutput(
+            reactorId = binding.nativeReactorId,
+            outputIndex = nativeOutputIndex,
+            itemId = itemId,
+            maxItemCount = maxItemCount,
+            dtSeconds = dtSeconds,
         )
     }
 

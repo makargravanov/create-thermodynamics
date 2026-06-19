@@ -192,7 +192,7 @@ pub fn insert_item_stack_to_reactor_input(
     input_index: usize,
     item_id: &str,
     item_count: u32,
-) -> ChemistryResult<f64> {
+) -> ChemistryResult<u32> {
     with_minecraft_chemistry_state_mut(|state| {
         let report = state.reactors_worker.insert_item_stack_to_input(
             &state.chemistry_registry,
@@ -202,7 +202,32 @@ pub fn insert_item_stack_to_reactor_input(
             item_id,
             item_count,
         )?;
-        Ok(report.mol_inserted)
+        Ok(report.items_consumed)
+    })
+}
+
+pub fn extract_item_stack_from_reactor_output(
+    reactor_id: ReactorInstanceId,
+    output_index: usize,
+    item_id: &str,
+    max_item_count: u32,
+    dt_seconds: f64,
+) -> ChemistryResult<u32> {
+    with_minecraft_chemistry_state_mut(|state| {
+        state.reactors_worker.drain_output_to_buffer(
+            &state.chemistry_registry,
+            reactor_id,
+            output_index,
+            dt_seconds,
+        )?;
+        let report = state.reactors_worker.take_output_items(
+            &state.item_bindings,
+            reactor_id,
+            output_index,
+            item_id,
+            max_item_count,
+        )?;
+        Ok(report.items_extracted)
     })
 }
 

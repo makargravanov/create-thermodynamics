@@ -17,6 +17,49 @@ data class ReactorCatalogRuntimeState(
         get() = checkpoint?.contentVersion ?: 0L
 }
 
+data class ReactorPortOutputTransfer(
+    val portPosition: ReactorBlockPosition,
+    val itemId: String,
+    val maxItemCount: Int,
+    val dtSeconds: Double,
+) {
+    init {
+        require(itemId.isNotBlank()) { "output transfer item id must not be blank" }
+        require(maxItemCount > 0) { "output transfer max item count must be positive" }
+        require(dtSeconds.isFinite() && dtSeconds > 0.0) {
+            "output transfer duration must be positive and finite"
+        }
+    }
+}
+
+data class ReactorPortInputTransfer(
+    val portPosition: ReactorBlockPosition,
+    val itemId: String,
+    val itemCount: Int,
+) {
+    init {
+        require(itemId.isNotBlank()) { "input transfer item id must not be blank" }
+        require(itemCount > 0) { "input transfer item count must be positive" }
+    }
+}
+
+data class ReactorPortTransferCycle(
+    val structureId: ReactorStructureId,
+    val outputs: List<ReactorPortOutputTransfer>,
+    val inputs: List<ReactorPortInputTransfer>,
+) {
+    init {
+        require(outputs.isNotEmpty() || inputs.isNotEmpty()) {
+            "reactor port transfer cycle must contain at least one transfer"
+        }
+    }
+}
+
+data class ReactorAppliedReport(
+    val report: ReactorReport,
+    val structureResult: ReactorOperationResult,
+)
+
 enum class ReactorWorldRuntimeRejection {
     STRUCTURE_NOT_FOUND,
     STRUCTURE_NOT_ACTIVE,
@@ -39,7 +82,7 @@ sealed interface ReactorWorldRuntimeResult {
     ) : ReactorWorldRuntimeResult
 
     data class ReportsApplied(
-        val results: List<ReactorOperationResult>,
+        val reports: List<ReactorAppliedReport>,
     ) : ReactorWorldRuntimeResult
 
     data class CommandsSubmitted(
@@ -55,6 +98,15 @@ sealed interface ReactorWorldRuntimeResult {
         val commandCount: Int,
         val queueSize: Int,
     ) : ReactorWorldRuntimeResult
+
+    data class PortTransferCycleQueued(
+        val outputCommandIds: List<ReactorCommandId>,
+        val inputCommandIds: List<ReactorCommandId>,
+        val queueSize: Int,
+    ) : ReactorWorldRuntimeResult {
+        val commandCount: Int
+            get() = outputCommandIds.size + inputCommandIds.size
+    }
 
     data class Rejected(
         val reason: ReactorWorldRuntimeRejection,
@@ -272,7 +324,85 @@ class ReactorWorldRuntime(
         )
     }
 
-    fun queueInsertItem(
+    fun queuePortTransferCycle(cycle: ReactorPortTransferCycle): ReactorWorldRuntimeResult {
+        val commandCount = cycle.outputs.size + cycle.inputs.size
+        if (commandCount > commandOutbox.remainingCapacity) {
+            return rejected(
+                ReactorWorldRuntimeRejection.QUEUE_FULL,
+                "reactor command queue cannot accept $commandCount port transfer commands; remaining capacity is ${commandOutbox.remainingCapacity}",
+            )
+        }
+        val record = structures.record(cycle.structureId)
+            ?: return rejected(
+                ReactorWorldRuntimeRejection.STRUCTURE_NOT_FOUND,
+                "reactor structure ${cycle.structureId.value} is not registered",
+            )
+        if (record.state != ReactorStructureState.ACTIVE) {
+            return rejected(
+                ReactorWorldRuntimeRejection.STRUCTURE_NOT_ACTIVE,
+                "reactor structure ${cycle.structureId.value} is ${record.state}, expected ${ReactorStructureState.ACTIVE}",
+            )
+        }
+        for (output in cycle.outputs) {
+            val portValidation = structures.validateItemOutputPort(cycle.structureId, output.portPosition)
+            if (portValidation != null) {
+                return rejected(
+                    ReactorWorldRuntimeRejection.INVALID_PORT_OPERATION,
+                    portValidation.message,
+                )
+            }
+        }
+        for (input in cycle.inputs) {
+            val portValidation = structures.validateItemInputPort(cycle.structureId, input.portPosition)
+            if (portValidation != null) {
+                return rejected(
+                    ReactorWorldRuntimeRejection.INVALID_PORT_OPERATION,
+                    portValidation.message,
+                )
+            }
+        }
+
+        val outputCommands = cycle.outputs.map { output ->
+            ReactorCommand.ExtractItem(
+                commandId = nextCommandId(),
+                structureId = cycle.structureId,
+                expectedSnapshotVersion = record.snapshotVersion,
+                portPosition = output.portPosition,
+                itemId = output.itemId,
+                maxItemCount = output.maxItemCount,
+                dtSeconds = output.dtSeconds,
+            )
+        }
+        val inputCommands = cycle.inputs.map { input ->
+            ReactorCommand.InsertItem(
+                commandId = nextCommandId(),
+                structureId = cycle.structureId,
+                expectedSnapshotVersion = record.snapshotVersion,
+                portPosition = input.portPosition,
+                itemId = input.itemId,
+                itemCount = input.itemCount,
+            )
+        }
+        var queueSize = commandOutbox.size
+        for (command in outputCommands + inputCommands) {
+            when (val result = commandOutbox.enqueue(command)) {
+                is ReactorCommandOutboxResult.Enqueued -> queueSize = result.size
+                is ReactorCommandOutboxResult.Rejected -> {
+                    return rejected(
+                        ReactorWorldRuntimeRejection.QUEUE_FULL,
+                        result.message,
+                    )
+                }
+            }
+        }
+        return ReactorWorldRuntimeResult.PortTransferCycleQueued(
+            outputCommandIds = outputCommands.map { it.commandId },
+            inputCommandIds = inputCommands.map { it.commandId },
+            queueSize = queueSize,
+        )
+    }
+
+    internal fun queueInsertItem(
         structureId: ReactorStructureId,
         portPosition: ReactorBlockPosition,
         itemId: String,
@@ -290,6 +420,12 @@ class ReactorWorldRuntime(
                 "reactor item count must be positive",
             )
         }
+        if (commandOutbox.remainingCapacity <= 0) {
+            return rejected(
+                ReactorWorldRuntimeRejection.QUEUE_FULL,
+                "reactor command queue cannot accept item input command; remaining capacity is 0",
+            )
+        }
         val record = structures.record(structureId)
             ?: return rejected(
                 ReactorWorldRuntimeRejection.STRUCTURE_NOT_FOUND,
@@ -301,6 +437,13 @@ class ReactorWorldRuntime(
                 "reactor structure ${structureId.value} is ${record.state}, expected ${ReactorStructureState.ACTIVE}",
             )
         }
+        val portValidation = structures.validateItemInputPort(structureId, portPosition)
+        if (portValidation != null) {
+            return rejected(
+                ReactorWorldRuntimeRejection.INVALID_PORT_OPERATION,
+                portValidation.message,
+            )
+        }
         return enqueueCommand(
             ReactorCommand.InsertItem(
                 commandId = nextCommandId(),
@@ -309,6 +452,68 @@ class ReactorWorldRuntime(
                 portPosition = portPosition,
                 itemId = itemId,
                 itemCount = itemCount,
+            ),
+        )
+    }
+
+    internal fun queueExtractItem(
+        structureId: ReactorStructureId,
+        portPosition: ReactorBlockPosition,
+        itemId: String,
+        maxItemCount: Int,
+        dtSeconds: Double,
+    ): ReactorWorldRuntimeResult {
+        if (itemId.isBlank()) {
+            return rejected(
+                ReactorWorldRuntimeRejection.INVALID_COMMAND,
+                "reactor item id must not be blank",
+            )
+        }
+        if (maxItemCount <= 0) {
+            return rejected(
+                ReactorWorldRuntimeRejection.INVALID_COMMAND,
+                "reactor max item count must be positive",
+            )
+        }
+        if (!dtSeconds.isFinite() || dtSeconds <= 0.0) {
+            return rejected(
+                ReactorWorldRuntimeRejection.INVALID_COMMAND,
+                "reactor output conversion duration must be positive and finite",
+            )
+        }
+        if (commandOutbox.remainingCapacity <= 0) {
+            return rejected(
+                ReactorWorldRuntimeRejection.QUEUE_FULL,
+                "reactor command queue cannot accept item output command; remaining capacity is 0",
+            )
+        }
+        val record = structures.record(structureId)
+            ?: return rejected(
+                ReactorWorldRuntimeRejection.STRUCTURE_NOT_FOUND,
+                "reactor structure ${structureId.value} is not registered",
+            )
+        if (record.state != ReactorStructureState.ACTIVE) {
+            return rejected(
+                ReactorWorldRuntimeRejection.STRUCTURE_NOT_ACTIVE,
+                "reactor structure ${structureId.value} is ${record.state}, expected ${ReactorStructureState.ACTIVE}",
+            )
+        }
+        val portValidation = structures.validateItemOutputPort(structureId, portPosition)
+        if (portValidation != null) {
+            return rejected(
+                ReactorWorldRuntimeRejection.INVALID_PORT_OPERATION,
+                portValidation.message,
+            )
+        }
+        return enqueueCommand(
+            ReactorCommand.ExtractItem(
+                commandId = nextCommandId(),
+                structureId = structureId,
+                expectedSnapshotVersion = record.snapshotVersion,
+                portPosition = portPosition,
+                itemId = itemId,
+                maxItemCount = maxItemCount,
+                dtSeconds = dtSeconds,
             ),
         )
     }
@@ -350,7 +555,12 @@ class ReactorWorldRuntime(
     fun applyReadyReports(maxReports: Int): ReactorWorldRuntimeResult {
         val reports = reportInbox.drain(maxReports)
         return ReactorWorldRuntimeResult.ReportsApplied(
-            reports.map { structures.applyReport(it) },
+            reports.map { report ->
+                ReactorAppliedReport(
+                    report = report,
+                    structureResult = structures.applyReport(report),
+                )
+            },
         )
     }
 

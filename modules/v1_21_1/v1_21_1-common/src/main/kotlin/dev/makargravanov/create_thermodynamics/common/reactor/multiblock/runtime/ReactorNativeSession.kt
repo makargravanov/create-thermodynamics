@@ -42,6 +42,7 @@ class ReactorNativeSession(
             is ReactorCommand.RemoveReactor -> remove(command, current)
             is ReactorCommand.Tick -> tick(command, current, batchVersions)
             is ReactorCommand.InsertItem -> insertItem(command, current, batchVersions)
+            is ReactorCommand.ExtractItem -> extractItem(command, current, batchVersions)
             is ReactorCommand.RequestSnapshot -> exportSnapshot(command, current, batchVersions)
             is ReactorCommand.RequestMetrics -> accepted(command, current)
         }
@@ -147,10 +148,46 @@ class ReactorNativeSession(
                     snapshotVersion = next,
                     portPosition = command.portPosition,
                     itemId = command.itemId,
-                    acceptedCount = command.itemCount,
+                    acceptedCount = result.itemCount,
                 )
             }
             else -> ReactorReport.PortInputRejected(
+                reportId = nextReportId(),
+                commandId = command.commandId,
+                structureId = command.structureId,
+                snapshotVersion = current,
+                portPosition = command.portPosition,
+                reason = result.message(),
+            )
+        }
+    }
+
+    private fun extractItem(
+        command: ReactorCommand.ExtractItem,
+        current: ReactorSnapshotVersion,
+        batchVersions: MutableMap<ReactorStructureId, ReactorSnapshotVersion>,
+    ): ReactorReport {
+        val next = current.next()
+        return when (val result = structures.extractItem(
+            structureId = command.structureId,
+            portPosition = command.portPosition,
+            itemId = command.itemId,
+            maxItemCount = command.maxItemCount,
+            dtSeconds = command.dtSeconds,
+        )) {
+            is ReactorOperationResult.ItemExtracted -> {
+                batchVersions[command.structureId] = next
+                ReactorReport.PortOutputAccepted(
+                    reportId = nextReportId(),
+                    commandId = command.commandId,
+                    structureId = command.structureId,
+                    snapshotVersion = next,
+                    portPosition = command.portPosition,
+                    itemId = result.itemId,
+                    extractedCount = result.itemCount,
+                )
+            }
+            else -> ReactorReport.PortOutputRejected(
                 reportId = nextReportId(),
                 commandId = command.commandId,
                 structureId = command.structureId,
@@ -221,8 +258,8 @@ class ReactorNativeSession(
     private fun ReactorOperationResult.message(): String =
         when (this) {
             ReactorOperationResult.Completed -> "operation completed"
-            is ReactorOperationResult.ItemInserted -> "inserted $molInserted mol"
-            is ReactorOperationResult.ItemBuffered -> message
+            is ReactorOperationResult.ItemInserted -> "inserted $itemCount items"
+            is ReactorOperationResult.ItemExtracted -> "extracted $itemCount of $itemId"
             is ReactorOperationResult.ReactorSuspended -> message
             is ReactorOperationResult.ReactorResumed -> message
             is ReactorOperationResult.ReactorCheckpointExported -> "reactor checkpoint exported to ${checkpoint.storageKey}"

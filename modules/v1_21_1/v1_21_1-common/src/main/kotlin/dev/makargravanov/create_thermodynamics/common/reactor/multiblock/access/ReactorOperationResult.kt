@@ -10,7 +10,6 @@ enum class ReactorOperationRejection {
     WRONG_PORT_KIND,
     INVALID_ITEM_ID,
     INVALID_ITEM_COUNT,
-    ITEM_BUFFER_FULL,
     INVALID_CONTENT_VERSION,
     STALE_REPORT,
     SNAPSHOT_STORAGE_REJECTED,
@@ -21,14 +20,22 @@ sealed interface ReactorOperationResult {
     data object Completed : ReactorOperationResult
 
     data class ItemInserted(
-        val molInserted: Double,
-    ) : ReactorOperationResult
+        val itemCount: Int,
+    ) : ReactorOperationResult {
+        init {
+            require(itemCount > 0) { "inserted item count must be positive" }
+        }
+    }
 
-    data class ItemBuffered(
+    data class ItemExtracted(
         val itemId: String,
         val itemCount: Int,
-        val message: String,
-    ) : ReactorOperationResult
+    ) : ReactorOperationResult {
+        init {
+            require(itemId.isNotBlank()) { "extracted item id must not be blank" }
+            require(itemCount >= 0) { "extracted item count must be non-negative" }
+        }
+    }
 
     data class ReactorSuspended(
         val message: String,

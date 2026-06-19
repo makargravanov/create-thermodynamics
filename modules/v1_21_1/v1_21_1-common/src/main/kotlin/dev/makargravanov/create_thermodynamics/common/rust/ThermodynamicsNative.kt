@@ -71,8 +71,23 @@ object ThermodynamicsNative {
         inputIndex: Int,
         itemId: String,
         itemCount: Int,
-    ): Double =
+    ): Int =
         nativeInsertItemStackToReactorInput(reactorId.value, inputIndex, itemId, itemCount)
+
+    fun extractItemStackFromReactorOutput(
+        reactorId: NativeReactorId,
+        outputIndex: Int,
+        itemId: String,
+        maxItemCount: Int,
+        dtSeconds: Double,
+    ): Int =
+        nativeExtractItemStackFromReactorOutput(
+            reactorId.value,
+            outputIndex,
+            itemId,
+            maxItemCount,
+            dtSeconds,
+        )
 
     fun exportCatalogCheckpoint(contentVersion: Long): ByteArray =
         nativeExportCatalogCheckpoint(contentVersion)
@@ -139,7 +154,16 @@ object ThermodynamicsNative {
         inputIndex: Int,
         itemId: String,
         itemCount: Int,
-    ): Double
+    ): Int
+
+    @JvmStatic
+    private external fun nativeExtractItemStackFromReactorOutput(
+        reactorId: Long,
+        outputIndex: Int,
+        itemId: String,
+        maxItemCount: Int,
+        dtSeconds: Double,
+    ): Int
 
     @JvmStatic
     private external fun nativeExportCatalogCheckpoint(contentVersion: Long): ByteArray

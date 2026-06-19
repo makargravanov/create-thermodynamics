@@ -8,11 +8,13 @@ import dev.makargravanov.create_thermodynamics.neoforge.registry.CreateThermodyn
 import net.minecraft.core.BlockPos
 import net.minecraft.core.HolderLookup
 import net.minecraft.core.NonNullList
+import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.nbt.CompoundTag
 import net.minecraft.network.chat.Component
 import net.minecraft.network.protocol.Packet
 import net.minecraft.network.protocol.game.ClientGamePacketListener
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket
+import net.minecraft.resources.ResourceLocation
 import net.minecraft.world.Container
 import net.minecraft.world.ContainerHelper
 import net.minecraft.world.entity.player.Inventory
@@ -22,6 +24,7 @@ import net.minecraft.world.inventory.ChestMenu
 import net.minecraft.world.inventory.ContainerData
 import net.minecraft.world.inventory.MenuType
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.Items
 import net.minecraft.world.level.block.entity.BlockEntity
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.block.Block
@@ -165,6 +168,134 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         setChanged()
     }
 
+    fun firstPortInputStack(): PortItemStack? {
+        check(reactorKind() == ReactorMultiblockKind.ITEM_INPUT_PORT) {
+            "reactor block entity at $blockPos is not an item input port"
+        }
+        for (slot in items.indices) {
+            val stack = items[slot]
+            if (!stack.isEmpty) {
+                return PortItemStack(
+                    slot = slot,
+                    itemId = BuiltInRegistries.ITEM.getKey(stack.item).toString(),
+                    count = stack.count,
+                )
+            }
+        }
+        return null
+    }
+
+    fun removeConfirmedPortInput(itemId: String, count: Int): Int {
+        check(reactorKind() == ReactorMultiblockKind.ITEM_INPUT_PORT) {
+            "reactor block entity at $blockPos is not an item input port"
+        }
+        require(itemId.isNotBlank()) { "itemId must not be blank" }
+        require(count >= 0) { "count must be non-negative" }
+        if (count == 0) {
+            return 0
+        }
+        val available = items
+            .asSequence()
+            .filter { !it.isEmpty && BuiltInRegistries.ITEM.getKey(it.item).toString() == itemId }
+            .sumOf { it.count }
+        check(available >= count) {
+            "reactor input port at $blockPos cannot remove $count of $itemId after native acceptance; only $available remain"
+        }
+        var remaining = count
+        var removed = 0
+        for (slot in items.indices) {
+            if (remaining == 0) {
+                break
+            }
+            val stack = items[slot]
+            if (stack.isEmpty || BuiltInRegistries.ITEM.getKey(stack.item).toString() != itemId) {
+                continue
+            }
+            val taken = minOf(stack.count, remaining)
+            stack.shrink(taken)
+            if (stack.isEmpty) {
+                items[slot] = ItemStack.EMPTY
+            }
+            remaining -= taken
+            removed += taken
+        }
+        if (removed > 0) {
+            setChanged()
+        }
+        return removed
+    }
+
+    fun insertablePortOutputCount(itemId: String, maxCount: Int): Int {
+        check(reactorKind() == ReactorMultiblockKind.ITEM_OUTPUT_PORT) {
+            "reactor block entity at $blockPos is not an item output port"
+        }
+        require(maxCount >= 0) { "maxCount must be non-negative" }
+        if (maxCount == 0) {
+            return 0
+        }
+        val template = stackForItemId(itemId)
+        var remaining = maxCount
+        for (stack in items) {
+            if (remaining == 0) {
+                break
+            }
+            if (stack.isEmpty) {
+                remaining -= minOf(template.maxStackSize, remaining)
+            } else if (ItemStack.isSameItemSameComponents(stack, template)) {
+                remaining -= minOf(stack.maxStackSize - stack.count, remaining)
+            }
+        }
+        return maxCount - remaining
+    }
+
+    fun insertConfirmedPortOutput(itemId: String, count: Int): Int {
+        check(reactorKind() == ReactorMultiblockKind.ITEM_OUTPUT_PORT) {
+            "reactor block entity at $blockPos is not an item output port"
+        }
+        require(count >= 0) { "count must be non-negative" }
+        if (count == 0) {
+            return 0
+        }
+        val template = stackForItemId(itemId)
+        val insertable = insertablePortOutputCount(itemId, count)
+        check(insertable >= count) {
+            "reactor output port at $blockPos cannot accept confirmed output $count of $itemId; only $insertable items fit"
+        }
+        var remaining = count
+        var inserted = 0
+        for (slot in items.indices) {
+            if (remaining == 0) {
+                break
+            }
+            val stack = items[slot]
+            if (!stack.isEmpty && ItemStack.isSameItemSameComponents(stack, template)) {
+                val added = minOf(stack.maxStackSize - stack.count, remaining)
+                if (added > 0) {
+                    stack.grow(added)
+                    remaining -= added
+                    inserted += added
+                }
+            }
+        }
+        for (slot in items.indices) {
+            if (remaining == 0) {
+                break
+            }
+            if (items[slot].isEmpty) {
+                val added = minOf(template.maxStackSize, remaining)
+                val insertedStack = template.copy()
+                insertedStack.count = added
+                items[slot] = insertedStack
+                remaining -= added
+                inserted += added
+            }
+        }
+        if (inserted > 0) {
+            setChanged()
+        }
+        return inserted
+    }
+
     override fun getDisplayName(): Component =
         if (reactorKind() == ReactorMultiblockKind.CONTROLLER) {
             Component.translatable("container.create_thermodynamics.reactor_controller")
@@ -179,7 +310,7 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
             ReactorMultiblockKind.ITEM_OUTPUT_PORT,
             ReactorMultiblockKind.FLUID_INPUT_PORT,
             ReactorMultiblockKind.FLUID_OUTPUT_PORT,
-            -> ChestMenu(MenuType.GENERIC_9x1, containerId, playerInventory, this, 1)
+            -> ChestMenu(MenuType.GENERIC_9x3, containerId, playerInventory, this, 3)
 
             ReactorMultiblockKind.CHAMBER,
             null,
@@ -220,8 +351,15 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
     private fun reactorKind(): ReactorMultiblockKind? =
         (blockState.block as? ReactorMultiblockBlock)?.kind
 
+    private fun stackForItemId(itemId: String): ItemStack {
+        require(itemId.isNotBlank()) { "itemId must not be blank" }
+        val item = BuiltInRegistries.ITEM.get(ResourceLocation.parse(itemId))
+        require(item != Items.AIR) { "unknown item id $itemId" }
+        return ItemStack(item)
+    }
+
     companion object {
-        private const val CONTAINER_SIZE = 9
+        private const val CONTAINER_SIZE = 27
         private const val STRUCTURE_ID_TAG = "structure_id"
         private const val ACTIVE_VOLUME_TAG = "active_volume"
         private const val ZONE_COUNT_TAG = "zone_count"
@@ -234,5 +372,17 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         private const val CONTROLLER_CHAMBER_BLOCK_COUNT_DATA_SLOT = 2
         private const val CONTROLLER_PORT_COUNT_DATA_SLOT = 3
         private const val CONTROLLER_DATA_SLOT_COUNT = 4
+    }
+}
+
+data class PortItemStack(
+    val slot: Int,
+    val itemId: String,
+    val count: Int,
+) {
+    init {
+        require(slot >= 0) { "slot must be non-negative" }
+        require(itemId.isNotBlank()) { "itemId must not be blank" }
+        require(count > 0) { "count must be positive" }
     }
 }

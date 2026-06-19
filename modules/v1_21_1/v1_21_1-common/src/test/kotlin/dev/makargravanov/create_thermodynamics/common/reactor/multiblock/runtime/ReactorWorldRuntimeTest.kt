@@ -57,7 +57,7 @@ class ReactorWorldRuntimeTest {
         runtime.receiveReport(tickReport(2, definition.structureId, snapshotVersion = 3))
 
         val applied = assertIs<ReactorWorldRuntimeResult.ReportsApplied>(runtime.applyReadyReports(8))
-        val rejected = assertIs<ReactorOperationResult.Rejected>(applied.results.single())
+        val rejected = assertIs<ReactorOperationResult.Rejected>(applied.reports.single().structureResult)
 
         assertEquals(ReactorOperationRejection.STALE_REPORT, rejected.reason)
         assertEquals(ReactorSnapshotVersion(4), runtime.structures.record(definition.structureId)?.snapshotVersion)
@@ -81,7 +81,7 @@ class ReactorWorldRuntimeTest {
 
         val applied = assertIs<ReactorWorldRuntimeResult.ReportsApplied>(runtime.applyReadyReports(8))
 
-        assertEquals(listOf(ReactorOperationResult.Completed), applied.results)
+        assertEquals(listOf(ReactorOperationResult.Completed), applied.reports.map { it.structureResult })
         val record = runtime.structures.record(definition.structureId)
         assertEquals(ReactorSnapshotVersion(9), record?.snapshotVersion)
         assertEquals(checkpoint, record?.reactorCheckpoint)
@@ -150,7 +150,7 @@ class ReactorWorldRuntimeTest {
 
         assertEquals(1, submitted.commandCount)
         assertEquals(1, submitted.reportCount)
-        assertEquals(listOf(ReactorOperationResult.Completed), applied.results)
+        assertEquals(listOf(ReactorOperationResult.Completed), applied.reports.map { it.structureResult })
         assertEquals(1, bridge.tickCount)
         assertEquals(ReactorSnapshotVersion(1), runtime.structures.record(definition.structureId)?.snapshotVersion)
     }
@@ -309,10 +309,11 @@ class ReactorWorldRuntimeTest {
         val runtime = testRuntime(nativeBridge = bridge)
         val definition = testDefinition()
         runtime.registerStructure(definition)
+        val itemInput = definition.ports.single()
         assertIs<ReactorWorldRuntimeResult.CommandQueued>(
             runtime.queueInsertItem(
                 structureId = definition.structureId,
-                portPosition = definition.ports.single().position,
+                portPosition = itemInput.position,
                 itemId = "minecraft:water_bucket",
                 itemCount = 1,
             ),
@@ -334,6 +335,129 @@ class ReactorWorldRuntimeTest {
         assertEquals(1, bridge.itemInsertCount)
         assertEquals(0, bridge.tickCount)
         assertEquals(ReactorSnapshotVersion(1), runtime.structures.record(definition.structureId)?.snapshotVersion)
+    }
+
+    @Test
+    fun `queued item input reports rejection when native insertion fails`() {
+        val bridge = FakeNativeReactorBridge()
+        bridge.failItemInsertion = true
+        val runtime = testRuntime(nativeBridge = bridge)
+        val definition = testDefinition()
+        runtime.registerStructure(definition)
+        val itemInput = definition.ports.single()
+        assertIs<ReactorWorldRuntimeResult.CommandQueued>(
+            runtime.queueInsertItem(
+                structureId = definition.structureId,
+                portPosition = itemInput.position,
+                itemId = "minecraft:water_bucket",
+                itemCount = 1,
+            ),
+        )
+
+        assertIs<ReactorWorldRuntimeResult.CommandsSubmitted>(
+            runtime.submitQueuedCommands(ReactorNativeSession(runtime.structures, runtime.blobStorage), maxCommands = 8),
+        )
+        val applied = assertIs<ReactorWorldRuntimeResult.ReportsApplied>(runtime.applyReadyReports(8))
+
+        assertEquals(listOf(ReactorOperationResult.Completed), applied.reports.map { it.structureResult })
+        assertIs<ReactorReport.PortInputRejected>(applied.reports.single().report)
+        assertEquals(ReactorSnapshotVersion(0), runtime.structures.record(definition.structureId)?.snapshotVersion)
+    }
+
+    @Test
+    fun `queued item output extracts through native session`() {
+        val bridge = FakeNativeReactorBridge()
+        val runtime = testRuntime(nativeBridge = bridge)
+        val definition = testDefinitionWithOutput()
+        runtime.registerStructure(definition)
+        val itemOutput = definition.portsOfKind(ReactorPortKind.ITEM_OUTPUT).single()
+        assertIs<ReactorWorldRuntimeResult.CommandQueued>(
+            runtime.queueExtractItem(
+                structureId = definition.structureId,
+                portPosition = itemOutput.position,
+                itemId = "minecraft:water_bucket",
+                maxItemCount = 4,
+                dtSeconds = 1.0,
+            ),
+        )
+
+        assertIs<ReactorWorldRuntimeResult.CommandsSubmitted>(
+            runtime.submitQueuedCommands(ReactorNativeSession(runtime.structures, runtime.blobStorage), maxCommands = 8),
+        )
+        val applied = assertIs<ReactorWorldRuntimeResult.ReportsApplied>(runtime.applyReadyReports(8))
+
+        assertEquals(listOf(ReactorOperationResult.Completed), applied.reports.map { it.structureResult })
+        val report = assertIs<ReactorReport.PortOutputAccepted>(applied.reports.single().report)
+        assertEquals(4, report.extractedCount)
+        assertEquals(1, bridge.itemExtractCount)
+        assertEquals(ReactorSnapshotVersion(1), runtime.structures.record(definition.structureId)?.snapshotVersion)
+    }
+
+    @Test
+    fun `port transfer cycle queues outputs before inputs`() {
+        val runtime = testRuntime()
+        val definition = testDefinitionWithOutput()
+        runtime.registerStructure(definition)
+        val itemInput = definition.portsOfKind(ReactorPortKind.ITEM_INPUT).single()
+        val itemOutput = definition.portsOfKind(ReactorPortKind.ITEM_OUTPUT).single()
+
+        val queued = assertIs<ReactorWorldRuntimeResult.PortTransferCycleQueued>(
+            runtime.queuePortTransferCycle(
+                ReactorPortTransferCycle(
+                    structureId = definition.structureId,
+                    outputs = listOf(
+                        ReactorPortOutputTransfer(
+                            portPosition = itemOutput.position,
+                            itemId = "minecraft:water_bucket",
+                            maxItemCount = 4,
+                            dtSeconds = 1.0,
+                        ),
+                    ),
+                    inputs = listOf(
+                        ReactorPortInputTransfer(
+                            portPosition = itemInput.position,
+                            itemId = "minecraft:water_bucket",
+                            itemCount = 2,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val commands = runtime.drainCommands(8)
+
+        assertEquals(2, queued.commandCount)
+        assertEquals(queued.outputCommandIds.single(), commands[0].commandId)
+        assertEquals(queued.inputCommandIds.single(), commands[1].commandId)
+        assertIs<ReactorCommand.ExtractItem>(commands[0])
+        assertIs<ReactorCommand.InsertItem>(commands[1])
+    }
+
+    @Test
+    fun `port transfer cycle rejects before partial enqueue when one port is wrong`() {
+        val runtime = testRuntime()
+        val definition = testDefinitionWithOutput()
+        runtime.registerStructure(definition)
+        val itemInput = definition.portsOfKind(ReactorPortKind.ITEM_INPUT).single()
+
+        val rejected = assertIs<ReactorWorldRuntimeResult.Rejected>(
+            runtime.queuePortTransferCycle(
+                ReactorPortTransferCycle(
+                    structureId = definition.structureId,
+                    outputs = listOf(
+                        ReactorPortOutputTransfer(
+                            portPosition = itemInput.position,
+                            itemId = "minecraft:water_bucket",
+                            maxItemCount = 4,
+                            dtSeconds = 1.0,
+                        ),
+                    ),
+                    inputs = emptyList(),
+                ),
+            ),
+        )
+
+        assertEquals(ReactorWorldRuntimeRejection.INVALID_PORT_OPERATION, rejected.reason)
+        assertEquals(0, runtime.commandOutbox.size)
     }
 
     @Test
@@ -423,6 +547,44 @@ class ReactorWorldRuntimeTest {
         )
     }
 
+    private fun testDefinitionWithOutput(
+        structureUuid: String = "50352d37-1e3d-45c1-beb4-885f5bd83ba1",
+    ): ReactorMultiblockDefinition {
+        val structureId = ReactorStructureId(UUID.fromString(structureUuid))
+        val chamber = ReactorBlockPosition(0, 0, 0)
+        val itemInput = ReactorBlockPosition(1, 0, 0)
+        val itemOutput = ReactorBlockPosition(2, 0, 0)
+        return ReactorMultiblockDefinition(
+            structureId = structureId,
+            controllerPosition = ReactorBlockPosition(-1, 0, 0),
+            controllerContactDirection = ReactorBlockDirection.EAST,
+            zone = ReactorZoneDescriptor(
+                zoneIndex = 0,
+                volumePositions = setOf(chamber),
+                plainChamberPositions = setOf(chamber),
+                volumeCubicMeters = 1.0,
+            ),
+            ports = listOf(
+                ReactorPortDescriptor(
+                    portIndex = 0,
+                    kind = ReactorPortKind.ITEM_INPUT,
+                    position = itemInput,
+                    zoneIndex = 0,
+                    attachedChamberPosition = chamber,
+                    contactDirection = ReactorBlockDirection.WEST,
+                ),
+                ReactorPortDescriptor(
+                    portIndex = 1,
+                    kind = ReactorPortKind.ITEM_OUTPUT,
+                    position = itemOutput,
+                    zoneIndex = 0,
+                    attachedChamberPosition = chamber,
+                    contactDirection = ReactorBlockDirection.WEST,
+                ),
+            ),
+        )
+    }
+
     private fun blobRef(
         kind: NativeBlobKind,
         contentVersion: Long,
@@ -447,6 +609,11 @@ class ReactorWorldRuntimeTest {
         var itemInsertCount: Int = 0
             private set
 
+        var itemExtractCount: Int = 0
+            private set
+
+        var failItemInsertion: Boolean = false
+
         override fun createNativeReactor(definition: ReactorMultiblockDefinition): NativeReactorMultiblockBinding =
             NativeReactorMultiblockBinding(
                 structureId = definition.structureId,
@@ -454,7 +621,9 @@ class ReactorWorldRuntimeTest {
                 itemInputs = definition.portsOfKind(ReactorPortKind.ITEM_INPUT).mapIndexed { index, port ->
                     NativeReactorPortBinding(port, index)
                 },
-                itemOutputs = emptyList(),
+                itemOutputs = definition.portsOfKind(ReactorPortKind.ITEM_OUTPUT).mapIndexed { index, port ->
+                    NativeReactorPortBinding(port, index)
+                },
                 fluidInputs = emptyList(),
                 fluidOutputs = emptyList(),
             )
@@ -485,9 +654,23 @@ class ReactorWorldRuntimeTest {
             itemInputPort: ReactorPortDescriptor,
             itemId: String,
             itemCount: Int,
-        ): Double {
+        ): Int {
+            if (failItemInsertion) {
+                throw IllegalStateException("configured item insertion failure")
+            }
             itemInsertCount += 1
-            return itemCount.toDouble()
+            return itemCount
+        }
+
+        override fun extractItemStack(
+            binding: NativeReactorMultiblockBinding,
+            itemOutputPort: ReactorPortDescriptor,
+            itemId: String,
+            maxItemCount: Int,
+            dtSeconds: Double,
+        ): Int {
+            itemExtractCount += 1
+            return maxItemCount
         }
     }
 

@@ -65,6 +65,24 @@ sealed interface ReactorCommand {
         }
     }
 
+    data class ExtractItem(
+        override val commandId: ReactorCommandId,
+        override val structureId: ReactorStructureId,
+        override val expectedSnapshotVersion: ReactorSnapshotVersion,
+        val portPosition: ReactorBlockPosition,
+        val itemId: String,
+        val maxItemCount: Int,
+        val dtSeconds: Double,
+    ) : ReactorCommand {
+        init {
+            require(itemId.isNotBlank()) { "reactor item id must not be blank" }
+            require(maxItemCount > 0) { "reactor max item count must be positive" }
+            require(dtSeconds.isFinite() && dtSeconds > 0.0) {
+                "reactor output conversion duration must be positive and finite"
+            }
+        }
+    }
+
     data class RequestSnapshot(
         override val commandId: ReactorCommandId,
         override val structureId: ReactorStructureId,

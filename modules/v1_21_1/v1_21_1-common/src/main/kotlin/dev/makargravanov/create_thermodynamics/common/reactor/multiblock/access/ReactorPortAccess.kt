@@ -16,6 +16,7 @@ interface ReactorPortAccess {
         portPosition: ReactorBlockPosition,
         itemId: String,
         maxItemCount: Int,
+        dtSeconds: Double,
     ): ReactorOperationResult
 
     fun insertFluid(

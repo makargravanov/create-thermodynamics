@@ -149,13 +149,12 @@ class ReactorStructureStoreTest {
             itemCount = 2,
         )
 
-        assertEquals(ReactorOperationResult.ItemInserted(2.0), result)
+        assertEquals(ReactorOperationResult.ItemInserted(2), result)
         assertEquals(listOf(itemInput.position), nativeBridge.itemInsertPorts)
-        assertEquals(0, store.bufferedItemCount(definition.structureId, itemInput.position, "minecraft:water_bucket"))
     }
 
     @Test
-    fun `keeps accepted item in input buffer when native insertion fails`() {
+    fun `native insertion failure is reported without hidden item buffering`() {
         val nativeBridge = FakeNativeReactorBridge()
         nativeBridge.failItemInsertion = true
         val store = ReactorStructureStore(nativeBridge)
@@ -170,10 +169,7 @@ class ReactorStructureStoreTest {
             itemCount = 2,
         )
 
-        val buffered = assertIs<ReactorOperationResult.ItemBuffered>(result)
-        assertEquals("minecraft:water_bucket", buffered.itemId)
-        assertEquals(2, buffered.itemCount)
-        assertEquals(2, store.bufferedItemCount(definition.structureId, itemInput.position, "minecraft:water_bucket"))
+        assertIs<ReactorOperationResult.Failed>(result)
     }
 
     @Test
@@ -194,7 +190,6 @@ class ReactorStructureStoreTest {
         val rejected = assertIs<ReactorOperationResult.Rejected>(result)
         assertEquals(ReactorOperationRejection.INVALID_ITEM_COUNT, rejected.reason)
         assertEquals(0, nativeBridge.itemInsertPorts.size)
-        assertEquals(0, store.bufferedItemCount(definition.structureId, itemInput.position, "minecraft:water_bucket"))
     }
 
     @Test
@@ -214,26 +209,6 @@ class ReactorStructureStoreTest {
 
         val rejected = assertIs<ReactorOperationResult.Rejected>(result)
         assertEquals(ReactorOperationRejection.INVALID_ITEM_ID, rejected.reason)
-        assertEquals(0, nativeBridge.itemInsertPorts.size)
-    }
-
-    @Test
-    fun `rejects item stack that does not fit input buffer`() {
-        val nativeBridge = FakeNativeReactorBridge()
-        val store = ReactorStructureStore(nativeBridge)
-        val definition = testDefinition()
-        store.register(definition)
-        val itemInput = definition.portsOfKind(ReactorPortKind.ITEM_INPUT).single()
-
-        val result = store.insertItem(
-            structureId = definition.structureId,
-            portPosition = itemInput.position,
-            itemId = "minecraft:water_bucket",
-            itemCount = 65,
-        )
-
-        val rejected = assertIs<ReactorOperationResult.Rejected>(result)
-        assertEquals(ReactorOperationRejection.ITEM_BUFFER_FULL, rejected.reason)
         assertEquals(0, nativeBridge.itemInsertPorts.size)
     }
 
@@ -285,10 +260,51 @@ class ReactorStructureStoreTest {
             portPosition = itemInput.position,
             itemId = "minecraft:water_bucket",
             maxItemCount = 1,
+            dtSeconds = 1.0,
         )
 
         val rejected = assertIs<ReactorOperationResult.Rejected>(result)
         assertEquals(ReactorOperationRejection.WRONG_PORT_KIND, rejected.reason)
+    }
+
+    @Test
+    fun `extracts item through item output port`() {
+        val nativeBridge = FakeNativeReactorBridge()
+        val store = ReactorStructureStore(nativeBridge)
+        val definition = testDefinition()
+        store.register(definition)
+        val itemOutput = definition.portsOfKind(ReactorPortKind.ITEM_OUTPUT).single()
+
+        val result = store.extractItem(
+            structureId = definition.structureId,
+            portPosition = itemOutput.position,
+            itemId = "minecraft:water_bucket",
+            maxItemCount = 3,
+            dtSeconds = 1.0,
+        )
+
+        assertEquals(ReactorOperationResult.ItemExtracted("minecraft:water_bucket", 3), result)
+        assertEquals(listOf(itemOutput.position), nativeBridge.itemExtractPorts)
+    }
+
+    @Test
+    fun `native extraction failure is reported without changing minecraft inventory`() {
+        val nativeBridge = FakeNativeReactorBridge()
+        nativeBridge.failItemExtraction = true
+        val store = ReactorStructureStore(nativeBridge)
+        val definition = testDefinition()
+        store.register(definition)
+        val itemOutput = definition.portsOfKind(ReactorPortKind.ITEM_OUTPUT).single()
+
+        val result = store.extractItem(
+            structureId = definition.structureId,
+            portPosition = itemOutput.position,
+            itemId = "minecraft:water_bucket",
+            maxItemCount = 3,
+            dtSeconds = 1.0,
+        )
+
+        assertIs<ReactorOperationResult.Failed>(result)
     }
 
     @Test
@@ -329,7 +345,7 @@ class ReactorStructureStoreTest {
     }
 
     @Test
-    fun `native item insertion is still available through structure store`() {
+    fun `native item insertion is available through structure store`() {
         ThermodynamicsNative.configureItemChemicalBindings(
             listOf(
                 ItemChemicalBinding(
@@ -352,7 +368,7 @@ class ReactorStructureStoreTest {
                 itemCount = 2,
             )
 
-            assertEquals(ReactorOperationResult.ItemInserted(2.0), result)
+            assertEquals(ReactorOperationResult.ItemInserted(2), result)
         } finally {
             store.remove(definition.structureId)
         }
@@ -389,9 +405,11 @@ class ReactorStructureStoreTest {
         val removed = mutableListOf<ReactorStructureId>()
         val ticked = mutableListOf<ReactorStructureId>()
         val itemInsertPorts = mutableListOf<ReactorBlockPosition>()
+        val itemExtractPorts = mutableListOf<ReactorBlockPosition>()
         val exportedCheckpoints = mutableListOf<ReactorStructureId>()
         val restoredCheckpoints = mutableListOf<ReactorStructureId>()
         var failItemInsertion = false
+        var failItemExtraction = false
 
         override fun createNativeReactor(definition: ReactorMultiblockDefinition): NativeReactorMultiblockBinding {
             created += definition.structureId
@@ -442,12 +460,26 @@ class ReactorStructureStoreTest {
             itemInputPort: ReactorPortDescriptor,
             itemId: String,
             itemCount: Int,
-        ): Double {
+        ): Int {
             if (failItemInsertion) {
                 throw IllegalStateException("configured item insertion failure")
             }
             itemInsertPorts += itemInputPort.position
-            return itemCount.toDouble()
+            return itemCount
+        }
+
+        override fun extractItemStack(
+            binding: NativeReactorMultiblockBinding,
+            itemOutputPort: ReactorPortDescriptor,
+            itemId: String,
+            maxItemCount: Int,
+            dtSeconds: Double,
+        ): Int {
+            if (failItemExtraction) {
+                throw IllegalStateException("configured item extraction failure")
+            }
+            itemExtractPorts += itemOutputPort.position
+            return maxItemCount
         }
 
         private fun List<ReactorPortDescriptor>.toBindings(startIndex: Int): List<NativeReactorPortBinding> =

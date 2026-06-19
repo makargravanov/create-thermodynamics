@@ -25,5 +25,13 @@ interface NativeReactorBridge {
         itemInputPort: ReactorPortDescriptor,
         itemId: String,
         itemCount: Int,
-    ): Double
+    ): Int
+
+    fun extractItemStack(
+        binding: NativeReactorMultiblockBinding,
+        itemOutputPort: ReactorPortDescriptor,
+        itemId: String,
+        maxItemCount: Int,
+        dtSeconds: Double,
+    ): Int
 }

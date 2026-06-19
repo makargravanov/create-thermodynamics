@@ -250,7 +250,7 @@ pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust
     input_index: jint,
     item_id: JString,
     item_count: jint,
-) -> jdouble {
+) -> jint {
     let result = read_reactor_id(reactor_id)
         .and_then(|reactor_id| {
             Ok((
@@ -269,14 +269,63 @@ pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust
             )
         });
     match result {
-        Ok(mol_inserted) => mol_inserted,
+        Ok(items_consumed) => items_consumed as jint,
         Err(error) => {
             throw_java_exception(
                 &mut env,
                 "java/lang/IllegalArgumentException",
                 &error.to_string(),
             );
-            f64::NAN
+            -1
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeExtractItemStackFromReactorOutput(
+    mut env: JNIEnv,
+    _: JClass,
+    reactor_id: jlong,
+    output_index: jint,
+    item_id: JString,
+    max_item_count: jint,
+    dt_seconds: jdouble,
+) -> jint {
+    let result = read_reactor_id(reactor_id)
+        .and_then(|reactor_id| {
+            Ok((
+                reactor_id,
+                read_non_negative_count("outputIndex", output_index)?,
+                read_positive_u32("maxItemCount", max_item_count)?,
+                read_java_string(&mut env, item_id)?,
+            ))
+        })
+        .and_then(|(reactor_id, output_index, max_item_count, item_id)| {
+            chemistry::minecraft::chem_api::extract_item_stack_from_reactor_output(
+                reactor_id,
+                output_index,
+                &item_id,
+                max_item_count,
+                dt_seconds,
+            )
+        });
+    match result {
+        Ok(item_count) if item_count <= jint::MAX as u32 => item_count as jint,
+        Ok(item_count) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalStateException",
+                &format!("extracted item count {item_count} does not fit into Int"),
+            );
+            -1
+        }
+        Err(error) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalArgumentException",
+                &error.to_string(),
+            );
+            -1
         }
     }
 }
