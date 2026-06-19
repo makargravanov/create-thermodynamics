@@ -13,6 +13,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 
 class ReactorStructureWorldStoreTest {
@@ -177,6 +178,28 @@ class ReactorStructureWorldStoreTest {
 
         assertEquals(ReactorControllerFormationState.FORMED, store.controllerViewState(pos(-1, 0, 0)).formationState)
         assertNull(store.membershipAt(pos(1, 0, 0)))
+    }
+
+    @Test
+    fun `changed reactor shape creates a new structure id`() {
+        val firstPlan = planner.buildPlan(
+            scanOf(
+                snapshot(0, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
+                snapshot(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
+            ),
+        )
+        val secondPlan = planner.buildPlan(
+            scanOf(
+                snapshot(0, 0, 0, ReactorMultiblockBlockKind.CHAMBER),
+                snapshot(0, 1, 0, ReactorMultiblockBlockKind.CHAMBER),
+                snapshot(-1, 0, 0, ReactorMultiblockBlockKind.CONTROLLER),
+            ),
+        )
+
+        val firstId = firstPlan.definitions.single().structureId
+        val secondId = secondPlan.definitions.single().structureId
+
+        assertNotEquals(firstId, secondId)
     }
 
     private fun scanOf(vararg blocks: ReactorWorldBlockSnapshot): ReactorAssemblyScan =

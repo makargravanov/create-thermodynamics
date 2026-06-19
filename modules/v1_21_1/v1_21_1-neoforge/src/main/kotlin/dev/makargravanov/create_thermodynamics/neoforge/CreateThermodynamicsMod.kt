@@ -6,6 +6,7 @@ import dev.makargravanov.create_thermodynamics.neoforge.registry.CreateThermodyn
 import net.neoforged.bus.api.IEventBus
 import net.neoforged.fml.common.Mod
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent
+import net.neoforged.neoforge.common.NeoForge
 import org.slf4j.LoggerFactory
 
 @Mod(CreateThermodynamicsMod.MOD_ID)
@@ -13,6 +14,7 @@ class CreateThermodynamicsMod(modEventBus: IEventBus) {
     init {
         CreateThermodynamicsRegistries.register(modEventBus)
         modEventBus.addListener(::commonSetup)
+        NeoForge.EVENT_BUS.addListener(ReactorRuntimeEvents::tickReactors)
     }
 
     private fun commonSetup(event: FMLCommonSetupEvent) {

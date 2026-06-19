@@ -131,6 +131,18 @@ class ReactorWorldRuntime(
     fun registerStructure(definition: ReactorMultiblockDefinition): ReactorStructureRecord =
         structures.register(definition)
 
+    fun reconcileFreshStructures(
+        definitions: Collection<ReactorMultiblockDefinition>,
+        removeMissingStructureIds: Set<ReactorStructureId> = emptySet(),
+    ): List<ReactorOperationResult> =
+        structures.reconcileFreshStructures(definitions, removeMissingStructureIds)
+
+    fun removeStructures(structureIds: Collection<ReactorStructureId>): List<ReactorOperationResult> =
+        structures.removeStructures(structureIds)
+
+    fun tickAll(dtSeconds: Double): List<ReactorOperationResult> =
+        structures.tickAll(dtSeconds)
+
     fun suspendStructureToCheckpoint(
         structureId: ReactorStructureId,
         contentVersion: Long,

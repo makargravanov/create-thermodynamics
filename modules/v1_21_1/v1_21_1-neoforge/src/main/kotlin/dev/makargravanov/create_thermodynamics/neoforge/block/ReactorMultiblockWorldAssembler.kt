@@ -26,10 +26,14 @@ object ReactorMultiblockWorldAssembler {
         val store = worldStore(level)
         if (scan.loadedReactorPositions.isEmpty()) {
             if (!scan.hasUnknownBoundary) {
-                val affected = (setOf(origin) + Direction.entries.map { origin.relative(it) })
+                val checkedPositions = (setOf(origin) + Direction.entries.map { origin.relative(it) })
                     .mapTo(linkedSetOf()) { it.toReactorPosition() }
+                val removedStructureIds = checkedPositions
+                    .mapNotNullTo(linkedSetOf()) { store.membershipAt(it)?.structureId }
+                val affected = checkedPositions
                     .flatMapTo(linkedSetOf()) { store.removePosition(it) }
                     .mapTo(linkedSetOf(), ::toBlockPos)
+                ReactorRuntimeWorlds.runtime(level).removeStructures(removedStructureIds)
                 applyPlan(level, affected)
                 syncChangedBlocks(level, affected)
             }
@@ -37,11 +41,25 @@ object ReactorMultiblockWorldAssembler {
         }
 
         val plan = planner.buildPlan(scan)
+        val previousStructureIds = scan.loadedReactorPositions
+            .mapNotNullTo(linkedSetOf()) { store.membershipAt(it)?.structureId }
+        val nextStructureIds = plan.definitions.mapTo(linkedSetOf()) { it.structureId }
+        val removedStructureIds = if (scan.hasUnknownBoundary) {
+            emptySet()
+        } else {
+            previousStructureIds - nextStructureIds
+        }
         val affected = store.applyPlan(
             scannedPositions = scan.loadedReactorPositions,
             plan = plan,
             removeMissingStructures = !scan.hasUnknownBoundary,
         ).mapTo(linkedSetOf(), ::toBlockPos)
+        if (!scan.hasUnknownBoundary) {
+            ReactorRuntimeWorlds.runtime(level).reconcileFreshStructures(
+                definitions = plan.definitions,
+                removeMissingStructureIds = removedStructureIds,
+            )
+        }
 
         applyPlan(level, affected)
         syncChangedBlocks(level, affected)
@@ -49,9 +67,13 @@ object ReactorMultiblockWorldAssembler {
 
     fun clearMembership(level: ServerLevel, origin: BlockPos) {
         val store = worldStore(level)
+        val removedStructureId = store.membershipAt(origin.toReactorPosition())?.structureId
         val affected = (store.removePosition(origin.toReactorPosition()) +
             Direction.entries.mapTo(linkedSetOf()) { origin.relative(it).toReactorPosition() })
             .mapTo(linkedSetOf(), ::toBlockPos)
+        if (removedStructureId != null) {
+            ReactorRuntimeWorlds.runtime(level).removeStructures(setOf(removedStructureId))
+        }
         applyPlan(level, affected)
         syncChangedBlocks(level, affected)
     }

@@ -39,7 +39,6 @@ class ReactorAssemblyPlanner(
                 controller = controller,
                 alreadyUsed = used,
             )
-            val structureId = controllerStructureId(controller)
             val blocks = candidatePositions.map { position ->
                 val snapshot = requireNotNull(blocksByPosition[position]) {
                     "missing reactor block snapshot for candidate position $position"
@@ -50,6 +49,7 @@ class ReactorAssemblyPlanner(
                     facing = snapshot.facing,
                 )
             }
+            val structureId = structureIdForCandidate(controller, blocks)
             when (val result = assembler.tryAssemble(structureId, blocks)) {
                 is ReactorAssemblyResult.Formed -> {
                     definitions += result.definition
@@ -144,10 +144,34 @@ class ReactorAssemblyPlanner(
             positions += ports.map { it.position }
         }
 
-    private fun controllerStructureId(controller: ReactorBlockPosition): ReactorStructureId =
-        ReactorStructureId(
+    private fun structureIdForCandidate(
+        controller: ReactorBlockPosition,
+        blocks: List<ReactorMultiblockBlock>,
+    ): ReactorStructureId {
+        val structureFingerprint = buildString {
+            append("reactor-structure:")
+            append(controller.x)
+            append(',')
+            append(controller.y)
+            append(',')
+            append(controller.z)
+            for (block in blocks.sortedBy { it.position }) {
+                append(';')
+                append(block.position.x)
+                append(',')
+                append(block.position.y)
+                append(',')
+                append(block.position.z)
+                append('=')
+                append(block.kind.name)
+                append('@')
+                append(block.facing?.name ?: "none")
+            }
+        }
+        return ReactorStructureId(
             UUID.nameUUIDFromBytes(
-                "reactor-controller:${controller.x},${controller.y},${controller.z}".toByteArray(Charsets.UTF_8),
+                structureFingerprint.toByteArray(Charsets.UTF_8),
             ),
         )
+    }
 }

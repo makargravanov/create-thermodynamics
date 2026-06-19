@@ -523,6 +523,27 @@ class ReactorWorldRuntimeTest {
         assertEquals(0, runtime.commandOutbox.size)
     }
 
+    @Test
+    fun `fresh structure reconciliation removes old native reactor when structure id changes`() {
+        val bridge = FakeNativeReactorBridge()
+        val runtime = testRuntime(nativeBridge = bridge)
+        val first = testDefinition("50352d37-1e3d-45c1-beb4-885f5bd83ba1")
+        val second = testDefinition("9be6962e-3eee-4e0a-8d12-9e5d6132f5e0")
+
+        val firstResults = runtime.reconcileFreshStructures(listOf(first))
+        val secondResults = runtime.reconcileFreshStructures(
+            definitions = listOf(second),
+            removeMissingStructureIds = setOf(first.structureId),
+        )
+
+        assertEquals(listOf(ReactorOperationResult.Completed), firstResults)
+        assertEquals(listOf(ReactorOperationResult.Completed, ReactorOperationResult.Completed), secondResults)
+        assertEquals(ReactorStructureState.REMOVED, runtime.structures.record(first.structureId)?.state)
+        assertEquals(ReactorStructureState.ACTIVE, runtime.structures.record(second.structureId)?.state)
+        assertEquals(2, bridge.createCount)
+        assertEquals(1, bridge.removeCount)
+    }
+
     private fun testRuntime(
         commandOutbox: ReactorCommandOutbox = ReactorCommandOutbox(),
         reportInbox: ReactorReportInbox = ReactorReportInbox(),
@@ -639,6 +660,12 @@ class ReactorWorldRuntimeTest {
         )
 
     private class FakeNativeReactorBridge : NativeReactorBridge {
+        var createCount: Int = 0
+            private set
+
+        var removeCount: Int = 0
+            private set
+
         var tickCount: Int = 0
             private set
 
@@ -650,10 +677,11 @@ class ReactorWorldRuntimeTest {
 
         var failItemInsertion: Boolean = false
 
-        override fun createNativeReactor(definition: ReactorMultiblockDefinition): NativeReactorMultiblockBinding =
-            NativeReactorMultiblockBinding(
+        override fun createNativeReactor(definition: ReactorMultiblockDefinition): NativeReactorMultiblockBinding {
+            createCount += 1
+            return NativeReactorMultiblockBinding(
                 structureId = definition.structureId,
-                nativeReactorId = ThermodynamicsNative.NativeReactorId(1),
+                nativeReactorId = ThermodynamicsNative.NativeReactorId(createCount.toLong()),
                 itemInputs = definition.portsOfKind(ReactorPortKind.ITEM_INPUT).mapIndexed { index, port ->
                     NativeReactorPortBinding(port, index)
                 },
@@ -663,6 +691,7 @@ class ReactorWorldRuntimeTest {
                 fluidInputs = emptyList(),
                 fluidOutputs = emptyList(),
             )
+        }
 
         override fun createNativeReactorFromCheckpoint(
             definition: ReactorMultiblockDefinition,
@@ -670,7 +699,9 @@ class ReactorWorldRuntimeTest {
         ): NativeReactorMultiblockBinding =
             createNativeReactor(definition)
 
-        override fun removeNativeReactor(binding: NativeReactorMultiblockBinding) = Unit
+        override fun removeNativeReactor(binding: NativeReactorMultiblockBinding) {
+            removeCount += 1
+        }
 
         override fun tickNativeReactor(binding: NativeReactorMultiblockBinding, dtSeconds: Double) {
             tickCount += 1

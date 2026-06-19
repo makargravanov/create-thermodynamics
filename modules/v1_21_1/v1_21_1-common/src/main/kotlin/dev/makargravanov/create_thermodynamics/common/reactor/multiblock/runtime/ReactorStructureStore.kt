@@ -35,6 +35,37 @@ class ReactorStructureStore(
         return record
     }
 
+    fun reconcileFreshStructures(
+        definitions: Collection<ReactorMultiblockDefinition>,
+        removeMissingStructureIds: Set<ReactorStructureId> = emptySet(),
+    ): List<ReactorOperationResult> {
+        val results = mutableListOf<ReactorOperationResult>()
+        val nextDefinitions = definitions.associateBy { it.structureId }
+        val removedIds = removeMissingStructureIds
+            .filter { it !in nextDefinitions }
+
+        for (structureId in removedIds) {
+            results += remove(structureId)
+        }
+
+        for (definition in definitions) {
+            val existing = records[definition.structureId]
+            if (existing != null && existing.state != ReactorStructureState.REMOVED) {
+                if (existing.definition == definition && existing.state == ReactorStructureState.ACTIVE) {
+                    continue
+                }
+                results += remove(definition.structureId)
+            }
+            register(definition)
+            results += ReactorOperationResult.Completed
+        }
+
+        return results
+    }
+
+    fun removeStructures(structureIds: Collection<ReactorStructureId>): List<ReactorOperationResult> =
+        structureIds.map { remove(it) }
+
     fun record(structureId: ReactorStructureId): ReactorStructureRecord? =
         records[structureId]
 
