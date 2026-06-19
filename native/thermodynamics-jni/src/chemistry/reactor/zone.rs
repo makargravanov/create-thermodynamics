@@ -40,6 +40,33 @@ impl ReactorZone {
         })
     }
 
+    pub fn from_parts(
+        mixture: Mixture,
+        volume_cubic_meters: f64,
+        volume_mode: ReactorVolumeMode,
+        sealed: bool,
+        elapsed_seconds: f64,
+    ) -> ChemistryResult<Self> {
+        if !volume_cubic_meters.is_finite() || volume_cubic_meters <= MIN_HEADSPACE_CUBIC_METERS {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "reactor zone volume must be finite and greater than {MIN_HEADSPACE_CUBIC_METERS}, got {volume_cubic_meters}"
+            )));
+        }
+        if !elapsed_seconds.is_finite() || elapsed_seconds < 0.0 {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "reactor zone elapsed time must be non-negative and finite, got {elapsed_seconds}"
+            )));
+        }
+        Ok(Self {
+            mixture,
+            volume_cubic_meters,
+            volume_mode,
+            sealed,
+            elapsed_seconds,
+            peripherals: Vec::new(),
+        })
+    }
+
     pub fn with_volume_mode(mut self, volume_mode: ReactorVolumeMode) -> Self {
         self.volume_mode = volume_mode;
         self

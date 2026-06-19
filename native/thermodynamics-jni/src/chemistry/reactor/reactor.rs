@@ -9,19 +9,19 @@ use super::zone::ReactorZone;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ZoneId(pub usize);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SubstanceEntry {
     pub id: SubstanceId,
     pub rate_mol_per_second: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PhaseEntry {
     pub phase: MixturePhase,
     pub rate_mol_per_second: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TransitionMode {
     Substances {
         entries: Vec<SubstanceEntry>,
@@ -38,7 +38,7 @@ pub enum TransitionMode {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ZoneTransition {
     pub from: ZoneId,
     pub to: ZoneId,
@@ -62,7 +62,7 @@ impl ZoneTransition {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Input {
     pub to: ZoneId,
     pub mode: TransitionMode,
@@ -84,7 +84,7 @@ impl Input {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Output {
     pub from: ZoneId,
     pub mode: TransitionMode,
@@ -131,6 +131,62 @@ impl Reactor {
             vle_iterations: 1,
             vle_relaxation: 1.0,
         }
+    }
+
+    pub fn from_parts(
+        zones: Vec<ReactorZone>,
+        transitions: Vec<ZoneTransition>,
+        inputs: Vec<Input>,
+        outputs: Vec<Output>,
+        ambient_temperature_kelvin: Option<f64>,
+        heat_transfer_coefficient_kw_per_kelvin: Option<f64>,
+        last_ambient_energy_exchange_j: f64,
+        vle_iterations: usize,
+        vle_relaxation: f64,
+    ) -> ChemistryResult<Self> {
+        if let Some(temperature) = ambient_temperature_kelvin {
+            validate_optional_reactor_number("ambient temperature", temperature)?;
+        }
+        if let Some(coefficient) = heat_transfer_coefficient_kw_per_kelvin {
+            validate_optional_reactor_number("heat transfer coefficient", coefficient)?;
+        }
+        validate_optional_reactor_number(
+            "last ambient energy exchange",
+            last_ambient_energy_exchange_j,
+        )?;
+        if vle_iterations == 0 {
+            return Err(ChemistryError::InvalidMixtureState(
+                "vle iterations must be greater than zero".to_string(),
+            ));
+        }
+        if !vle_relaxation.is_finite() || !(0.01..=1.0).contains(&vle_relaxation) {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "vle relaxation must be finite and in 0.01..=1.0, got {vle_relaxation}"
+            )));
+        }
+        let zone_count = zones.len();
+        for transition in &transitions {
+            validate_zone_id("transition source", transition.from, zone_count)?;
+            validate_zone_id("transition target", transition.to, zone_count)?;
+        }
+        for input in &inputs {
+            validate_zone_id("input target", input.to, zone_count)?;
+        }
+        for output in &outputs {
+            validate_zone_id("output source", output.from, zone_count)?;
+        }
+        let reactor = Self {
+            zones,
+            transitions,
+            inputs,
+            outputs,
+            ambient_temperature_kelvin,
+            heat_transfer_coefficient_kw_per_kelvin,
+            last_ambient_energy_exchange_j,
+            vle_iterations,
+            vle_relaxation,
+        };
+        Ok(reactor)
     }
 
     pub fn set_vle_iterations(&mut self, iterations: usize) {
@@ -199,6 +255,10 @@ impl Reactor {
 
     pub fn zone_count(&self) -> usize {
         self.zones.len()
+    }
+
+    pub fn zones(&self) -> &[ReactorZone] {
+        &self.zones
     }
 
     pub fn add_transition(&mut self, transition: ZoneTransition) -> usize {
@@ -609,3 +669,24 @@ impl Reactor {
 }
 
 use crate::chemistry::error::ChemistryError;
+
+fn validate_zone_id(name: &str, zone_id: ZoneId, zone_count: usize) -> ChemistryResult<()> {
+    if zone_id.0 < zone_count {
+        Ok(())
+    } else {
+        Err(ChemistryError::InvalidMixtureState(format!(
+            "{name} zone index {} out of range (have {zone_count})",
+            zone_id.0
+        )))
+    }
+}
+
+fn validate_optional_reactor_number(name: &str, value: f64) -> ChemistryResult<()> {
+    if value.is_finite() {
+        Ok(())
+    } else {
+        Err(ChemistryError::InvalidMixtureState(format!(
+            "{name} must be finite, got {value}"
+        )))
+    }
+}

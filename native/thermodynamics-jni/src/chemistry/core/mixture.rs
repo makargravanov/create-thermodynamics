@@ -49,6 +49,30 @@ pub struct OrganicPhaseAmount {
     pub concentration_mol_per_bucket: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CondensedPhaseAmount {
+    pub coarse_phase: MixturePhase,
+    pub anchor_substance_id: SubstanceId,
+    pub concentration_mol_per_bucket: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SolidComponentPhaseAmount {
+    pub anchor_substance_id: SubstanceId,
+    pub concentration_mol_per_bucket: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MixtureComponentPhaseSnapshot {
+    pub substance_id: SubstanceId,
+    pub aqueous_mol_per_bucket: f64,
+    pub organic_mol_per_bucket_by_solvent: Vec<OrganicPhaseAmount>,
+    pub molten_mol_per_bucket_by_phase: Vec<CondensedPhaseAmount>,
+    pub gas_mol_per_bucket: f64,
+    pub supercritical_mol_per_bucket: f64,
+    pub solid_mol_per_bucket_by_phase: Vec<SolidComponentPhaseAmount>,
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LiquidPhaseId(usize);
 
@@ -294,6 +318,145 @@ impl Mixture {
                 })
             })
             .collect()
+    }
+
+    pub fn component_phase_snapshots(
+        &self,
+        registry: &ChemistryRegistry,
+    ) -> ChemistryResult<Vec<MixtureComponentPhaseSnapshot>> {
+        self.validate_registry_shape(registry)?;
+        self.components
+            .iter()
+            .map(|component| {
+                let organic_mol_per_bucket_by_solvent = component
+                    .organic_mol_per_bucket_by_solvent
+                    .iter()
+                    .map(|(solvent, concentration)| {
+                        Ok(OrganicPhaseAmount {
+                            solvent_id: registry.substance_by_index(*solvent)?.id.clone(),
+                            concentration_mol_per_bucket: *concentration,
+                        })
+                    })
+                    .collect::<ChemistryResult<Vec<_>>>()?;
+                let molten_mol_per_bucket_by_phase = component
+                    .molten_mol_per_bucket_by_phase
+                    .iter()
+                    .map(|(phase, concentration)| {
+                        Ok(CondensedPhaseAmount {
+                            coarse_phase: phase.coarse_phase,
+                            anchor_substance_id: registry
+                                .substance_by_index(phase.anchor)?
+                                .id
+                                .clone(),
+                            concentration_mol_per_bucket: *concentration,
+                        })
+                    })
+                    .collect::<ChemistryResult<Vec<_>>>()?;
+                let solid_mol_per_bucket_by_phase = component
+                    .solid_mol_per_bucket_by_phase
+                    .iter()
+                    .map(|(phase, concentration)| {
+                        Ok(SolidComponentPhaseAmount {
+                            anchor_substance_id: registry
+                                .substance_by_index(phase.anchor)?
+                                .id
+                                .clone(),
+                            concentration_mol_per_bucket: *concentration,
+                        })
+                    })
+                    .collect::<ChemistryResult<Vec<_>>>()?;
+                Ok(MixtureComponentPhaseSnapshot {
+                    substance_id: component.substance_id.clone(),
+                    aqueous_mol_per_bucket: component.aqueous_mol_per_bucket,
+                    organic_mol_per_bucket_by_solvent,
+                    molten_mol_per_bucket_by_phase,
+                    gas_mol_per_bucket: component.gas_mol_per_bucket,
+                    supercritical_mol_per_bucket: component.supercritical_mol_per_bucket,
+                    solid_mol_per_bucket_by_phase,
+                })
+            })
+            .collect()
+    }
+
+    pub fn from_component_phase_snapshots(
+        registry: &ChemistryRegistry,
+        temperature_kelvin: f64,
+        gas_volume_cubic_meters: f64,
+        components: &[MixtureComponentPhaseSnapshot],
+    ) -> ChemistryResult<Self> {
+        let mut mixture = Self::new(temperature_kelvin)?;
+        mixture.set_gas_volume_cubic_meters(gas_volume_cubic_meters)?;
+        mixture.ensure_position_capacity(registry);
+        for component in components {
+            let substance = registry
+                .substance_index(&component.substance_id)
+                .ok_or_else(|| {
+                    ChemistryError::InvalidMixtureState(format!(
+                        "unknown substance '{}' in mixture snapshot",
+                        component.substance_id
+                    ))
+                })?;
+            if mixture.position_of_substance(substance).is_some() {
+                return Err(ChemistryError::InvalidMixtureState(format!(
+                    "duplicate substance '{}' in mixture snapshot",
+                    component.substance_id
+                )));
+            }
+            let mut phase_amounts = ComponentPhaseAmounts {
+                aqueous_mol_per_bucket: component.aqueous_mol_per_bucket,
+                gas_mol_per_bucket: component.gas_mol_per_bucket,
+                supercritical_mol_per_bucket: component.supercritical_mol_per_bucket,
+                ..ComponentPhaseAmounts::default()
+            };
+            for amount in &component.organic_mol_per_bucket_by_solvent {
+                let solvent = registry
+                    .substance_index(&amount.solvent_id)
+                    .ok_or_else(|| {
+                        ChemistryError::InvalidMixtureState(format!(
+                            "unknown organic solvent '{}' in mixture snapshot",
+                            amount.solvent_id
+                        ))
+                    })?;
+                phase_amounts
+                    .organic_mol_per_bucket_by_solvent
+                    .insert(solvent, amount.concentration_mol_per_bucket);
+            }
+            for amount in &component.molten_mol_per_bucket_by_phase {
+                let anchor = registry
+                    .substance_index(&amount.anchor_substance_id)
+                    .ok_or_else(|| {
+                        ChemistryError::InvalidMixtureState(format!(
+                            "unknown molten phase anchor '{}' in mixture snapshot",
+                            amount.anchor_substance_id
+                        ))
+                    })?;
+                phase_amounts.molten_mol_per_bucket_by_phase.insert(
+                    CondensedPhaseKey::new(amount.coarse_phase, anchor),
+                    amount.concentration_mol_per_bucket,
+                );
+            }
+            for amount in &component.solid_mol_per_bucket_by_phase {
+                let anchor = registry
+                    .substance_index(&amount.anchor_substance_id)
+                    .ok_or_else(|| {
+                        ChemistryError::InvalidMixtureState(format!(
+                            "unknown solid phase anchor '{}' in mixture snapshot",
+                            amount.anchor_substance_id
+                        ))
+                    })?;
+                phase_amounts.solid_mol_per_bucket_by_phase.insert(
+                    SolidPhaseKey::new(anchor),
+                    amount.concentration_mol_per_bucket,
+                );
+            }
+            mixture.insert_component_with_phase_amounts(
+                substance,
+                component.substance_id.clone(),
+                phase_amounts,
+            );
+        }
+        mixture.validate(registry)?;
+        Ok(mixture)
     }
 
     pub fn concentration_in_organic_solvent(
