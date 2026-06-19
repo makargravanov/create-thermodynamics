@@ -88,6 +88,7 @@ class ReactorStructureStore(
             records[structureId] = record.copy(
                 nativeBinding = null,
                 reactorCheckpoint = stored.ref,
+                snapshotVersion = ReactorSnapshotVersion(contentVersion),
                 state = ReactorStructureState.SUSPENDED_UNLOADED,
             )
             ReactorOperationResult.ReactorSuspended("reactor structure ${structureId.value} was suspended to ${stored.ref.storageKey}")
@@ -128,6 +129,7 @@ class ReactorStructureStore(
             val binding = nativeBridge.createNativeReactorFromCheckpoint(record.definition, bytes)
             records[structureId] = record.copy(
                 nativeBinding = binding,
+                snapshotVersion = ReactorSnapshotVersion(checkpoint.contentVersion),
                 state = ReactorStructureState.ACTIVE,
             )
             ensureItemInputBuffers(record.definition)
@@ -175,6 +177,33 @@ class ReactorStructureStore(
 
     fun tickAll(dtSeconds: Double): List<ReactorOperationResult> =
         activeRecords().map { tick(it.structureId, dtSeconds) }
+
+    fun applyReport(report: ReactorReport): ReactorOperationResult {
+        val record = records[report.structureId]
+            ?: return rejected(
+                ReactorOperationRejection.STRUCTURE_NOT_FOUND,
+                "reactor structure ${report.structureId.value} is not registered",
+            )
+        if (report.snapshotVersion.value < record.snapshotVersion.value) {
+            return rejected(
+                ReactorOperationRejection.STALE_REPORT,
+                "reactor report ${report.reportId.value} has snapshot ${report.snapshotVersion.value}, current snapshot is ${record.snapshotVersion.value}",
+            )
+        }
+
+        records[report.structureId] = when (report) {
+            is ReactorReport.SnapshotReady -> record.copy(
+                reactorCheckpoint = report.checkpoint,
+                snapshotVersion = report.snapshotVersion,
+            )
+            is ReactorReport.ReactorFailed -> record.copy(
+                snapshotVersion = report.snapshotVersion,
+                state = ReactorStructureState.INVALID,
+            )
+            else -> record.copy(snapshotVersion = report.snapshotVersion)
+        }
+        return ReactorOperationResult.Completed
+    }
 
     override fun insertItem(
         structureId: ReactorStructureId,

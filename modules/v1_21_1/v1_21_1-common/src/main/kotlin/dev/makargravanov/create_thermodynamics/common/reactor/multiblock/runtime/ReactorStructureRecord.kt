@@ -21,6 +21,7 @@ data class ReactorStructureRecord(
     val definition: ReactorMultiblockDefinition,
     val nativeBinding: NativeReactorMultiblockBinding?,
     val reactorCheckpoint: NativeBlobRef? = null,
+    val snapshotVersion: ReactorSnapshotVersion = ReactorSnapshotVersion(0),
     val state: ReactorStructureState,
 ) {
     private val portsByPosition: Map<ReactorBlockPosition, ReactorPortDescriptor> =
