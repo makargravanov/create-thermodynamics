@@ -23,16 +23,17 @@ class ReactorNativeSession(
         command: ReactorCommand,
         batchVersions: MutableMap<ReactorStructureId, ReactorSnapshotVersion>,
     ): ReactorReport {
-        val current = currentSnapshotVersion(command, batchVersions)
-        if (current == null) {
+        val stored = structures.record(command.structureId)?.snapshotVersion
+        if (stored == null) {
             return rejected(command, ReactorSnapshotVersion(0), "reactor structure ${command.structureId.value} is not registered")
         }
+        val current = batchVersions[command.structureId] ?: stored
         val expected = command.expectedSnapshotVersion
-        if (expected != null && expected != current) {
+        if (expected != null && expected != stored) {
             return rejected(
                 command,
                 current,
-                "reactor command ${command.commandId.value} expected snapshot ${expected.value}, current snapshot is ${current.value}",
+                "reactor command ${command.commandId.value} expected snapshot ${expected.value}, stored snapshot is ${stored.value}",
             )
         }
 
@@ -218,12 +219,6 @@ class ReactorNativeSession(
             else -> rejected(command, current, result.message())
         }
     }
-
-    private fun currentSnapshotVersion(
-        command: ReactorCommand,
-        batchVersions: Map<ReactorStructureId, ReactorSnapshotVersion>,
-    ): ReactorSnapshotVersion? =
-        batchVersions[command.structureId] ?: structures.record(command.structureId)?.snapshotVersion
 
     private fun accepted(
         command: ReactorCommand,

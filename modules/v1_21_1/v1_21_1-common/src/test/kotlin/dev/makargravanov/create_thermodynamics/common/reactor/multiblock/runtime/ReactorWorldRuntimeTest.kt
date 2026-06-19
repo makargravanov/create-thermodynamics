@@ -289,7 +289,7 @@ class ReactorWorldRuntimeTest {
     }
 
     @Test
-    fun `native session rejects second command when batch snapshot version has advanced`() {
+    fun `native session accepts sequential commands from the same initial snapshot in one batch`() {
         val bridge = FakeNativeReactorBridge()
         val runtime = testRuntime(nativeBridge = bridge)
         val definition = testDefinition()
@@ -306,9 +306,10 @@ class ReactorWorldRuntimeTest {
         val reports = session.submit(listOf(first, second))
 
         assertIs<ReactorReport.TickCompleted>(reports[0])
-        val rejected = assertIs<ReactorReport.CommandRejected>(reports[1])
-        assertEquals(ReactorSnapshotVersion(1), rejected.snapshotVersion)
-        assertEquals(1, bridge.tickCount)
+        assertIs<ReactorReport.TickCompleted>(reports[1])
+        assertEquals(ReactorSnapshotVersion(1), reports[0].snapshotVersion)
+        assertEquals(ReactorSnapshotVersion(2), reports[1].snapshotVersion)
+        assertEquals(2, bridge.tickCount)
     }
 
     @Test
@@ -466,6 +467,49 @@ class ReactorWorldRuntimeTest {
         assertEquals(queued.inputCommandIds.single(), commands[1].commandId)
         assertIs<ReactorCommand.ExtractItem>(commands[0])
         assertIs<ReactorCommand.InsertItem>(commands[1])
+    }
+
+    @Test
+    fun `port transfer batch accepts sequential commands for the same structure`() {
+        val bridge = FakeNativeReactorBridge()
+        val runtime = testRuntime(nativeBridge = bridge)
+        val definition = testDefinitionWithOutput()
+        runtime.registerStructure(definition)
+        val itemInput = definition.portsOfKind(ReactorPortKind.ITEM_INPUT).single()
+        val itemOutput = definition.portsOfKind(ReactorPortKind.ITEM_OUTPUT).single()
+
+        assertIs<ReactorWorldRuntimeResult.PortTransferCycleQueued>(
+            runtime.queuePortTransferCycle(
+                ReactorPortTransferCycle(
+                    structureId = definition.structureId,
+                    outputs = listOf(
+                        ReactorPortOutputTransfer(
+                            portPosition = itemOutput.position,
+                            itemId = "minecraft:water_bucket",
+                            maxItemCount = 4,
+                            dtSeconds = 1.0,
+                        ),
+                    ),
+                    inputs = listOf(
+                        ReactorPortInputTransfer(
+                            portPosition = itemInput.position,
+                            itemId = "minecraft:water_bucket",
+                            itemCount = 2,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        assertIs<ReactorWorldRuntimeResult.CommandsSubmitted>(
+            runtime.submitQueuedCommands(ReactorNativeSession(runtime.structures, runtime.blobStorage), maxCommands = 8),
+        )
+
+        val applied = assertIs<ReactorWorldRuntimeResult.ReportsApplied>(runtime.applyReadyReports(8))
+
+        assertEquals(1, bridge.itemExtractCount)
+        assertEquals(1, bridge.itemInsertCount)
+        assertIs<ReactorReport.PortOutputAccepted>(applied.reports[0].report)
+        assertIs<ReactorReport.PortInputAccepted>(applied.reports[1].report)
     }
 
     @Test

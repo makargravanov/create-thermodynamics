@@ -1,5 +1,6 @@
 package dev.makargravanov.create_thermodynamics.neoforge.block
 
+import com.simibubi.create.content.logistics.filter.FilterItemStack
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorStructureId
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorBlockMembership
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorControllerFormationState
@@ -172,12 +173,13 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         check(reactorKind() == ReactorMultiblockKind.ITEM_INPUT_PORT) {
             "reactor block entity at $blockPos is not an item input port"
         }
-        for (slot in items.indices) {
+        for (slot in BUFFER_SLOT_RANGE) {
             val stack = items[slot]
-            if (!stack.isEmpty) {
+            val itemId = if (stack.isEmpty) null else BuiltInRegistries.ITEM.getKey(stack.item).toString()
+            if (itemId != null && portFilterAllows(stack)) {
                 return PortItemStack(
                     slot = slot,
-                    itemId = BuiltInRegistries.ITEM.getKey(stack.item).toString(),
+                    itemId = itemId,
                     count = stack.count,
                 )
             }
@@ -196,6 +198,7 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         }
         val available = items
             .asSequence()
+            .drop(FILTER_SLOT + 1)
             .filter { !it.isEmpty && BuiltInRegistries.ITEM.getKey(it.item).toString() == itemId }
             .sumOf { it.count }
         check(available >= count) {
@@ -203,7 +206,7 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         }
         var remaining = count
         var removed = 0
-        for (slot in items.indices) {
+        for (slot in BUFFER_SLOT_RANGE) {
             if (remaining == 0) {
                 break
             }
@@ -235,7 +238,8 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         }
         val template = stackForItemId(itemId)
         var remaining = maxCount
-        for (stack in items) {
+        for (slot in BUFFER_SLOT_RANGE) {
+            val stack = items[slot]
             if (remaining == 0) {
                 break
             }
@@ -263,7 +267,7 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         }
         var remaining = count
         var inserted = 0
-        for (slot in items.indices) {
+        for (slot in BUFFER_SLOT_RANGE) {
             if (remaining == 0) {
                 break
             }
@@ -277,7 +281,7 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
                 }
             }
         }
-        for (slot in items.indices) {
+        for (slot in BUFFER_SLOT_RANGE) {
             if (remaining == 0) {
                 break
             }
@@ -294,6 +298,27 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
             setChanged()
         }
         return inserted
+    }
+
+    fun portFilterAllowsItemId(itemId: String): Boolean {
+        check(reactorKind()?.isPort == true) {
+            "reactor block entity at $blockPos is not a reactor port"
+        }
+        return portFilterAllows(stackForItemId(itemId))
+    }
+
+    private fun portFilterAllows(stack: ItemStack): Boolean {
+        check(reactorKind()?.isPort == true) {
+            "reactor block entity at $blockPos is not a reactor port"
+        }
+        if (stack.isEmpty) {
+            return false
+        }
+        val filter = items[FILTER_SLOT]
+        if (filter.isEmpty) {
+            return true
+        }
+        return FilterItemStack.of(filter.copy()).test(level, stack)
     }
 
     override fun getDisplayName(): Component =
@@ -360,6 +385,8 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
 
     companion object {
         private const val CONTAINER_SIZE = 27
+        private const val FILTER_SLOT = 0
+        private val BUFFER_SLOT_RANGE = 1 until CONTAINER_SIZE
         private const val STRUCTURE_ID_TAG = "structure_id"
         private const val ACTIVE_VOLUME_TAG = "active_volume"
         private const val ZONE_COUNT_TAG = "zone_count"

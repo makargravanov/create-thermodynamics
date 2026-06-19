@@ -4,9 +4,9 @@ import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorRuntimeWorl
 import net.neoforged.neoforge.event.tick.ServerTickEvent
 
 object ReactorRuntimeEvents {
-    private const val SECONDS_PER_SERVER_TICK = 1.0 / 20.0
-
     fun tickReactors(event: ServerTickEvent.Post) {
-        ReactorRuntimeWorlds.tickExisting(SECONDS_PER_SERVER_TICK)
+        for (level in event.server.allLevels) {
+            ReactorRuntimeWorlds.tickLevel(level)
+        }
     }
 }
