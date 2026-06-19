@@ -7,7 +7,9 @@ use crate::chemistry::minecraft::mregistry::mregistry::{
     MinecraftChemicalRegistry, RegistrationError,
 };
 use crate::chemistry::minecraft::protocol::blob::NativeBlobLimits;
-use crate::chemistry::minecraft::protocol::catalog_snapshot::export_dynamic_catalog_checkpoint;
+use crate::chemistry::minecraft::protocol::catalog_snapshot::{
+    export_dynamic_catalog_checkpoint, import_dynamic_catalog_checkpoint,
+};
 use crate::chemistry::minecraft::worker::reactors_worker::{ReactorInstanceId, ReactorsWorker};
 use crate::chemistry::reactor::{Input, Output, Reactor, ReactorZone, TransitionMode};
 use crate::chemistry::registry::ChemistryRegistry;
@@ -39,14 +41,18 @@ impl ItemChemicalBinding {
 
 pub struct MinecraftChemistryState {
     chemistry_registry: ChemistryRegistry,
+    dynamic_catalog: DynamicChemistryRegistry,
     item_bindings: MinecraftChemicalRegistry,
     reactors_worker: ReactorsWorker,
 }
 
 impl MinecraftChemistryState {
     fn new() -> ChemistryResult<Self> {
+        let chemistry_registry = crate::chemistry::destroy_registry_builder()?.build()?;
+        let dynamic_catalog = DynamicChemistryRegistry::from_registry(chemistry_registry.clone())?;
         Ok(Self {
-            chemistry_registry: crate::chemistry::destroy_registry_builder()?.build()?,
+            chemistry_registry,
+            dynamic_catalog,
             item_bindings: MinecraftChemicalRegistry::new(),
             reactors_worker: ReactorsWorker::new(),
         })
@@ -233,14 +239,25 @@ pub fn extract_item_stack_from_reactor_output(
 
 pub fn export_catalog_checkpoint(content_version: u64) -> ChemistryResult<Vec<u8>> {
     with_minecraft_chemistry_state(|state| {
-        let dynamic_registry =
-            DynamicChemistryRegistry::from_registry(state.chemistry_registry.clone())?;
         export_dynamic_catalog_checkpoint(
-            &dynamic_registry,
+            &state.dynamic_catalog,
             STATIC_CATALOG_VERSION,
             content_version,
             &NativeBlobLimits::default(),
         )
+    })
+}
+
+pub fn import_catalog_checkpoint(encoded: &[u8]) -> ChemistryResult<()> {
+    with_minecraft_chemistry_state_mut(|state| {
+        let restored = import_dynamic_catalog_checkpoint(
+            state.chemistry_registry.clone(),
+            encoded,
+            STATIC_CATALOG_VERSION,
+            &NativeBlobLimits::default(),
+        )?;
+        state.dynamic_catalog = restored;
+        Ok(())
     })
 }
 
@@ -354,5 +371,15 @@ mod tests {
         assert!(ids.contains(&"destroy:water".to_string()));
         assert!(ids.contains(&"destroy:ethanol".to_string()));
         assert!(ids.len() >= 152);
+    }
+
+    #[test]
+    fn catalog_checkpoint_exports_and_imports_through_chem_api() {
+        let encoded = export_catalog_checkpoint(42).unwrap();
+
+        import_catalog_checkpoint(&encoded).unwrap();
+
+        let next = export_catalog_checkpoint(43).unwrap();
+        assert!(!next.is_empty());
     }
 }

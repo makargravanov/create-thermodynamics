@@ -68,6 +68,7 @@ enum class ReactorWorldRuntimeRejection {
     INVALID_COMMAND,
     INVALID_PORT_OPERATION,
     CATALOG_EXPORT_FAILED,
+    CATALOG_IMPORT_FAILED,
     BLOB_STORAGE_REJECTED,
 }
 
@@ -150,6 +151,41 @@ class ReactorWorldRuntime(
                 "catalog checkpoint blob is ${checkpoint.kind}, expected ${NativeBlobKind.DynamicCatalogCheckpoint}",
             )
         }
+
+    fun importCatalogCheckpoint(checkpoint: NativeBlobRef): ReactorWorldRuntimeResult {
+        if (checkpoint.kind != NativeBlobKind.DynamicCatalogCheckpoint) {
+            return rejected(
+                ReactorWorldRuntimeRejection.WRONG_BLOB_KIND,
+                "catalog checkpoint blob is ${checkpoint.kind}, expected ${NativeBlobKind.DynamicCatalogCheckpoint}",
+            )
+        }
+        val encoded = when (val result = blobStorage.load(checkpoint)) {
+            is NativeBlobStorageResult.Loaded -> result.bytes
+            is NativeBlobStorageResult.Rejected -> {
+                return rejected(
+                    ReactorWorldRuntimeRejection.BLOB_STORAGE_REJECTED,
+                    "failed to load catalog checkpoint ${checkpoint.storageKey}: ${result.message}",
+                )
+            }
+            is NativeBlobStorageResult.Stored -> {
+                return rejected(
+                    ReactorWorldRuntimeRejection.BLOB_STORAGE_REJECTED,
+                    "native blob storage returned Stored while loading catalog checkpoint",
+                )
+            }
+        }
+        try {
+            catalogBridge.importCatalogCheckpoint(encoded)
+        } catch (error: RuntimeException) {
+            return rejected(
+                ReactorWorldRuntimeRejection.CATALOG_IMPORT_FAILED,
+                "failed to import catalog checkpoint ${checkpoint.storageKey}: ${error.message}",
+            )
+        }
+        val updated = catalog.copy(checkpoint = checkpoint)
+        catalog = updated
+        return ReactorWorldRuntimeResult.CatalogUpdated(updated)
+    }
 
     fun exportCatalogCheckpoint(contentVersion: Long): ReactorWorldRuntimeResult {
         if (contentVersion < 0) {

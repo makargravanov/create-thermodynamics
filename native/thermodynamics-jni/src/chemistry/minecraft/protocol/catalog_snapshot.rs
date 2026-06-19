@@ -1,5 +1,6 @@
 use crate::chemistry::dynamic::DynamicChemistryRegistry;
 use crate::chemistry::error::{ChemistryError, ChemistryResult};
+use crate::chemistry::registry::ChemistryRegistry;
 
 use super::blob::{
     decode_sections, encode_sections, NativeBlob, NativeBlobKind, NativeBlobLimits,
@@ -10,13 +11,9 @@ pub const CATALOG_SNAPSHOT_MODEL_VERSION: &str = "create-thermodynamics:dynamic-
 
 const SECTION_METADATA: u16 = 1;
 const SECTION_DYNAMIC_SUBSTANCES: u16 = 2;
-const SECTION_DYNAMIC_REACTIONS: u16 = 3;
-const SECTION_GENERATION_STATE: u16 = 4;
 
-const CATALOG_METADATA_VERSION: u16 = 1;
+const CATALOG_METADATA_VERSION: u16 = 2;
 const DYNAMIC_SUBSTANCES_VERSION: u16 = 1;
-const DYNAMIC_REACTIONS_VERSION: u16 = 1;
-const GENERATION_STATE_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DynamicCatalogSnapshotMetadata {
@@ -25,7 +22,6 @@ pub struct DynamicCatalogSnapshotMetadata {
     pub static_substance_count: u64,
     pub static_reaction_count: u64,
     pub dynamic_substance_count: u64,
-    pub dynamic_reaction_count: u64,
     pub dynamic_acid_base_spec_count: u64,
     pub dynamic_precipitation_spec_count: u64,
     pub dynamic_complex_spec_count: u64,
@@ -38,22 +34,9 @@ pub struct DynamicSubstanceManifestEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DynamicReactionManifestEntry {
-    pub reaction_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DynamicGenerationStateManifest {
-    pub processed_site_generation_key_count: u64,
-    pub processed_substance_generation_key_count: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DynamicCatalogSnapshotManifest {
     pub metadata: DynamicCatalogSnapshotMetadata,
     pub dynamic_substances: Vec<DynamicSubstanceManifestEntry>,
-    pub dynamic_reactions: Vec<DynamicReactionManifestEntry>,
-    pub generation_state: DynamicGenerationStateManifest,
 }
 
 impl DynamicCatalogSnapshotManifest {
@@ -75,13 +58,6 @@ impl DynamicCatalogSnapshotManifest {
                     .map(str::to_string),
             })
             .collect::<Vec<_>>();
-        let dynamic_reactions = registry
-            .dynamic_reactions()
-            .map(|reaction| DynamicReactionManifestEntry {
-                reaction_id: reaction.id.as_str().to_string(),
-            })
-            .collect::<Vec<_>>();
-
         Ok(Self {
             metadata: DynamicCatalogSnapshotMetadata {
                 base_catalog_version,
@@ -89,21 +65,12 @@ impl DynamicCatalogSnapshotManifest {
                 static_substance_count: static_registry.substance_count() as u64,
                 static_reaction_count: static_registry.reactions().count() as u64,
                 dynamic_substance_count: dynamic_substances.len() as u64,
-                dynamic_reaction_count: dynamic_reactions.len() as u64,
                 dynamic_acid_base_spec_count: registry.dynamic_acid_base_spec_count() as u64,
                 dynamic_precipitation_spec_count: registry.dynamic_precipitation_spec_count()
                     as u64,
                 dynamic_complex_spec_count: registry.dynamic_complex_spec_count() as u64,
             },
             dynamic_substances,
-            dynamic_reactions,
-            generation_state: DynamicGenerationStateManifest {
-                processed_site_generation_key_count: registry.processed_generation_key_count()
-                    as u64,
-                processed_substance_generation_key_count: registry
-                    .processed_substance_generation_key_count()
-                    as u64,
-            },
         })
     }
 
@@ -116,21 +83,11 @@ impl DynamicCatalogSnapshotManifest {
                 self.metadata.dynamic_substance_count
             )));
         }
-        if self.metadata.dynamic_reaction_count != self.dynamic_reactions.len() as u64 {
-            return Err(snapshot_error(format!(
-                "dynamic reaction manifest contains {} entries, metadata declares {}",
-                self.dynamic_reactions.len(),
-                self.metadata.dynamic_reaction_count
-            )));
-        }
         for entry in &self.dynamic_substances {
             validate_non_empty("dynamic substance id", &entry.substance_id)?;
             if let Some(canonical_code) = &entry.canonical_code {
                 validate_non_empty("dynamic substance canonical code", canonical_code)?;
             }
-        }
-        for entry in &self.dynamic_reactions {
-            validate_non_empty("dynamic reaction id", &entry.reaction_id)?;
         }
         Ok(())
     }
@@ -192,6 +149,56 @@ pub fn read_dynamic_catalog_checkpoint_manifest(
     Ok(manifest)
 }
 
+pub fn import_dynamic_catalog_checkpoint(
+    base_registry: ChemistryRegistry,
+    encoded: &[u8],
+    expected_base_catalog_version: &str,
+    limits: &NativeBlobLimits,
+) -> ChemistryResult<DynamicChemistryRegistry> {
+    let manifest =
+        read_dynamic_catalog_checkpoint_manifest(encoded, expected_base_catalog_version, limits)?;
+    let mut registry = DynamicChemistryRegistry::from_registry(base_registry)?;
+    let static_registry = registry.static_registry();
+    if manifest.metadata.static_substance_count != static_registry.substance_count() as u64 {
+        return Err(snapshot_error(format!(
+            "dynamic catalog snapshot declares {} static substances, current catalog has {}",
+            manifest.metadata.static_substance_count,
+            static_registry.substance_count()
+        )));
+    }
+    if manifest.metadata.static_reaction_count != static_registry.reactions().count() as u64 {
+        return Err(snapshot_error(format!(
+            "dynamic catalog snapshot declares {} static reactions, current catalog has {}",
+            manifest.metadata.static_reaction_count,
+            static_registry.reactions().count()
+        )));
+    }
+    for entry in &manifest.dynamic_substances {
+        let canonical = entry.canonical_code.as_deref().ok_or_else(|| {
+            snapshot_error(format!(
+                "dynamic substance '{}' has no canonical code and cannot be restored",
+                entry.substance_id
+            ))
+        })?;
+        let restored_id = registry.resolve_frowns(canonical)?;
+        if restored_id.as_str() != entry.substance_id {
+            return Err(snapshot_error(format!(
+                "dynamic substance canonical code '{}' restored '{}', expected '{}'",
+                canonical, restored_id, entry.substance_id
+            )));
+        }
+    }
+
+    if manifest.metadata.dynamic_substance_count != registry.dynamic_substances().count() as u64 {
+        return Err(snapshot_error(format!(
+            "restored {} dynamic substances, snapshot declares {}",
+            registry.dynamic_substances().count(),
+            manifest.metadata.dynamic_substance_count
+        )));
+    }
+    Ok(registry)
+}
+
 fn encode_manifest_sections(manifest: &DynamicCatalogSnapshotManifest) -> ChemistryResult<Vec<u8>> {
     encode_sections(&[
         NativeBlobSection {
@@ -202,14 +209,6 @@ fn encode_manifest_sections(manifest: &DynamicCatalogSnapshotManifest) -> Chemis
             section_kind: SECTION_DYNAMIC_SUBSTANCES,
             payload: encode_dynamic_substances(&manifest.dynamic_substances)?,
         },
-        NativeBlobSection {
-            section_kind: SECTION_DYNAMIC_REACTIONS,
-            payload: encode_dynamic_reactions(&manifest.dynamic_reactions)?,
-        },
-        NativeBlobSection {
-            section_kind: SECTION_GENERATION_STATE,
-            payload: encode_generation_state(&manifest.generation_state)?,
-        },
     ])
 }
 
@@ -219,8 +218,6 @@ fn decode_manifest_sections(
 ) -> ChemistryResult<DynamicCatalogSnapshotManifest> {
     let mut metadata = None;
     let mut dynamic_substances = None;
-    let mut dynamic_reactions = None;
-    let mut generation_state = None;
 
     for section in decode_sections(payload, limits)? {
         match section.section_kind {
@@ -233,16 +230,6 @@ fn decode_manifest_sections(
                 &mut dynamic_substances,
                 decode_dynamic_substances(&section.payload)?,
                 "dynamic substances",
-            )?,
-            SECTION_DYNAMIC_REACTIONS => assign_section(
-                &mut dynamic_reactions,
-                decode_dynamic_reactions(&section.payload)?,
-                "dynamic reactions",
-            )?,
-            SECTION_GENERATION_STATE => assign_section(
-                &mut generation_state,
-                decode_generation_state(&section.payload)?,
-                "generation state",
             )?,
             other => {
                 return Err(snapshot_error(format!(
@@ -257,12 +244,6 @@ fn decode_manifest_sections(
             .ok_or_else(|| snapshot_error("dynamic catalog snapshot is missing metadata"))?,
         dynamic_substances: dynamic_substances.ok_or_else(|| {
             snapshot_error("dynamic catalog snapshot is missing dynamic substance manifest")
-        })?,
-        dynamic_reactions: dynamic_reactions.ok_or_else(|| {
-            snapshot_error("dynamic catalog snapshot is missing dynamic reaction manifest")
-        })?,
-        generation_state: generation_state.ok_or_else(|| {
-            snapshot_error("dynamic catalog snapshot is missing generation state manifest")
         })?,
     })
 }
@@ -285,7 +266,6 @@ fn encode_metadata(metadata: &DynamicCatalogSnapshotMetadata) -> ChemistryResult
     write_u64(&mut output, metadata.static_substance_count);
     write_u64(&mut output, metadata.static_reaction_count);
     write_u64(&mut output, metadata.dynamic_substance_count);
-    write_u64(&mut output, metadata.dynamic_reaction_count);
     write_u64(&mut output, metadata.dynamic_acid_base_spec_count);
     write_u64(&mut output, metadata.dynamic_precipitation_spec_count);
     write_u64(&mut output, metadata.dynamic_complex_spec_count);
@@ -306,7 +286,6 @@ fn decode_metadata(payload: &[u8]) -> ChemistryResult<DynamicCatalogSnapshotMeta
         static_substance_count: cursor.read_u64()?,
         static_reaction_count: cursor.read_u64()?,
         dynamic_substance_count: cursor.read_u64()?,
-        dynamic_reaction_count: cursor.read_u64()?,
         dynamic_acid_base_spec_count: cursor.read_u64()?,
         dynamic_precipitation_spec_count: cursor.read_u64()?,
         dynamic_complex_spec_count: cursor.read_u64()?,
@@ -348,59 +327,6 @@ fn decode_dynamic_substances(
     }
     cursor.finish()?;
     Ok(entries)
-}
-
-fn encode_dynamic_reactions(entries: &[DynamicReactionManifestEntry]) -> ChemistryResult<Vec<u8>> {
-    let mut output = Vec::new();
-    write_u16(&mut output, DYNAMIC_REACTIONS_VERSION);
-    write_u64(&mut output, entries.len() as u64);
-    for entry in entries {
-        write_string(&mut output, &entry.reaction_id)?;
-    }
-    Ok(output)
-}
-
-fn decode_dynamic_reactions(payload: &[u8]) -> ChemistryResult<Vec<DynamicReactionManifestEntry>> {
-    let mut cursor = Cursor::new(payload);
-    let version = cursor.read_u16()?;
-    if version != DYNAMIC_REACTIONS_VERSION {
-        return Err(snapshot_error(format!(
-            "unsupported dynamic reaction manifest version {version}"
-        )));
-    }
-    let count = cursor.read_len()?;
-    let mut entries = Vec::with_capacity(count);
-    for _ in 0..count {
-        entries.push(DynamicReactionManifestEntry {
-            reaction_id: cursor.read_string()?,
-        });
-    }
-    cursor.finish()?;
-    Ok(entries)
-}
-
-fn encode_generation_state(state: &DynamicGenerationStateManifest) -> ChemistryResult<Vec<u8>> {
-    let mut output = Vec::new();
-    write_u16(&mut output, GENERATION_STATE_VERSION);
-    write_u64(&mut output, state.processed_site_generation_key_count);
-    write_u64(&mut output, state.processed_substance_generation_key_count);
-    Ok(output)
-}
-
-fn decode_generation_state(payload: &[u8]) -> ChemistryResult<DynamicGenerationStateManifest> {
-    let mut cursor = Cursor::new(payload);
-    let version = cursor.read_u16()?;
-    if version != GENERATION_STATE_VERSION {
-        return Err(snapshot_error(format!(
-            "unsupported dynamic generation state manifest version {version}"
-        )));
-    }
-    let state = DynamicGenerationStateManifest {
-        processed_site_generation_key_count: cursor.read_u64()?,
-        processed_substance_generation_key_count: cursor.read_u64()?,
-    };
-    cursor.finish()?;
-    Ok(state)
 }
 
 fn write_u16(output: &mut Vec<u8>, value: u16) {
@@ -554,13 +480,11 @@ mod tests {
         );
         assert_eq!(manifest.metadata.content_version, 1);
         assert_eq!(manifest.metadata.dynamic_substance_count, 0);
-        assert_eq!(manifest.metadata.dynamic_reaction_count, 0);
         assert!(manifest.dynamic_substances.is_empty());
-        assert!(manifest.dynamic_reactions.is_empty());
     }
 
     #[test]
-    fn dynamic_catalog_checkpoint_records_dynamic_substances_and_reactions() {
+    fn dynamic_catalog_checkpoint_records_dynamic_substances_without_reaction_cache() {
         let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
         let dynamic_substance = registry.resolve_frowns("CCCCCCCC").unwrap();
         registry
@@ -578,10 +502,6 @@ mod tests {
         assert_eq!(
             manifest.metadata.dynamic_substance_count,
             manifest.dynamic_substances.len() as u64
-        );
-        assert_eq!(
-            manifest.metadata.dynamic_reaction_count,
-            manifest.dynamic_reactions.len() as u64
         );
         assert!(manifest
             .dynamic_substances
@@ -606,6 +526,55 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_catalog_checkpoint_import_restores_canonical_dynamic_substances() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let dynamic_substance = registry.resolve_frowns("CCCCCCCC").unwrap();
+        let encoded =
+            export_dynamic_catalog_checkpoint(&registry, "destroy-static:test", 3, &limits())
+                .unwrap();
+
+        let restored = import_dynamic_catalog_checkpoint(
+            crate::chemistry::destroy_registry_builder()
+                .unwrap()
+                .build()
+                .unwrap(),
+            &encoded,
+            "destroy-static:test",
+            &limits(),
+        )
+        .unwrap();
+
+        assert!(restored.substance(&dynamic_substance).is_ok());
+        assert_eq!(restored.dynamic_substances().count(), 1);
+    }
+
+    #[test]
+    fn dynamic_catalog_checkpoint_import_discards_derived_reaction_cache() {
+        let mut registry = DynamicChemistryRegistry::from_destroy_catalog().unwrap();
+        let dynamic_substance = registry.resolve_frowns("CCCCCCCC").unwrap();
+        registry
+            .generate_reactions_for(&dynamic_substance, 1)
+            .unwrap();
+        let encoded =
+            export_dynamic_catalog_checkpoint(&registry, "destroy-static:test", 4, &limits())
+                .unwrap();
+
+        let restored = import_dynamic_catalog_checkpoint(
+            crate::chemistry::destroy_registry_builder()
+                .unwrap()
+                .build()
+                .unwrap(),
+            &encoded,
+            "destroy-static:test",
+            &limits(),
+        )
+        .unwrap();
+
+        assert!(restored.substance(&dynamic_substance).is_ok());
+        assert_eq!(restored.dynamic_reactions().count(), 0);
+    }
+
+    #[test]
     fn dynamic_catalog_checkpoint_rejects_unknown_section() {
         let metadata = DynamicCatalogSnapshotMetadata {
             base_catalog_version: "destroy-static:test".to_string(),
@@ -613,7 +582,6 @@ mod tests {
             static_substance_count: 0,
             static_reaction_count: 0,
             dynamic_substance_count: 0,
-            dynamic_reaction_count: 0,
             dynamic_acid_base_spec_count: 0,
             dynamic_precipitation_spec_count: 0,
             dynamic_complex_spec_count: 0,
@@ -630,18 +598,6 @@ mod tests {
             NativeBlobSection {
                 section_kind: SECTION_DYNAMIC_SUBSTANCES,
                 payload: encode_dynamic_substances(&[]).unwrap(),
-            },
-            NativeBlobSection {
-                section_kind: SECTION_DYNAMIC_REACTIONS,
-                payload: encode_dynamic_reactions(&[]).unwrap(),
-            },
-            NativeBlobSection {
-                section_kind: SECTION_GENERATION_STATE,
-                payload: encode_generation_state(&DynamicGenerationStateManifest {
-                    processed_site_generation_key_count: 0,
-                    processed_substance_generation_key_count: 0,
-                })
-                .unwrap(),
             },
         ])
         .unwrap();

@@ -92,6 +92,10 @@ object ThermodynamicsNative {
     fun exportCatalogCheckpoint(contentVersion: Long): ByteArray =
         nativeExportCatalogCheckpoint(contentVersion)
 
+    fun importCatalogCheckpoint(encoded: ByteArray) {
+        nativeImportCatalogCheckpoint(encoded)
+    }
+
     fun exportReactorCheckpoint(
         reactorId: NativeReactorId,
         contentVersion: Long,
@@ -167,6 +171,9 @@ object ThermodynamicsNative {
 
     @JvmStatic
     private external fun nativeExportCatalogCheckpoint(contentVersion: Long): ByteArray
+
+    @JvmStatic
+    private external fun nativeImportCatalogCheckpoint(encoded: ByteArray)
 
     @JvmStatic
     private external fun nativeExportReactorCheckpoint(

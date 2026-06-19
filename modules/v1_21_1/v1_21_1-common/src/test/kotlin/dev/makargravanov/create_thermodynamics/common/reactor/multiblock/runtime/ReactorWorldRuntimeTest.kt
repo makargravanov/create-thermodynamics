@@ -122,6 +122,42 @@ class ReactorWorldRuntimeTest {
     }
 
     @Test
+    fun `catalog checkpoint import loads blob before installing reference`() {
+        val catalogBridge = FakeNativeCatalogBridge()
+        val runtime = testRuntime(catalogBridge = catalogBridge)
+        val exported = assertIs<ReactorWorldRuntimeResult.CatalogUpdated>(
+            runtime.exportCatalogCheckpoint(contentVersion = 6),
+        )
+        runtime.installCatalogCheckpoint(blobRef(NativeBlobKind.DynamicCatalogCheckpoint, contentVersion = 0))
+
+        val imported = assertIs<ReactorWorldRuntimeResult.CatalogUpdated>(
+            runtime.importCatalogCheckpoint(exported.catalog.checkpoint!!),
+        )
+
+        assertEquals(6, imported.catalog.catalogVersion)
+        assertEquals(6, runtime.catalog.catalogVersion)
+        assertEquals(1, catalogBridge.importCount)
+    }
+
+    @Test
+    fun `catalog checkpoint import does not install reference after native rejection`() {
+        val catalogBridge = FakeNativeCatalogBridge()
+        val runtime = testRuntime(catalogBridge = catalogBridge)
+        val exported = assertIs<ReactorWorldRuntimeResult.CatalogUpdated>(
+            runtime.exportCatalogCheckpoint(contentVersion = 7),
+        )
+        runtime.installCatalogCheckpoint(blobRef(NativeBlobKind.DynamicCatalogCheckpoint, contentVersion = 1))
+        catalogBridge.failImport = true
+
+        val rejected = assertIs<ReactorWorldRuntimeResult.Rejected>(
+            runtime.importCatalogCheckpoint(exported.catalog.checkpoint!!),
+        )
+
+        assertEquals(ReactorWorldRuntimeRejection.CATALOG_IMPORT_FAILED, rejected.reason)
+        assertEquals(1, runtime.catalog.catalogVersion)
+    }
+
+    @Test
     fun `command queue overflow is reported by world runtime`() {
         val runtime = testRuntime(
             commandOutbox = ReactorCommandOutbox(ReactorCommandOutboxLimits(maxCommands = 1, maxDrainBatch = 8)),
@@ -675,12 +711,24 @@ class ReactorWorldRuntimeTest {
     }
 
     private class FakeNativeCatalogBridge : NativeCatalogBridge {
+        var failImport: Boolean = false
+        var importCount: Int = 0
+            private set
+
         override fun exportCatalogCheckpoint(contentVersion: Long): ByteArray =
             nativeBlobBytes(
                 kind = NativeBlobKind.DynamicCatalogCheckpoint,
                 contentVersion = contentVersion,
                 modelVersion = "test-catalog",
             )
+
+        override fun importCatalogCheckpoint(encoded: ByteArray) {
+            if (failImport) {
+                throw IllegalStateException("configured catalog import failure")
+            }
+            check(encoded.isNotEmpty()) { "catalog checkpoint bytes must not be empty" }
+            importCount += 1
+        }
     }
 
     private companion object {

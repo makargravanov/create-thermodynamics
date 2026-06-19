@@ -353,6 +353,23 @@ pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust
 }
 
 #[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeImportCatalogCheckpoint(
+    mut env: JNIEnv,
+    _: JClass,
+    encoded: JByteArray,
+) {
+    let result = read_byte_array(&mut env, encoded)
+        .and_then(|bytes| chemistry::minecraft::chem_api::import_catalog_checkpoint(&bytes));
+    if let Err(error) = result {
+        throw_java_exception(
+            &mut env,
+            "java/lang/IllegalArgumentException",
+            &error.to_string(),
+        );
+    }
+}
+
+#[no_mangle]
 pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeExportReactorCheckpoint(
     mut env: JNIEnv,
     _: JClass,
@@ -559,6 +576,11 @@ fn java_string_array(
 fn java_byte_array(env: &mut JNIEnv, values: &[u8]) -> chemistry::ChemistryResult<jbyteArray> {
     env.byte_array_from_slice(values)
         .map(|array| array.into_raw())
+        .map_err(|error| jni_error_to_chemistry_error("byte array", error))
+}
+
+fn read_byte_array(env: &mut JNIEnv, array: JByteArray) -> chemistry::ChemistryResult<Vec<u8>> {
+    env.convert_byte_array(&array)
         .map_err(|error| jni_error_to_chemistry_error("byte array", error))
 }
 
