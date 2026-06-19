@@ -115,13 +115,100 @@ class ReactorWorldRuntimeTest {
         assertEquals(ReactorWorldRuntimeRejection.QUEUE_FULL, rejected.reason)
     }
 
+    @Test
+    fun `queued tick can be submitted through native session and applied as report`() {
+        val bridge = FakeNativeReactorBridge()
+        val runtime = testRuntime(nativeBridge = bridge)
+        val definition = testDefinition()
+        runtime.registerStructure(definition)
+        assertIs<ReactorWorldRuntimeResult.CommandQueued>(runtime.queueTick(definition.structureId, 0.05))
+
+        val submitted = assertIs<ReactorWorldRuntimeResult.CommandsSubmitted>(
+            runtime.submitQueuedCommands(ReactorNativeSession(runtime.structures, runtime.blobStorage), maxCommands = 8),
+        )
+        val applied = assertIs<ReactorWorldRuntimeResult.ReportsApplied>(runtime.applyReadyReports(8))
+
+        assertEquals(1, submitted.commandCount)
+        assertEquals(1, submitted.reportCount)
+        assertEquals(listOf(ReactorOperationResult.Completed), applied.results)
+        assertEquals(1, bridge.tickCount)
+        assertEquals(ReactorSnapshotVersion(1), runtime.structures.record(definition.structureId)?.snapshotVersion)
+    }
+
+    @Test
+    fun `snapshot command exports checkpoint without suspending active reactor`() {
+        val runtime = testRuntime()
+        val definition = testDefinition()
+        runtime.registerStructure(definition)
+        assertIs<ReactorWorldRuntimeResult.CommandQueued>(
+            runtime.queueSnapshotRequest(definition.structureId, "test snapshot"),
+        )
+
+        assertIs<ReactorWorldRuntimeResult.CommandsSubmitted>(
+            runtime.submitQueuedCommands(ReactorNativeSession(runtime.structures, runtime.blobStorage), maxCommands = 8),
+        )
+        assertIs<ReactorWorldRuntimeResult.ReportsApplied>(runtime.applyReadyReports(8))
+
+        val record = runtime.structures.record(definition.structureId)
+        assertEquals(ReactorStructureState.ACTIVE, record?.state)
+        assertEquals(ReactorSnapshotVersion(1), record?.snapshotVersion)
+        assertEquals(NativeBlobKind.ReactorSnapshot, record?.reactorCheckpoint?.kind)
+    }
+
+    @Test
+    fun `world runtime does not execute commands when report inbox has no capacity`() {
+        val bridge = FakeNativeReactorBridge()
+        val runtime = testRuntime(
+            nativeBridge = bridge,
+            reportInbox = ReactorReportInbox(ReactorReportInboxLimits(maxReports = 1, maxDrainBatch = 8)),
+        )
+        val definition = testDefinition()
+        runtime.registerStructure(definition)
+        assertIs<ReactorWorldRuntimeResult.ReportQueued>(runtime.receiveReport(tickReport(1, definition.structureId, snapshotVersion = 1)))
+        assertIs<ReactorWorldRuntimeResult.CommandQueued>(runtime.queueTick(definition.structureId, 0.05))
+
+        val rejected = assertIs<ReactorWorldRuntimeResult.Rejected>(
+            runtime.submitQueuedCommands(ReactorNativeSession(runtime.structures, runtime.blobStorage), maxCommands = 8),
+        )
+
+        assertEquals(ReactorWorldRuntimeRejection.QUEUE_FULL, rejected.reason)
+        assertEquals(0, bridge.tickCount)
+        assertIs<ReactorCommand.Tick>(runtime.drainCommands(8).single())
+    }
+
+    @Test
+    fun `native session rejects second command when batch snapshot version has advanced`() {
+        val bridge = FakeNativeReactorBridge()
+        val runtime = testRuntime(nativeBridge = bridge)
+        val definition = testDefinition()
+        runtime.registerStructure(definition)
+        val session = ReactorNativeSession(runtime.structures, runtime.blobStorage)
+        val first = ReactorCommand.Tick(
+            commandId = ReactorCommandId(1),
+            structureId = definition.structureId,
+            expectedSnapshotVersion = ReactorSnapshotVersion(0),
+            dtSeconds = 0.05,
+        )
+        val second = first.copy(commandId = ReactorCommandId(2))
+
+        val reports = session.submit(listOf(first, second))
+
+        assertIs<ReactorReport.TickCompleted>(reports[0])
+        val rejected = assertIs<ReactorReport.CommandRejected>(reports[1])
+        assertEquals(ReactorSnapshotVersion(1), rejected.snapshotVersion)
+        assertEquals(1, bridge.tickCount)
+    }
+
     private fun testRuntime(
         commandOutbox: ReactorCommandOutbox = ReactorCommandOutbox(),
+        reportInbox: ReactorReportInbox = ReactorReportInbox(),
+        nativeBridge: NativeReactorBridge = FakeNativeReactorBridge(),
     ): ReactorWorldRuntime =
         ReactorWorldRuntime(
-            structures = ReactorStructureStore(FakeNativeReactorBridge()),
+            structures = ReactorStructureStore(nativeBridge),
             blobStorage = NativeBlobStorage(Files.createTempDirectory("ct-reactor-world-runtime-test")),
             commandOutbox = commandOutbox,
+            reportInbox = reportInbox,
         )
 
     private fun tickReport(
@@ -186,6 +273,9 @@ class ReactorWorldRuntimeTest {
         )
 
     private class FakeNativeReactorBridge : NativeReactorBridge {
+        var tickCount: Int = 0
+            private set
+
         override fun createNativeReactor(definition: ReactorMultiblockDefinition): NativeReactorMultiblockBinding =
             NativeReactorMultiblockBinding(
                 structureId = definition.structureId,
@@ -206,13 +296,18 @@ class ReactorWorldRuntimeTest {
 
         override fun removeNativeReactor(binding: NativeReactorMultiblockBinding) = Unit
 
-        override fun tickNativeReactor(binding: NativeReactorMultiblockBinding, dtSeconds: Double) = Unit
+        override fun tickNativeReactor(binding: NativeReactorMultiblockBinding, dtSeconds: Double) {
+            tickCount += 1
+        }
 
         override fun exportReactorCheckpoint(
             binding: NativeReactorMultiblockBinding,
             contentVersion: Long,
         ): ByteArray =
-            ByteArray(0)
+            nativeBlobBytes(
+                kind = NativeBlobKind.ReactorSnapshot,
+                contentVersion = contentVersion,
+            )
 
         override fun insertItemStack(
             binding: NativeReactorMultiblockBinding,
@@ -225,5 +320,36 @@ class ReactorWorldRuntimeTest {
 
     private companion object {
         val ZERO_HASH = NativeBlobHash("0".repeat(64))
+
+        fun nativeBlobBytes(
+            kind: NativeBlobKind,
+            contentVersion: Long = 1,
+            modelVersion: String = "test-model",
+            uncompressedByteSize: Long = 16,
+            compressedPayload: ByteArray = byteArrayOf(1),
+        ): ByteArray =
+            buildList<Int> {
+                addAll(byteArrayOf(0x43, 0x54, 0x4e, 0x42, 0x4c, 0x42, 0x31, 0x00).map { it.toInt() and 0xff })
+                addU16(1)
+                addU16(kind.wireId)
+                addU16(modelVersion.encodeToByteArray().size)
+                addU64(contentVersion)
+                addU64(uncompressedByteSize)
+                addU64(compressedPayload.size.toLong())
+                repeat(32) { add(0) }
+                addAll(modelVersion.encodeToByteArray().map { it.toInt() and 0xff })
+                addAll(compressedPayload.map { it.toInt() and 0xff })
+            }.map { it.toByte() }.toByteArray()
+
+        private fun MutableList<Int>.addU16(value: Int) {
+            add(value and 0xff)
+            add((value ushr 8) and 0xff)
+        }
+
+        private fun MutableList<Int>.addU64(value: Long) {
+            for (index in 0 until 8) {
+                add(((value ushr (index * 8)) and 0xff).toInt())
+            }
+        }
     }
 }

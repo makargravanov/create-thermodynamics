@@ -23,6 +23,9 @@ class ReactorReportInbox(
     val size: Int
         get() = reports.size
 
+    val remainingCapacity: Int
+        get() = limits.maxReports - reports.size
+
     fun isEmpty(): Boolean =
         reports.isEmpty()
 

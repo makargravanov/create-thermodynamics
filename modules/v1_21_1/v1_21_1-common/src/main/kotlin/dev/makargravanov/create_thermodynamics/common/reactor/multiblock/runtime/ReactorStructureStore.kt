@@ -97,6 +97,42 @@ class ReactorStructureStore(
         }
     }
 
+    fun exportCheckpoint(
+        structureId: ReactorStructureId,
+        blobStorage: NativeBlobStorage,
+        contentVersion: Long,
+    ): ReactorOperationResult {
+        if (contentVersion < 0) {
+            return rejected(ReactorOperationRejection.INVALID_CONTENT_VERSION, "contentVersion must be non-negative")
+        }
+        val record = activeRecord(structureId) ?: return inactiveOrMissing(structureId)
+        val binding = record.activeBinding() ?: return inactiveOrMissing(structureId)
+
+        val encoded = try {
+            nativeBridge.exportReactorCheckpoint(binding, contentVersion)
+        } catch (error: RuntimeException) {
+            return ReactorOperationResult.Failed("failed to export reactor checkpoint for structure ${structureId.value}: ${error.message}")
+        }
+
+        val stored = when (val result = blobStorage.store(reactorCheckpointStorageKey(structureId, contentVersion), encoded)) {
+            is NativeBlobStorageResult.Stored -> result
+            is NativeBlobStorageResult.Rejected -> {
+                return rejected(
+                    ReactorOperationRejection.SNAPSHOT_STORAGE_REJECTED,
+                    "failed to store reactor checkpoint for structure ${structureId.value}: ${result.message}",
+                )
+            }
+            is NativeBlobStorageResult.Loaded -> {
+                return ReactorOperationResult.Failed("native blob storage returned Loaded while storing reactor checkpoint")
+            }
+        }
+        if (stored.ref.kind != NativeBlobKind.ReactorSnapshot) {
+            return ReactorOperationResult.Failed("native checkpoint for structure ${structureId.value} is ${stored.ref.kind}, expected ${NativeBlobKind.ReactorSnapshot}")
+        }
+
+        return ReactorOperationResult.ReactorCheckpointExported(stored.ref)
+    }
+
     fun resumeFromCheckpoint(
         structureId: ReactorStructureId,
         blobStorage: NativeBlobStorage,

@@ -41,9 +41,13 @@ class ReactorCommandOutbox(
         return ReactorCommandOutboxResult.Enqueued(commands.size)
     }
 
-    fun drain(maxCommands: Int = limits.maxDrainBatch): List<ReactorCommand> {
+    fun drainableCount(maxCommands: Int = limits.maxDrainBatch): Int {
         require(maxCommands > 0) { "drain maxCommands must be positive" }
-        val count = minOf(maxCommands, limits.maxDrainBatch, commands.size)
+        return minOf(maxCommands, limits.maxDrainBatch, commands.size)
+    }
+
+    fun drain(maxCommands: Int = limits.maxDrainBatch): List<ReactorCommand> {
+        val count = drainableCount(maxCommands)
         return buildList(count) {
             repeat(count) {
                 add(commands.removeFirst())

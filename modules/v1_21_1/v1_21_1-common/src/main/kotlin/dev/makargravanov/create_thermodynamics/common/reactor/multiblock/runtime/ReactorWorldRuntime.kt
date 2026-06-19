@@ -36,6 +36,11 @@ sealed interface ReactorWorldRuntimeResult {
         val results: List<ReactorOperationResult>,
     ) : ReactorWorldRuntimeResult
 
+    data class CommandsSubmitted(
+        val commandCount: Int,
+        val reportCount: Int,
+    ) : ReactorWorldRuntimeResult
+
     data class CatalogUpdated(
         val catalog: ReactorCatalogRuntimeState,
     ) : ReactorWorldRuntimeResult
@@ -144,6 +149,41 @@ class ReactorWorldRuntime(
 
     fun drainCommands(maxCommands: Int): List<ReactorCommand> =
         commandOutbox.drain(maxCommands)
+
+    fun submitQueuedCommands(
+        nativeSession: ReactorNativeSession,
+        maxCommands: Int,
+    ): ReactorWorldRuntimeResult {
+        require(maxCommands > 0) { "maxCommands must be positive" }
+        val commandCount = commandOutbox.drainableCount(maxCommands)
+        if (commandCount == 0) {
+            return ReactorWorldRuntimeResult.CommandsSubmitted(commandCount = 0, reportCount = 0)
+        }
+        if (reportInbox.remainingCapacity < commandCount) {
+            return rejected(
+                ReactorWorldRuntimeRejection.QUEUE_FULL,
+                "reactor report queue cannot accept $commandCount command reports; remaining capacity is ${reportInbox.remainingCapacity}",
+            )
+        }
+
+        val commands = commandOutbox.drain(commandCount)
+        val reports = nativeSession.submit(commands)
+        for (report in reports) {
+            when (val result = reportInbox.enqueue(report)) {
+                is ReactorReportInboxResult.Enqueued -> Unit
+                is ReactorReportInboxResult.Rejected -> {
+                    return rejected(
+                        ReactorWorldRuntimeRejection.QUEUE_FULL,
+                        "reactor report queue rejected report ${report.reportId.value}: ${result.message}",
+                    )
+                }
+            }
+        }
+        return ReactorWorldRuntimeResult.CommandsSubmitted(
+            commandCount = commands.size,
+            reportCount = reports.size,
+        )
+    }
 
     private fun enqueueCommand(command: ReactorCommand): ReactorWorldRuntimeResult =
         when (val result = commandOutbox.enqueue(command)) {

@@ -1,5 +1,7 @@
 package dev.makargravanov.create_thermodynamics.common.reactor.multiblock.access
 
+import dev.makargravanov.create_thermodynamics.common.rust.blob.NativeBlobRef
+
 enum class ReactorOperationRejection {
     STRUCTURE_NOT_FOUND,
     STRUCTURE_NOT_ACTIVE,
@@ -34,6 +36,10 @@ sealed interface ReactorOperationResult {
 
     data class ReactorResumed(
         val message: String,
+    ) : ReactorOperationResult
+
+    data class ReactorCheckpointExported(
+        val checkpoint: NativeBlobRef,
     ) : ReactorOperationResult
 
     data class Rejected(
