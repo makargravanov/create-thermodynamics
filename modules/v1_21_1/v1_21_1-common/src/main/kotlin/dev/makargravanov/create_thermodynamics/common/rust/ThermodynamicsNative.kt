@@ -83,6 +83,9 @@ object ThermodynamicsNative {
     ): ByteArray =
         nativeExportReactorCheckpoint(reactorId.value, contentVersion)
 
+    fun createReactorFromCheckpoint(encoded: ByteArray): NativeReactorId =
+        NativeReactorId(nativeCreateReactorFromCheckpoint(encoded))
+
     @JvmStatic
     private external fun nativeIdealGasPressure(
         moles: Double,
@@ -146,4 +149,7 @@ object ThermodynamicsNative {
         reactorId: Long,
         contentVersion: Long,
     ): ByteArray
+
+    @JvmStatic
+    private external fun nativeCreateReactorFromCheckpoint(encoded: ByteArray): Long
 }

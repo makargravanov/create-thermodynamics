@@ -1,4 +1,4 @@
-use jni::objects::{JClass, JDoubleArray, JObject, JObjectArray, JString};
+use jni::objects::{JByteArray, JClass, JDoubleArray, JObject, JObjectArray, JString};
 use jni::sys::{jboolean, jbyteArray, jdouble, jint, jlong, jobjectArray, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 
@@ -26,7 +26,7 @@ pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust
     _: JNIEnv,
     _: JClass,
 ) -> jint {
-    5
+    6
 }
 
 #[no_mangle]
@@ -334,6 +334,35 @@ pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust
     }
 }
 
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeCreateReactorFromCheckpoint(
+    mut env: JNIEnv,
+    _: JClass,
+    encoded: JByteArray,
+) -> jlong {
+    let result = read_java_byte_array(&mut env, encoded)
+        .and_then(|bytes| chemistry::minecraft::chem_api::create_reactor_from_checkpoint(&bytes));
+    match result {
+        Ok(reactor_id) if reactor_id.0 <= jlong::MAX as u64 => reactor_id.0 as jlong,
+        Ok(reactor_id) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalStateException",
+                &format!("reactor id {} does not fit into Long", reactor_id.0),
+            );
+            -1
+        }
+        Err(error) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalArgumentException",
+                &error.to_string(),
+            );
+            -1
+        }
+    }
+}
+
 fn read_item_chemical_bindings_from_jvm(
     env: &mut JNIEnv,
     item_ids: JObjectArray,
@@ -387,6 +416,24 @@ fn read_java_string(env: &mut JNIEnv, value: JString) -> chemistry::ChemistryRes
     env.get_string(&value)
         .map(|value| value.into())
         .map_err(|error| jni_error_to_chemistry_error("String", error))
+}
+
+fn read_java_byte_array(
+    env: &mut JNIEnv,
+    value: JByteArray,
+) -> chemistry::ChemistryResult<Vec<u8>> {
+    let length = env
+        .get_array_length(&value)
+        .map_err(|error| jni_error_to_chemistry_error("byte array length", error))?;
+    if length <= 0 {
+        return Err(chemistry::ChemistryError::InvalidMixtureState(
+            "byte array must not be empty".to_string(),
+        ));
+    }
+    let mut bytes = vec![0_i8; length as usize];
+    env.get_byte_array_region(&value, 0, &mut bytes)
+        .map_err(|error| jni_error_to_chemistry_error("byte array", error))?;
+    Ok(bytes.into_iter().map(|byte| byte as u8).collect())
 }
 
 fn read_non_negative_count(name: &str, value: jint) -> chemistry::ChemistryResult<usize> {

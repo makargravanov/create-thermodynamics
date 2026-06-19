@@ -234,6 +234,17 @@ pub fn export_reactor_checkpoint(
     })
 }
 
+pub fn create_reactor_from_checkpoint(encoded: &[u8]) -> ChemistryResult<ReactorInstanceId> {
+    with_minecraft_chemistry_state_mut(|state| {
+        state.reactors_worker.register_reactor_from_checkpoint(
+            &state.chemistry_registry,
+            encoded,
+            STATIC_CATALOG_VERSION,
+            &NativeBlobLimits::default(),
+        )
+    })
+}
+
 fn minecraft_chemistry_state() -> ChemistryResult<&'static Mutex<MinecraftChemistryState>> {
     MINECRAFT_CHEMISTRY_STATE
         .get_or_init(|| MinecraftChemistryState::new().map(Mutex::new))

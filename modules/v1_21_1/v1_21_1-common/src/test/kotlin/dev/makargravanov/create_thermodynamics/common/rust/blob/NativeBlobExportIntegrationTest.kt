@@ -57,4 +57,27 @@ class NativeBlobExportIntegrationTest {
             ThermodynamicsNative.removeReactor(reactorId)
         }
     }
+
+    @Test
+    fun `reactor checkpoint can create a new native reactor`() {
+        val original = ThermodynamicsNative.createSingleZoneReactor(
+            volumeCubicMeters = 0.001,
+            itemInputCount = 1,
+            itemOutputCount = 1,
+            fluidInputCount = 0,
+            fluidOutputCount = 0,
+        )
+        var restored: ThermodynamicsNative.NativeReactorId? = null
+        try {
+            val bytes = ThermodynamicsNative.exportReactorCheckpoint(original, contentVersion = 2)
+            restored = ThermodynamicsNative.createReactorFromCheckpoint(bytes)
+
+            assertTrue(restored.value >= 0)
+            assertTrue(restored != original)
+            assertTrue(ThermodynamicsNative.reactorCount() >= 2)
+        } finally {
+            restored?.let(ThermodynamicsNative::removeReactor)
+            ThermodynamicsNative.removeReactor(original)
+        }
+    }
 }

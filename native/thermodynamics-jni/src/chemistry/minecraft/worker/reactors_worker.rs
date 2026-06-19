@@ -5,7 +5,8 @@ use crate::chemistry::minecraft::mregistry::item_to_substance::MinecraftId;
 use crate::chemistry::minecraft::mregistry::mregistry::MinecraftChemicalRegistry;
 use crate::chemistry::minecraft::protocol::blob::NativeBlobLimits;
 use crate::chemistry::minecraft::protocol::reactor_snapshot::{
-    export_reactor_checkpoint, OutputBufferSnapshot, OutputBufferSubstanceSnapshot,
+    export_reactor_checkpoint, read_reactor_checkpoint, OutputBufferSnapshot,
+    OutputBufferSubstanceSnapshot,
 };
 use crate::chemistry::reactor::io;
 use crate::chemistry::reactor::{Reactor, TransitionMode};
@@ -82,7 +83,7 @@ impl ReactorsWorker {
     pub fn register_reactor(&mut self, reactor: Reactor) -> ReactorInstanceId {
         let id = ReactorInstanceId(self.next_reactor_id);
         self.next_reactor_id += 1;
-        self.reactors.insert(
+        self.register_runtime(
             id,
             ReactorRuntime {
                 reactor,
@@ -90,6 +91,30 @@ impl ReactorsWorker {
             },
         );
         id
+    }
+
+    pub fn register_reactor_from_checkpoint(
+        &mut self,
+        registry: &ChemistryRegistry,
+        encoded: &[u8],
+        expected_catalog_version: &str,
+        limits: &NativeBlobLimits,
+    ) -> ChemistryResult<ReactorInstanceId> {
+        let snapshot =
+            read_reactor_checkpoint(encoded, expected_catalog_version, registry, limits)?;
+        let reactor = snapshot.restore_reactor(registry)?;
+        let output_buffers_mol_per_bucket =
+            output_buffers_from_snapshots(registry, &snapshot.output_buffers)?;
+        let id = ReactorInstanceId(self.next_reactor_id);
+        self.next_reactor_id += 1;
+        self.register_runtime(
+            id,
+            ReactorRuntime {
+                reactor,
+                output_buffers_mol_per_bucket,
+            },
+        );
+        Ok(id)
     }
 
     pub fn remove_reactor(&mut self, reactor_id: ReactorInstanceId) -> ChemistryResult<Reactor> {
@@ -337,6 +362,15 @@ impl ReactorsWorker {
             .get_mut(&reactor_id)
             .ok_or_else(|| unknown_reactor_error(reactor_id))
     }
+
+    fn register_runtime(&mut self, id: ReactorInstanceId, runtime: ReactorRuntime) {
+        let previous = self.reactors.insert(id, runtime);
+        debug_assert!(
+            previous.is_none(),
+            "reactor instance id {} was allocated twice",
+            id.0
+        );
+    }
 }
 
 fn output_buffer_snapshots(
@@ -359,6 +393,36 @@ fn output_buffer_snapshots(
         .collect()
 }
 
+fn output_buffers_from_snapshots(
+    registry: &ChemistryRegistry,
+    snapshots: &[OutputBufferSnapshot],
+) -> ChemistryResult<BTreeMap<usize, BTreeMap<SubstanceId, f64>>> {
+    let mut buffers = BTreeMap::new();
+    for snapshot in snapshots {
+        if buffers.contains_key(&snapshot.output_index) {
+            return Err(ChemistryError::InvalidMixtureState(format!(
+                "reactor checkpoint contains duplicate output buffer {}",
+                snapshot.output_index
+            )));
+        }
+        let buffer = buffers
+            .entry(snapshot.output_index)
+            .or_insert_with(BTreeMap::new);
+        for substance in &snapshot.substances {
+            registry.substance(&substance.substance_id)?;
+            validate_non_negative_finite("output buffer amount", substance.mol_per_bucket)?;
+            let previous = buffer.insert(substance.substance_id.clone(), substance.mol_per_bucket);
+            if previous.is_some() {
+                return Err(ChemistryError::InvalidMixtureState(format!(
+                    "output buffer {} contains duplicate substance '{}'",
+                    snapshot.output_index, substance.substance_id
+                )));
+            }
+        }
+    }
+    Ok(buffers)
+}
+
 fn input_accepts_substance(mode: &TransitionMode, substance_id: &SubstanceId) -> bool {
     match mode {
         TransitionMode::Substances { entries }
@@ -376,6 +440,16 @@ fn validate_positive_finite(name: &str, value: f64) -> ChemistryResult<()> {
     } else {
         Err(ChemistryError::InvalidMixtureState(format!(
             "{name} must be positive and finite, got {value}"
+        )))
+    }
+}
+
+fn validate_non_negative_finite(name: &str, value: f64) -> ChemistryResult<()> {
+    if value.is_finite() && value >= 0.0 {
+        Ok(())
+    } else {
+        Err(ChemistryError::InvalidMixtureState(format!(
+            "{name} must be non-negative and finite, got {value}"
         )))
     }
 }
@@ -567,6 +641,44 @@ mod tests {
         assert_eq!(small_cells.items_extracted, 2);
         assert!((small_cells.mol_consumed - 0.5).abs() < 1.0e-9);
         assert!((small_cells.mol_remaining_in_buffer - 0.1).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn reactor_checkpoint_restores_reactor_and_output_buffers() {
+        let registry = registry();
+        let minecraft_registry = minecraft_registry(&registry);
+        let limits = NativeBlobLimits::default();
+        let mut worker = ReactorsWorker::new();
+        let reactor_id = worker.register_reactor(reactor_with_water_input_output());
+        worker
+            .insert_item_stack_to_input(
+                &registry,
+                &minecraft_registry,
+                reactor_id,
+                0,
+                "minecraft:water_bucket",
+                1,
+            )
+            .unwrap();
+        worker
+            .drain_output_to_buffer(&registry, reactor_id, 0, 0.5)
+            .unwrap();
+
+        let encoded = worker
+            .export_reactor_checkpoint(&registry, reactor_id, "test-catalog", 7, &limits)
+            .unwrap();
+        let restored_id = worker
+            .register_reactor_from_checkpoint(&registry, &encoded, "test-catalog", &limits)
+            .unwrap();
+
+        let concentration = worker
+            .reactor(restored_id)
+            .unwrap()
+            .zone(&ZoneId(0))
+            .unwrap()
+            .concentration_of(&water_id());
+        assert!((concentration - 0.7).abs() < 1.0e-9);
+        assert!((worker.buffered_mol(restored_id, 0, &water_id()).unwrap() - 0.3).abs() < 1.0e-9);
     }
 
     #[test]
