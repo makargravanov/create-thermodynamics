@@ -13,3 +13,5 @@ harness = false
 
 [dependencies]
 jni = "0.21"
+sha2 = "0.10"
+zstd = "0.13"
