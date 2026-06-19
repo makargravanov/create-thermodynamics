@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "chemistry/10-generalized-reachability-closure-plan.md",
+                "file": "11-reactor-runtime-protocol-plan.md",
                 "mode": "preview",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "10-generalized-reachability-closure-plan"
+              "title": "11-reactor-runtime-protocol-plan"
             }
           }
         ]
@@ -183,11 +183,12 @@
       "bases:Создать новую базу": false
     }
   },
-  "active": "bbd4f6343fb3fef4",
+  "active": "f3ef191ded25ae4b",
   "lastOpenFiles": [
+    "chemistry/10-generalized-reachability-closure-plan.md",
+    "11-reactor-runtime-protocol-plan.md",
     "chemistry/Без названия",
     "chemistry/09-complete-organic-synthesis-implementation-plan.md",
-    "chemistry/10-generalized-reachability-closure-plan.md",
     "chemistry/08-generalized-organic-synthesis-plan.md",
     "chemistry/files/organic-aromatic-catalog.md",
     "chemistry/files/core-error.md",
