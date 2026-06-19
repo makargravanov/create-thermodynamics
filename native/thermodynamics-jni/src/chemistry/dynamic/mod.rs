@@ -320,6 +320,38 @@ impl DynamicChemistryRegistry {
             .chain(self.dynamic_reactions.iter())
     }
 
+    pub fn dynamic_substances(&self) -> impl Iterator<Item = &Substance> {
+        self.dynamic_substances.iter()
+    }
+
+    pub fn dynamic_reactions(&self) -> impl Iterator<Item = &Reaction> {
+        self.dynamic_reactions.iter()
+    }
+
+    pub fn dynamic_acid_base_spec_count(&self) -> usize {
+        self.dynamic_acid_base_specs.len()
+    }
+
+    pub fn dynamic_precipitation_spec_count(&self) -> usize {
+        self.dynamic_precipitation_specs.len()
+    }
+
+    pub fn dynamic_complex_spec_count(&self) -> usize {
+        self.dynamic_complex_specs.len()
+    }
+
+    pub fn canonical_code_for(&self, id: &SubstanceId) -> Option<&str> {
+        self.canonical_by_id.get(id).map(String::as_str)
+    }
+
+    pub fn processed_generation_key_count(&self) -> usize {
+        self.processed_generation_masks.len()
+    }
+
+    pub fn processed_substance_generation_key_count(&self) -> usize {
+        self.processed_substance_generation_masks.len()
+    }
+
     pub fn validate_substance_can_enter_mixture(
         &self,
         substance_id: &SubstanceId,
