@@ -1,5 +1,5 @@
 use jni::objects::{JClass, JDoubleArray, JObject, JObjectArray, JString};
-use jni::sys::{jboolean, jdouble, jint, jlong, jobjectArray, JNI_FALSE, JNI_TRUE};
+use jni::sys::{jboolean, jbyteArray, jdouble, jint, jlong, jobjectArray, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 
 pub mod chemistry;
@@ -26,7 +26,7 @@ pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust
     _: JNIEnv,
     _: JClass,
 ) -> jint {
-    4
+    5
 }
 
 #[no_mangle]
@@ -281,6 +281,59 @@ pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust
     }
 }
 
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeExportCatalogCheckpoint(
+    mut env: JNIEnv,
+    _: JClass,
+    content_version: jlong,
+) -> jbyteArray {
+    let result = read_non_negative_u64("contentVersion", content_version)
+        .and_then(chemistry::minecraft::chem_api::export_catalog_checkpoint)
+        .and_then(|bytes| java_byte_array(&mut env, &bytes));
+    match result {
+        Ok(array) => array,
+        Err(error) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalArgumentException",
+                &error.to_string(),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeExportReactorCheckpoint(
+    mut env: JNIEnv,
+    _: JClass,
+    reactor_id: jlong,
+    content_version: jlong,
+) -> jbyteArray {
+    let result = read_reactor_id(reactor_id)
+        .and_then(|reactor_id| {
+            Ok((
+                reactor_id,
+                read_non_negative_u64("contentVersion", content_version)?,
+            ))
+        })
+        .and_then(|(reactor_id, content_version)| {
+            chemistry::minecraft::chem_api::export_reactor_checkpoint(reactor_id, content_version)
+        })
+        .and_then(|bytes| java_byte_array(&mut env, &bytes));
+    match result {
+        Ok(array) => array,
+        Err(error) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalArgumentException",
+                &error.to_string(),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
 fn read_item_chemical_bindings_from_jvm(
     env: &mut JNIEnv,
     item_ids: JObjectArray,
@@ -365,6 +418,15 @@ fn read_reactor_id(
     Ok(chemistry::minecraft::worker::reactors_worker::ReactorInstanceId(reactor_id as u64))
 }
 
+fn read_non_negative_u64(name: &str, value: jlong) -> chemistry::ChemistryResult<u64> {
+    if value < 0 {
+        return Err(chemistry::ChemistryError::InvalidMixtureState(format!(
+            "{name} must be non-negative, got {value}"
+        )));
+    }
+    Ok(value as u64)
+}
+
 fn jni_error_to_chemistry_error(
     context: &str,
     error: jni::errors::Error,
@@ -396,6 +458,12 @@ fn java_string_array(
             .map_err(|error| jni_error_to_chemistry_error("String array", error))?;
     }
     Ok(array.into_raw())
+}
+
+fn java_byte_array(env: &mut JNIEnv, values: &[u8]) -> chemistry::ChemistryResult<jbyteArray> {
+    env.byte_array_from_slice(values)
+        .map(|array| array.into_raw())
+        .map_err(|error| jni_error_to_chemistry_error("byte array", error))
 }
 
 #[cfg(test)]

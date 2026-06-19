@@ -74,6 +74,15 @@ object ThermodynamicsNative {
     ): Double =
         nativeInsertItemStackToReactorInput(reactorId.value, inputIndex, itemId, itemCount)
 
+    fun exportCatalogCheckpoint(contentVersion: Long): ByteArray =
+        nativeExportCatalogCheckpoint(contentVersion)
+
+    fun exportReactorCheckpoint(
+        reactorId: NativeReactorId,
+        contentVersion: Long,
+    ): ByteArray =
+        nativeExportReactorCheckpoint(reactorId.value, contentVersion)
+
     @JvmStatic
     private external fun nativeIdealGasPressure(
         moles: Double,
@@ -128,4 +137,13 @@ object ThermodynamicsNative {
         itemId: String,
         itemCount: Int,
     ): Double
+
+    @JvmStatic
+    private external fun nativeExportCatalogCheckpoint(contentVersion: Long): ByteArray
+
+    @JvmStatic
+    private external fun nativeExportReactorCheckpoint(
+        reactorId: Long,
+        contentVersion: Long,
+    ): ByteArray
 }

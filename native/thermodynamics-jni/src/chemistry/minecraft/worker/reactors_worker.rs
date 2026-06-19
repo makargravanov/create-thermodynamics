@@ -3,6 +3,10 @@ use std::collections::BTreeMap;
 use crate::chemistry::error::{ChemistryError, ChemistryResult};
 use crate::chemistry::minecraft::mregistry::item_to_substance::MinecraftId;
 use crate::chemistry::minecraft::mregistry::mregistry::MinecraftChemicalRegistry;
+use crate::chemistry::minecraft::protocol::blob::NativeBlobLimits;
+use crate::chemistry::minecraft::protocol::reactor_snapshot::{
+    export_reactor_checkpoint, OutputBufferSnapshot, OutputBufferSubstanceSnapshot,
+};
 use crate::chemistry::reactor::io;
 use crate::chemistry::reactor::{Reactor, TransitionMode};
 use crate::chemistry::registry::ChemistryRegistry;
@@ -300,6 +304,25 @@ impl ReactorsWorker {
             .unwrap_or(0.0))
     }
 
+    pub fn export_reactor_checkpoint(
+        &self,
+        registry: &ChemistryRegistry,
+        reactor_id: ReactorInstanceId,
+        catalog_version: &str,
+        content_version: u64,
+        limits: &NativeBlobLimits,
+    ) -> ChemistryResult<Vec<u8>> {
+        let runtime = self.runtime(reactor_id)?;
+        export_reactor_checkpoint(
+            registry,
+            &runtime.reactor,
+            catalog_version,
+            content_version,
+            output_buffer_snapshots(&runtime.output_buffers_mol_per_bucket),
+            limits,
+        )
+    }
+
     fn runtime(&self, reactor_id: ReactorInstanceId) -> ChemistryResult<&ReactorRuntime> {
         self.reactors
             .get(&reactor_id)
@@ -314,6 +337,26 @@ impl ReactorsWorker {
             .get_mut(&reactor_id)
             .ok_or_else(|| unknown_reactor_error(reactor_id))
     }
+}
+
+fn output_buffer_snapshots(
+    buffers: &BTreeMap<usize, BTreeMap<SubstanceId, f64>>,
+) -> Vec<OutputBufferSnapshot> {
+    buffers
+        .iter()
+        .map(|(output_index, substances)| OutputBufferSnapshot {
+            output_index: *output_index,
+            substances: substances
+                .iter()
+                .map(
+                    |(substance_id, mol_per_bucket)| OutputBufferSubstanceSnapshot {
+                        substance_id: substance_id.clone(),
+                        mol_per_bucket: *mol_per_bucket,
+                    },
+                )
+                .collect(),
+        })
+        .collect()
 }
 
 fn input_accepts_substance(mode: &TransitionMode, substance_id: &SubstanceId) -> bool {

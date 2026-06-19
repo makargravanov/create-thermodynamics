@@ -1,16 +1,20 @@
 use std::sync::{Mutex, OnceLock};
 
+use crate::chemistry::dynamic::DynamicChemistryRegistry;
 use crate::chemistry::error::{ChemistryError, ChemistryResult};
 use crate::chemistry::minecraft::mregistry::item_to_substance::MinecraftId;
 use crate::chemistry::minecraft::mregistry::mregistry::{
     MinecraftChemicalRegistry, RegistrationError,
 };
+use crate::chemistry::minecraft::protocol::blob::NativeBlobLimits;
+use crate::chemistry::minecraft::protocol::catalog_snapshot::export_dynamic_catalog_checkpoint;
 use crate::chemistry::minecraft::worker::reactors_worker::{ReactorInstanceId, ReactorsWorker};
 use crate::chemistry::reactor::{Input, Output, Reactor, ReactorZone, TransitionMode};
 use crate::chemistry::registry::ChemistryRegistry;
 use crate::chemistry::substance::SubstanceId;
 
 const DEFAULT_MULTIBLOCK_OUTPUT_RATE_MOL_PER_SECOND: f64 = 1.0;
+const STATIC_CATALOG_VERSION: &str = "create-thermodynamics:destroy-static-catalog:1";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemChemicalBinding {
@@ -199,6 +203,34 @@ pub fn insert_item_stack_to_reactor_input(
             item_count,
         )?;
         Ok(report.mol_inserted)
+    })
+}
+
+pub fn export_catalog_checkpoint(content_version: u64) -> ChemistryResult<Vec<u8>> {
+    with_minecraft_chemistry_state(|state| {
+        let dynamic_registry =
+            DynamicChemistryRegistry::from_registry(state.chemistry_registry.clone())?;
+        export_dynamic_catalog_checkpoint(
+            &dynamic_registry,
+            STATIC_CATALOG_VERSION,
+            content_version,
+            &NativeBlobLimits::default(),
+        )
+    })
+}
+
+pub fn export_reactor_checkpoint(
+    reactor_id: ReactorInstanceId,
+    content_version: u64,
+) -> ChemistryResult<Vec<u8>> {
+    with_minecraft_chemistry_state(|state| {
+        state.reactors_worker.export_reactor_checkpoint(
+            &state.chemistry_registry,
+            reactor_id,
+            STATIC_CATALOG_VERSION,
+            content_version,
+            &NativeBlobLimits::default(),
+        )
     })
 }
 
