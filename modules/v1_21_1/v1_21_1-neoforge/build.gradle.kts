@@ -11,6 +11,7 @@ fun modProperty(name: String): String =
     requireNotNull(modProperties[name]?.toString()) { "Missing '$name' in mod properties" }
 
 dependencies {
+    implementation(project(":modules:ui"))
     implementation(project(":modules:v1_21_1:v1_21_1-common"))
 
     implementation("com.simibubi.create:create-${modProperty("minecraft_version")}:${modProperty("create_version")}:slim") {
