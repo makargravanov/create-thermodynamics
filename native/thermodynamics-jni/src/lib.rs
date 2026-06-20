@@ -1,5 +1,5 @@
 use jni::objects::{JByteArray, JClass, JDoubleArray, JObject, JObjectArray, JString};
-use jni::sys::{jboolean, jbyteArray, jdouble, jint, jlong, jobjectArray, JNI_FALSE, JNI_TRUE};
+use jni::sys::{jboolean, jbyteArray, jdouble, jdoubleArray, jint, jlong, jobjectArray, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 
 pub mod chemistry;
@@ -26,7 +26,7 @@ pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust
     _: JNIEnv,
     _: JClass,
 ) -> jint {
-    6
+    7
 }
 
 #[no_mangle]
@@ -239,6 +239,144 @@ pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust
             "java/lang/IllegalArgumentException",
             &error.to_string(),
         );
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeReactorZoneTemperatureKelvin(
+    mut env: JNIEnv,
+    _: JClass,
+    reactor_id: jlong,
+    zone_index: jint,
+) -> jdouble {
+    let result = read_reactor_id(reactor_id)
+        .and_then(|reactor_id| {
+            Ok((
+                reactor_id,
+                read_non_negative_count("zoneIndex", zone_index)?,
+            ))
+        })
+        .and_then(|(reactor_id, zone_index)| {
+            chemistry::minecraft::chem_api::reactor_zone_snapshot(reactor_id, zone_index)
+        })
+        .map(|snapshot| snapshot.temperature_kelvin);
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalArgumentException",
+                &error.to_string(),
+            );
+            f64::NAN
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeReactorZonePressurePascal(
+    mut env: JNIEnv,
+    _: JClass,
+    reactor_id: jlong,
+    zone_index: jint,
+) -> jdouble {
+    let result = read_reactor_id(reactor_id)
+        .and_then(|reactor_id| {
+            Ok((
+                reactor_id,
+                read_non_negative_count("zoneIndex", zone_index)?,
+            ))
+        })
+        .and_then(|(reactor_id, zone_index)| {
+            chemistry::minecraft::chem_api::reactor_zone_snapshot(reactor_id, zone_index)
+        })
+        .map(|snapshot| snapshot.pressure_pascal);
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalArgumentException",
+                &error.to_string(),
+            );
+            f64::NAN
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeReactorZoneSubstanceIds(
+    mut env: JNIEnv,
+    _: JClass,
+    reactor_id: jlong,
+    zone_index: jint,
+) -> jobjectArray {
+    let result = read_reactor_id(reactor_id)
+        .and_then(|reactor_id| {
+            Ok((
+                reactor_id,
+                read_non_negative_count("zoneIndex", zone_index)?,
+            ))
+        })
+        .and_then(|(reactor_id, zone_index)| {
+            chemistry::minecraft::chem_api::reactor_zone_snapshot(reactor_id, zone_index)
+        })
+        .and_then(|snapshot| {
+            let ids = snapshot
+                .substances
+                .into_iter()
+                .map(|entry| entry.substance_id.as_str().to_string())
+                .collect::<Vec<_>>();
+            java_string_array(&mut env, &ids)
+        });
+    match result {
+        Ok(array) => array,
+        Err(error) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalArgumentException",
+                &error.to_string(),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_makargravanov_create_1thermodynamics_common_rust_ThermodynamicsNative_nativeReactorZoneConcentrationsMolPerBucket(
+    mut env: JNIEnv,
+    _: JClass,
+    reactor_id: jlong,
+    zone_index: jint,
+) -> jdoubleArray {
+    let result = read_reactor_id(reactor_id)
+        .and_then(|reactor_id| {
+            Ok((
+                reactor_id,
+                read_non_negative_count("zoneIndex", zone_index)?,
+            ))
+        })
+        .and_then(|(reactor_id, zone_index)| {
+            chemistry::minecraft::chem_api::reactor_zone_snapshot(reactor_id, zone_index)
+        })
+        .and_then(|snapshot| {
+            let values = snapshot
+                .substances
+                .into_iter()
+                .map(|entry| entry.concentration_mol_per_bucket)
+                .collect::<Vec<_>>();
+            java_double_array(&mut env, &values)
+        });
+    match result {
+        Ok(array) => array,
+        Err(error) => {
+            throw_java_exception(
+                &mut env,
+                "java/lang/IllegalArgumentException",
+                &error.to_string(),
+            );
+            std::ptr::null_mut()
+        }
     }
 }
 
@@ -577,6 +715,15 @@ fn java_byte_array(env: &mut JNIEnv, values: &[u8]) -> chemistry::ChemistryResul
     env.byte_array_from_slice(values)
         .map(|array| array.into_raw())
         .map_err(|error| jni_error_to_chemistry_error("byte array", error))
+}
+
+fn java_double_array(env: &mut JNIEnv, values: &[f64]) -> chemistry::ChemistryResult<jdoubleArray> {
+    let array = env
+        .new_double_array(values.len() as jint)
+        .map_err(|error| jni_error_to_chemistry_error("double array", error))?;
+    env.set_double_array_region(&array, 0, values)
+        .map_err(|error| jni_error_to_chemistry_error("double array", error))?;
+    Ok(array.into_raw())
 }
 
 fn read_byte_array(env: &mut JNIEnv, array: JByteArray) -> chemistry::ChemistryResult<Vec<u8>> {

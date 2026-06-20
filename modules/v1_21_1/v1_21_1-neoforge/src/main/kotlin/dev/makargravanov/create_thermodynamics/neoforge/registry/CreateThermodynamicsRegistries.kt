@@ -5,6 +5,7 @@ import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockB
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockBlockEntity
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockKind
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorControllerMenu
+import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorPortMenu
 import net.minecraft.core.registries.Registries
 import net.minecraft.network.chat.Component
 import net.minecraft.world.flag.FeatureFlags
@@ -18,6 +19,7 @@ import net.minecraft.world.level.block.entity.BlockEntityType
 import net.minecraft.world.level.block.SoundType
 import net.minecraft.world.level.block.state.BlockBehaviour
 import net.minecraft.world.level.material.MapColor
+import net.neoforged.neoforge.common.extensions.IMenuTypeExtension
 import net.neoforged.bus.api.IEventBus
 import net.neoforged.neoforge.registries.DeferredHolder
 import net.neoforged.neoforge.registries.DeferredRegister
@@ -64,7 +66,17 @@ object CreateThermodynamicsRegistries {
         menuTypes.register(
             "reactor_controller",
             Supplier {
-                MenuType({ containerId, _ -> ReactorControllerMenu(containerId) }, FeatureFlags.DEFAULT_FLAGS)
+                IMenuTypeExtension.create { containerId, playerInventory, extraData ->
+                    ReactorControllerMenu(containerId, playerInventory, extraData)
+                }
+            },
+        )
+
+    val reactorPortMenu: DeferredHolder<MenuType<*>, MenuType<ReactorPortMenu>> =
+        menuTypes.register(
+            "reactor_port",
+            Supplier {
+                MenuType({ containerId, playerInventory -> ReactorPortMenu(containerId, playerInventory) }, FeatureFlags.DEFAULT_FLAGS)
             },
         )
 

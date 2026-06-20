@@ -1,5 +1,7 @@
 package dev.makargravanov.create_thermodynamics.neoforge.block
 
+import com.simibubi.create.foundation.block.IBE
+import dev.makargravanov.create_thermodynamics.neoforge.registry.CreateThermodynamicsRegistries
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.server.level.ServerLevel
@@ -10,7 +12,7 @@ import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.context.BlockPlaceContext
 import net.minecraft.world.level.Level
 import net.minecraft.world.level.block.Block
-import net.minecraft.world.level.block.EntityBlock
+import net.minecraft.world.level.block.entity.BlockEntityType
 import net.minecraft.world.level.block.entity.BlockEntity
 import net.minecraft.world.level.block.state.BlockBehaviour
 import net.minecraft.world.level.block.state.BlockState
@@ -18,17 +20,24 @@ import net.minecraft.world.level.block.state.StateDefinition
 import net.minecraft.world.level.block.state.properties.BlockStateProperties
 import net.minecraft.world.level.block.state.properties.DirectionProperty
 import net.minecraft.world.phys.BlockHitResult
+import net.neoforged.neoforge.common.extensions.IPlayerExtension
 
 class ReactorMultiblockBlock(
     properties: BlockBehaviour.Properties,
     val kind: ReactorMultiblockKind,
-) : Block(properties), EntityBlock {
+) : Block(properties), IBE<ReactorMultiblockBlockEntity> {
     init {
         registerDefaultState(stateDefinition.any().setValue(FACING, Direction.NORTH))
     }
 
     override fun newBlockEntity(pos: BlockPos, state: BlockState): BlockEntity =
         ReactorMultiblockBlockEntity(pos, state)
+
+    override fun getBlockEntityClass(): Class<ReactorMultiblockBlockEntity> =
+        ReactorMultiblockBlockEntity::class.java
+
+    override fun getBlockEntityType(): BlockEntityType<out ReactorMultiblockBlockEntity> =
+        CreateThermodynamicsRegistries.reactorMultiblockBlockEntity.get()
 
     override fun getStateForPlacement(context: BlockPlaceContext): BlockState =
         defaultBlockState().setValue(FACING, if (kind.hasFacing) context.clickedFace else Direction.NORTH)
@@ -49,7 +58,7 @@ class ReactorMultiblockBlock(
         if (!level.isClientSide) {
             val blockEntity = level.getBlockEntity(pos) as? ReactorMultiblockBlockEntity
                 ?: error("reactor port at $pos must have ReactorMultiblockBlockEntity")
-            player.openMenu(blockEntity)
+            (player as IPlayerExtension).openMenu(blockEntity, pos)
         }
         return InteractionResult.sidedSuccess(level.isClientSide)
     }
@@ -69,13 +78,13 @@ class ReactorMultiblockBlock(
     }
 
     override fun onRemove(state: BlockState, level: Level, pos: BlockPos, newState: BlockState, movedByPiston: Boolean) {
-        super.onRemove(state, level, pos, newState, movedByPiston)
         if (level is ServerLevel && state.block != newState.block) {
             ReactorMultiblockWorldAssembler.clearMembership(level, pos)
             for (direction in Direction.entries) {
                 ReactorMultiblockWorldAssembler.rebuildAround(level, pos.relative(direction))
             }
         }
+        IBE.onRemove(state, level, pos, newState)
     }
 
     override fun neighborChanged(

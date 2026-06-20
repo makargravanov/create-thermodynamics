@@ -73,6 +73,25 @@ object ReactorMultiblockNativeBridge : NativeReactorBridge {
         ThermodynamicsNative.tickReactor(binding.nativeReactorId, dtSeconds)
     }
 
+    override fun readZoneMetrics(
+        binding: NativeReactorMultiblockBinding,
+        zoneIndex: Int,
+        simulatedSeconds: Double,
+    ): ReactorTickMetrics {
+        val snapshot = ThermodynamicsNative.reactorZoneSnapshot(binding.nativeReactorId, zoneIndex)
+        return ReactorTickMetrics(
+            simulatedSeconds = simulatedSeconds,
+            temperatureKelvin = snapshot.temperatureKelvin,
+            pressurePascal = snapshot.pressurePascal,
+            substances = snapshot.substances.map { substance ->
+                ReactorMixtureSubstanceMetric(
+                    substanceId = substance.substanceId,
+                    concentrationMolPerBucket = substance.concentrationMolPerBucket,
+                )
+            },
+        )
+    }
+
     override fun insertItemStack(
         binding: NativeReactorMultiblockBinding,
         itemInputPort: ReactorPortDescriptor,

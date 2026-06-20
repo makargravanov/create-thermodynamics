@@ -10,6 +10,33 @@ object ThermodynamicsNative {
     @JvmInline
     value class NativeReactorId(val value: Long)
 
+    data class NativeReactorZoneSubstanceSnapshot(
+        val substanceId: String,
+        val concentrationMolPerBucket: Double,
+    ) {
+        init {
+            require(substanceId.isNotBlank()) { "substanceId must not be blank" }
+            require(concentrationMolPerBucket.isFinite() && concentrationMolPerBucket >= 0.0) {
+                "concentrationMolPerBucket must be non-negative and finite"
+            }
+        }
+    }
+
+    data class NativeReactorZoneSnapshot(
+        val temperatureKelvin: Double,
+        val pressurePascal: Double,
+        val substances: List<NativeReactorZoneSubstanceSnapshot>,
+    ) {
+        init {
+            require(temperatureKelvin.isFinite() && temperatureKelvin >= 0.0) {
+                "temperatureKelvin must be non-negative and finite"
+            }
+            require(pressurePascal.isFinite() && pressurePascal >= 0.0) {
+                "pressurePascal must be non-negative and finite"
+            }
+        }
+    }
+
     fun idealGasPressure(moles: Double, temperatureKelvin: Double, volumeCubicMeters: Double): Double =
         nativeIdealGasPressure(moles, temperatureKelvin, volumeCubicMeters)
 
@@ -64,6 +91,28 @@ object ThermodynamicsNative {
 
     fun tickReactor(reactorId: NativeReactorId, dtSeconds: Double) {
         nativeTickReactor(reactorId.value, dtSeconds)
+    }
+
+    fun reactorZoneSnapshot(
+        reactorId: NativeReactorId,
+        zoneIndex: Int,
+    ): NativeReactorZoneSnapshot {
+        require(zoneIndex >= 0) { "zoneIndex must be non-negative" }
+        val substanceIds = nativeReactorZoneSubstanceIds(reactorId.value, zoneIndex)
+        val concentrations = nativeReactorZoneConcentrationsMolPerBucket(reactorId.value, zoneIndex)
+        require(substanceIds.size == concentrations.size) {
+            "native reactor zone snapshot returned ${substanceIds.size} substance ids and ${concentrations.size} concentrations"
+        }
+        return NativeReactorZoneSnapshot(
+            temperatureKelvin = nativeReactorZoneTemperatureKelvin(reactorId.value, zoneIndex),
+            pressurePascal = nativeReactorZonePressurePascal(reactorId.value, zoneIndex),
+            substances = substanceIds.indices.map { index ->
+                NativeReactorZoneSubstanceSnapshot(
+                    substanceId = substanceIds[index],
+                    concentrationMolPerBucket = concentrations[index],
+                )
+            },
+        )
     }
 
     fun insertItemStackToReactorInput(
@@ -151,6 +200,18 @@ object ThermodynamicsNative {
 
     @JvmStatic
     private external fun nativeTickReactor(reactorId: Long, dtSeconds: Double)
+
+    @JvmStatic
+    private external fun nativeReactorZoneTemperatureKelvin(reactorId: Long, zoneIndex: Int): Double
+
+    @JvmStatic
+    private external fun nativeReactorZonePressurePascal(reactorId: Long, zoneIndex: Int): Double
+
+    @JvmStatic
+    private external fun nativeReactorZoneSubstanceIds(reactorId: Long, zoneIndex: Int): Array<String>
+
+    @JvmStatic
+    private external fun nativeReactorZoneConcentrationsMolPerBucket(reactorId: Long, zoneIndex: Int): DoubleArray
 
     @JvmStatic
     private external fun nativeInsertItemStackToReactorInput(

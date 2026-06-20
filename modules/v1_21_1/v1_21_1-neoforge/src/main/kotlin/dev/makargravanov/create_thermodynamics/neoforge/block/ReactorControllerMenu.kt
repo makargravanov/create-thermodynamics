@@ -3,6 +3,9 @@ package dev.makargravanov.create_thermodynamics.neoforge.block
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorControllerFormationState
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorControllerViewState
 import dev.makargravanov.create_thermodynamics.neoforge.registry.CreateThermodynamicsRegistries
+import net.minecraft.core.BlockPos
+import net.minecraft.network.RegistryFriendlyByteBuf
+import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.inventory.AbstractContainerMenu
 import net.minecraft.world.inventory.ContainerData
@@ -11,9 +14,24 @@ import net.minecraft.world.item.ItemStack
 
 class ReactorControllerMenu(
     containerId: Int,
+    @Suppress("UNUSED_PARAMETER")
+    playerInventory: Inventory? = null,
     private val blockEntity: ReactorMultiblockBlockEntity? = null,
     private val data: ContainerData = blockEntity?.controllerMenuData() ?: SimpleContainerData(DataSlotCount),
+    val controllerPos: BlockPos? = blockEntity?.blockPos,
 ) : AbstractContainerMenu(CreateThermodynamicsRegistries.reactorControllerMenu.get(), containerId) {
+    constructor(
+        containerId: Int,
+        playerInventory: Inventory,
+        extraData: RegistryFriendlyByteBuf?,
+    ) : this(
+        containerId = containerId,
+        playerInventory = playerInventory,
+        blockEntity = null,
+        data = SimpleContainerData(DataSlotCount),
+        controllerPos = extraData?.readBlockPos(),
+    )
+
     val state: ReactorControllerViewState
         get() {
             val localState = blockEntity?.controllerScreenState()

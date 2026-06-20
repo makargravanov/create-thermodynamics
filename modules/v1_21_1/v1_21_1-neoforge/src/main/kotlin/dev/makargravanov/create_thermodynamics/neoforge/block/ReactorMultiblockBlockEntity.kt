@@ -1,19 +1,24 @@
 package dev.makargravanov.create_thermodynamics.neoforge.block
 
-import com.simibubi.create.content.logistics.filter.FilterItemStack
+import com.simibubi.create.foundation.blockEntity.SmartBlockEntity
+import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour
+import com.simibubi.create.foundation.blockEntity.behaviour.CenteredSideValueBoxTransform
+import com.simibubi.create.foundation.blockEntity.behaviour.filtering.FilteringBehaviour
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.runtime.ReactorTickMetrics
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.model.ReactorStructureId
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorBlockMembership
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorControllerFormationState
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorControllerViewState
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorMixtureViewEntry
 import dev.makargravanov.create_thermodynamics.neoforge.registry.CreateThermodynamicsRegistries
 import net.minecraft.core.BlockPos
 import net.minecraft.core.HolderLookup
 import net.minecraft.core.NonNullList
 import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.nbt.CompoundTag
+import net.minecraft.nbt.ListTag
+import net.minecraft.nbt.Tag
 import net.minecraft.network.chat.Component
-import net.minecraft.network.protocol.Packet
-import net.minecraft.network.protocol.game.ClientGamePacketListener
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket
 import net.minecraft.resources.ResourceLocation
 import net.minecraft.world.Container
@@ -21,19 +26,16 @@ import net.minecraft.world.ContainerHelper
 import net.minecraft.world.entity.player.Inventory
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.inventory.AbstractContainerMenu
-import net.minecraft.world.inventory.ChestMenu
 import net.minecraft.world.inventory.ContainerData
-import net.minecraft.world.inventory.MenuType
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.Items
-import net.minecraft.world.level.block.entity.BlockEntity
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.MenuProvider
 import java.util.UUID
 
 class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
-    BlockEntity(CreateThermodynamicsRegistries.reactorMultiblockBlockEntity.get(), pos, state),
+    SmartBlockEntity(CreateThermodynamicsRegistries.reactorMultiblockBlockEntity.get(), pos, state),
     Container,
     MenuProvider {
     private val items: NonNullList<ItemStack> = NonNullList.withSize(CONTAINER_SIZE, ItemStack.EMPTY)
@@ -52,6 +54,10 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         private set
     var diagnostic: String? = null
         private set
+    private var nativeBinding: String = "pending"
+    private var temperatureKelvin: Double? = null
+    private var pressurePascal: Double? = null
+    private var mixtureEntries: List<ReactorMixtureViewEntry> = emptyList()
 
     fun visualGroupKey(): UUID? =
         structureId?.takeIf { activeVolumeBlock }
@@ -91,10 +97,10 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         return true
     }
 
-    override fun loadAdditional(tag: CompoundTag, registries: HolderLookup.Provider) {
+    override fun read(tag: CompoundTag, registries: HolderLookup.Provider, clientPacket: Boolean) {
         val oldStructureId = structureId
         val oldActiveVolumeBlock = activeVolumeBlock
-        super.loadAdditional(tag, registries)
+        super.read(tag, registries, clientPacket)
         structureId = if (tag.hasUUID(STRUCTURE_ID_TAG)) tag.getUUID(STRUCTURE_ID_TAG) else null
         activeVolumeBlock = structureId != null && tag.getBoolean(ACTIVE_VOLUME_TAG)
         zoneCount = if (structureId != null) tag.getInt(ZONE_COUNT_TAG) else 0
@@ -105,14 +111,29 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
             ?.let(ReactorControllerFormationState::valueOf)
             ?: if (structureId != null) ReactorControllerFormationState.FORMED else ReactorControllerFormationState.NOT_FORMED
         diagnostic = tag.getString(DIAGNOSTIC_TAG).takeIf { it.isNotBlank() }
+        nativeBinding = tag.getString(NATIVE_BINDING_TAG).takeIf { it.isNotBlank() } ?: "pending"
+        temperatureKelvin = tag.getDoubleOrNull(TEMPERATURE_KELVIN_TAG)
+        pressurePascal = tag.getDoubleOrNull(PRESSURE_PASCAL_TAG)
+        mixtureEntries = tag.getList(MIXTURE_TAG, Tag.TAG_COMPOUND.toInt())
+            .mapNotNull { entryTag ->
+                val entry = entryTag as? CompoundTag ?: return@mapNotNull null
+                val substanceId = entry.getString(MIXTURE_SUBSTANCE_ID_TAG)
+                if (substanceId.isBlank()) {
+                    return@mapNotNull null
+                }
+                ReactorMixtureViewEntry(
+                    substanceId = substanceId,
+                    concentrationMolPerBucket = entry.getDouble(MIXTURE_CONCENTRATION_TAG),
+                )
+            }
         ContainerHelper.loadAllItems(tag, items, registries)
         if (structureId != oldStructureId || activeVolumeBlock != oldActiveVolumeBlock) {
             refreshVisualModel()
         }
     }
 
-    override fun saveAdditional(tag: CompoundTag, registries: HolderLookup.Provider) {
-        super.saveAdditional(tag, registries)
+    override fun write(tag: CompoundTag, registries: HolderLookup.Provider, clientPacket: Boolean) {
+        super.write(tag, registries, clientPacket)
         structureId?.let { tag.putUUID(STRUCTURE_ID_TAG, it) }
         tag.putBoolean(ACTIVE_VOLUME_TAG, activeVolumeBlock)
         tag.putInt(ZONE_COUNT_TAG, zoneCount)
@@ -120,10 +141,23 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         tag.putInt(PORT_COUNT_TAG, portCount)
         tag.putString(FORMATION_STATE_TAG, formationState.name)
         diagnostic?.let { tag.putString(DIAGNOSTIC_TAG, it) }
+        tag.putString(NATIVE_BINDING_TAG, nativeBinding)
+        temperatureKelvin?.let { tag.putDouble(TEMPERATURE_KELVIN_TAG, it) }
+        pressurePascal?.let { tag.putDouble(PRESSURE_PASCAL_TAG, it) }
+        val mixtureTag = ListTag()
+        for (entry in mixtureEntries) {
+            mixtureTag.add(
+                CompoundTag().also { entryTag ->
+                    entryTag.putString(MIXTURE_SUBSTANCE_ID_TAG, entry.substanceId)
+                    entryTag.putDouble(MIXTURE_CONCENTRATION_TAG, entry.concentrationMolPerBucket)
+                },
+            )
+        }
+        tag.put(MIXTURE_TAG, mixtureTag)
         ContainerHelper.saveAllItems(tag, items, registries)
     }
 
-    override fun getUpdatePacket(): Packet<ClientGamePacketListener> =
+    override fun getUpdatePacket(): ClientboundBlockEntityDataPacket =
         ClientboundBlockEntityDataPacket.create(this)
 
     override fun getUpdateTag(registries: HolderLookup.Provider): CompoundTag =
@@ -134,11 +168,55 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         level?.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_CLIENTS)
     }
 
+    fun applyNativeMetrics(metrics: ReactorTickMetrics): Boolean {
+        val nextMixture = metrics.substances
+            .take(MAX_CONTROLLER_MIXTURE_ENTRIES)
+            .map { substance ->
+                ReactorMixtureViewEntry(
+                    substanceId = substance.substanceId,
+                    concentrationMolPerBucket = substance.concentrationMolPerBucket,
+                )
+            }
+        if (
+            nativeBinding == "active" &&
+            temperatureKelvin == metrics.temperatureKelvin &&
+            pressurePascal == metrics.pressurePascal &&
+            mixtureEntries == nextMixture
+        ) {
+            return false
+        }
+        nativeBinding = "active"
+        temperatureKelvin = metrics.temperatureKelvin
+        pressurePascal = metrics.pressurePascal
+        mixtureEntries = nextMixture
+        setChanged()
+        level?.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_CLIENTS)
+        return true
+    }
+
     override fun getContainerSize(): Int =
         items.size
 
     override fun isEmpty(): Boolean =
         items.all(ItemStack::isEmpty)
+
+    override fun addBehaviours(behaviours: MutableList<BlockEntityBehaviour>) {
+        if (!reactorKind().isItemPort) {
+            return
+        }
+        val filter = FilteringBehaviour(
+            this,
+            CenteredSideValueBoxTransform { state, direction ->
+                val kind = (state.block as? ReactorMultiblockBlock)?.kind
+                kind.isItemPort && direction == state.getValue(ReactorMultiblockBlock.FACING)
+            },
+        )
+            .withPredicate { stack -> stack.isEmpty || stack.item != Items.AIR }
+            .onlyActiveWhen { reactorKind().isItemPort }
+            .showCount()
+        filter.setLabel(Component.translatable("container.create_thermodynamics.reactor_port.filter"))
+        behaviours += filter
+    }
 
     override fun getItem(slot: Int): ItemStack =
         items[slot]
@@ -198,7 +276,6 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         }
         val available = items
             .asSequence()
-            .drop(FILTER_SLOT + 1)
             .filter { !it.isEmpty && BuiltInRegistries.ITEM.getKey(it.item).toString() == itemId }
             .sumOf { it.count }
         check(available >= count) {
@@ -314,11 +391,7 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         if (stack.isEmpty) {
             return false
         }
-        val filter = items[FILTER_SLOT]
-        if (filter.isEmpty) {
-            return true
-        }
-        return FilterItemStack.of(filter.copy()).test(level, stack)
+        return getBehaviour(FilteringBehaviour.TYPE)?.test(stack) ?: true
     }
 
     override fun getDisplayName(): Component =
@@ -330,14 +403,14 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
 
     override fun createMenu(containerId: Int, playerInventory: Inventory, player: Player): AbstractContainerMenu =
         when (reactorKind()) {
-            ReactorMultiblockKind.CONTROLLER -> ReactorControllerMenu(containerId, this)
+            ReactorMultiblockKind.CONTROLLER -> ReactorControllerMenu(containerId, playerInventory, this)
             ReactorMultiblockKind.ITEM_INPUT_PORT,
             ReactorMultiblockKind.ITEM_OUTPUT_PORT,
-            ReactorMultiblockKind.FLUID_INPUT_PORT,
-            ReactorMultiblockKind.FLUID_OUTPUT_PORT,
-            -> ChestMenu(MenuType.GENERIC_9x3, containerId, playerInventory, this, 3)
+            -> ReactorPortMenu(containerId, playerInventory, this, this)
 
             ReactorMultiblockKind.CHAMBER,
+            ReactorMultiblockKind.FLUID_INPUT_PORT,
+            ReactorMultiblockKind.FLUID_OUTPUT_PORT,
             null,
             -> error("reactor block entity at $blockPos cannot create a menu for ${blockState.block}")
         }
@@ -350,6 +423,10 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
             chamberBlockCount = chamberBlockCount,
             portCount = portCount,
             diagnostic = diagnostic,
+            nativeBinding = nativeBinding,
+            temperatureKelvin = temperatureKelvin,
+            pressurePascal = pressurePascal,
+            mixture = mixtureEntries,
         )
 
     fun controllerMenuData(): ContainerData =
@@ -385,8 +462,7 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
 
     companion object {
         private const val CONTAINER_SIZE = 27
-        private const val FILTER_SLOT = 0
-        private val BUFFER_SLOT_RANGE = 1 until CONTAINER_SIZE
+        private val BUFFER_SLOT_RANGE = 0 until CONTAINER_SIZE
         private const val STRUCTURE_ID_TAG = "structure_id"
         private const val ACTIVE_VOLUME_TAG = "active_volume"
         private const val ZONE_COUNT_TAG = "zone_count"
@@ -394,6 +470,13 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         private const val PORT_COUNT_TAG = "port_count"
         private const val FORMATION_STATE_TAG = "formation_state"
         private const val DIAGNOSTIC_TAG = "diagnostic"
+        private const val NATIVE_BINDING_TAG = "native_binding"
+        private const val TEMPERATURE_KELVIN_TAG = "temperature_kelvin"
+        private const val PRESSURE_PASCAL_TAG = "pressure_pascal"
+        private const val MIXTURE_TAG = "mixture"
+        private const val MIXTURE_SUBSTANCE_ID_TAG = "substance_id"
+        private const val MIXTURE_CONCENTRATION_TAG = "concentration_mol_per_bucket"
+        private const val MAX_CONTROLLER_MIXTURE_ENTRIES = 6
         private const val CONTROLLER_FORMATION_STATE_DATA_SLOT = 0
         private const val CONTROLLER_ZONE_COUNT_DATA_SLOT = 1
         private const val CONTROLLER_CHAMBER_BLOCK_COUNT_DATA_SLOT = 2
@@ -401,6 +484,12 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         private const val CONTROLLER_DATA_SLOT_COUNT = 4
     }
 }
+
+private fun CompoundTag.getDoubleOrNull(key: String): Double? =
+    if (contains(key, Tag.TAG_DOUBLE.toInt())) getDouble(key) else null
+
+private val ReactorMultiblockKind?.isItemPort: Boolean
+    get() = this == ReactorMultiblockKind.ITEM_INPUT_PORT || this == ReactorMultiblockKind.ITEM_OUTPUT_PORT
 
 data class PortItemStack(
     val slot: Int,

@@ -64,6 +64,21 @@ pub struct ReactorTickReport {
     pub total_electrical_draw_w: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReactorZoneSnapshot {
+    pub reactor_id: ReactorInstanceId,
+    pub zone_index: usize,
+    pub temperature_kelvin: f64,
+    pub pressure_pascal: f64,
+    pub substances: Vec<ReactorZoneSubstanceSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReactorZoneSubstanceSnapshot {
+    pub substance_id: SubstanceId,
+    pub concentration_mol_per_bucket: f64,
+}
+
 struct ReactorRuntime {
     reactor: Reactor,
     output_buffers_mol_per_bucket: BTreeMap<usize, BTreeMap<SubstanceId, f64>>,
@@ -327,6 +342,40 @@ impl ReactorsWorker {
             .and_then(|buffer| buffer.get(substance_id))
             .copied()
             .unwrap_or(0.0))
+    }
+
+    pub fn reactor_zone_snapshot(
+        &self,
+        reactor_id: ReactorInstanceId,
+        zone_index: usize,
+    ) -> ChemistryResult<ReactorZoneSnapshot> {
+        let runtime = self.runtime(reactor_id)?;
+        let zone = runtime
+            .reactor
+            .zone(&crate::chemistry::reactor::ZoneId(zone_index))
+            .ok_or_else(|| zone_index_error(reactor_id, zone_index))?;
+        let mut substances = zone
+            .mixture()
+            .substances()
+            .map(|substance_id| ReactorZoneSubstanceSnapshot {
+                substance_id: substance_id.clone(),
+                concentration_mol_per_bucket: zone.concentration_of(substance_id),
+            })
+            .filter(|entry| entry.concentration_mol_per_bucket > 0.0)
+            .collect::<Vec<_>>();
+        substances.sort_by(|left, right| {
+            right
+                .concentration_mol_per_bucket
+                .total_cmp(&left.concentration_mol_per_bucket)
+                .then_with(|| left.substance_id.cmp(&right.substance_id))
+        });
+        Ok(ReactorZoneSnapshot {
+            reactor_id,
+            zone_index,
+            temperature_kelvin: zone.temperature_kelvin(),
+            pressure_pascal: zone.pressure_pascal(),
+            substances,
+        })
     }
 
     pub fn export_reactor_checkpoint(

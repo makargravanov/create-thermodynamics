@@ -29,7 +29,7 @@ enum class ReactorMultiblockKind(val modelKind: ReactorMultiblockBlockKind) {
         get() = portKind != null
 
     val opensMenu: Boolean
-        get() = this == CONTROLLER || isPort
+        get() = this == CONTROLLER || this == ITEM_INPUT_PORT || this == ITEM_OUTPUT_PORT
 
     val portKind: ReactorPortKind?
         get() = when (this) {

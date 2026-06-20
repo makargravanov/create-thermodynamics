@@ -1,6 +1,5 @@
 import buildlogic.CheckArchitectureBoundaryTask
 import buildlogic.GenerateReactorChamberAssetsTask
-import buildlogic.GenerateReactorControllerUiProgramTask
 
 plugins {
     id("mod.neoforge-convention")
@@ -13,8 +12,6 @@ fun modProperty(name: String): String =
 
 dependencies {
     implementation(project(":modules:v1_21_1:v1_21_1-common"))
-    implementation(project(":modules:ui"))
-    implementation("ru.lazyhat:kraft-ui-dsl")
 
     implementation("com.simibubi.create:create-${modProperty("minecraft_version")}:${modProperty("create_version")}:slim") {
         isTransitive = false
@@ -26,18 +23,6 @@ dependencies {
 }
 
 val generatedResourcesRoot = layout.projectDirectory.dir("src/generated/resources")
-val generatedUiSourceRoot = layout.buildDirectory.dir("generated/source/reactor-ui/main/kotlin")
-
-val generateReactorControllerUiProgram by tasks.registering(GenerateReactorControllerUiProgramTask::class) {
-    group = LifecycleBasePlugin.BUILD_GROUP
-    description = "Generates precompiled reactor controller UI program for Minecraft runtime."
-
-    outputDirectory.set(generatedUiSourceRoot)
-}
-
-sourceSets.main {
-    kotlin.srcDir(generatedUiSourceRoot)
-}
 
 val generateReactorChamberAssets by tasks.registering(GenerateReactorChamberAssetsTask::class) {
     group = LifecycleBasePlugin.BUILD_GROUP
@@ -53,10 +38,6 @@ val generateReactorChamberAssets by tasks.registering(GenerateReactorChamberAsse
 
 tasks.named("processResources") {
     dependsOn(generateReactorChamberAssets)
-}
-
-tasks.named("compileKotlin") {
-    dependsOn(generateReactorControllerUiProgram)
 }
 
 tasks.register<CheckArchitectureBoundaryTask>("checkThinLoaderBoundary") {

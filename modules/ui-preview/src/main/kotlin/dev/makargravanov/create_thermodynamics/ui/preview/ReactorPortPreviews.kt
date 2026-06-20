@@ -26,6 +26,14 @@ object ReactorPortPreviews {
                             zoneCount = 1,
                             chamberBlocks = 12,
                             portCount = 4,
+                            nativeBinding = "native active",
+                            temperature = "298.0 K",
+                            pressure = "0.0 kPa",
+                            mixtureLines = listOf(
+                                "water 1.000",
+                                "ethanol 0.250",
+                                "oxygen 0.120",
+                            ),
                         )
                     },
             ),

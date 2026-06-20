@@ -10,7 +10,9 @@ use crate::chemistry::minecraft::protocol::blob::NativeBlobLimits;
 use crate::chemistry::minecraft::protocol::catalog_snapshot::{
     export_dynamic_catalog_checkpoint, import_dynamic_catalog_checkpoint,
 };
-use crate::chemistry::minecraft::worker::reactors_worker::{ReactorInstanceId, ReactorsWorker};
+use crate::chemistry::minecraft::worker::reactors_worker::{
+    ReactorInstanceId, ReactorZoneSnapshot, ReactorsWorker,
+};
 use crate::chemistry::reactor::{Input, Output, Reactor, ReactorZone, TransitionMode};
 use crate::chemistry::registry::ChemistryRegistry;
 use crate::chemistry::substance::SubstanceId;
@@ -190,6 +192,17 @@ pub fn tick_reactor(reactor_id: ReactorInstanceId, dt_seconds: f64) -> Chemistry
             .reactors_worker
             .tick_reactor(&state.chemistry_registry, reactor_id, dt_seconds)?;
         Ok(())
+    })
+}
+
+pub fn reactor_zone_snapshot(
+    reactor_id: ReactorInstanceId,
+    zone_index: usize,
+) -> ChemistryResult<ReactorZoneSnapshot> {
+    with_minecraft_chemistry_state(|state| {
+        state
+            .reactors_worker
+            .reactor_zone_snapshot(reactor_id, zone_index)
     })
 }
 

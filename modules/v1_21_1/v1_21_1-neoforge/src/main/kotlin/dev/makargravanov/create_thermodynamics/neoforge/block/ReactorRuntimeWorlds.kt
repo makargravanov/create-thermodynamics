@@ -33,7 +33,7 @@ object ReactorRuntimeWorlds {
 
     fun tickLevel(level: ServerLevel) {
         val context = context(level)
-        applyPortReports(level, context.runtime.applyReadyReports(MAX_APPLIED_REPORTS))
+        applyReactorReports(level, context.runtime, context.runtime.applyReadyReports(MAX_APPLIED_REPORTS))
         context.tickIndex += 1
         if (context.tickIndex % TRANSFER_INTERVAL_TICKS != 0L) {
             return
@@ -42,7 +42,7 @@ object ReactorRuntimeWorlds {
         queuePortTransfers(level, context.runtime)
         context.runtime.queueTickForActiveStructures(TRANSFER_DT_SECONDS)
         context.runtime.submitQueuedCommands(context.nativeSession, MAX_SUBMITTED_COMMANDS)
-        applyPortReports(level, context.runtime.applyReadyReports(MAX_APPLIED_REPORTS))
+        applyReactorReports(level, context.runtime, context.runtime.applyReadyReports(MAX_APPLIED_REPORTS))
     }
 
     private fun context(level: ServerLevel): ReactorRuntimeWorldContext =
@@ -110,17 +110,33 @@ object ReactorRuntimeWorlds {
         }
     }
 
-    private fun applyPortReports(level: ServerLevel, result: ReactorWorldRuntimeResult) {
+    private fun applyReactorReports(
+        level: ServerLevel,
+        runtime: ReactorWorldRuntime,
+        result: ReactorWorldRuntimeResult,
+    ) {
         if (result !is ReactorWorldRuntimeResult.ReportsApplied) {
             return
         }
         for (applied in result.reports) {
-            applyPortReport(level, applied)
+            applyReactorReport(level, runtime, applied)
         }
     }
 
-    private fun applyPortReport(level: ServerLevel, applied: ReactorAppliedReport) {
+    private fun applyReactorReport(
+        level: ServerLevel,
+        runtime: ReactorWorldRuntime,
+        applied: ReactorAppliedReport,
+    ) {
         when (val report = applied.report) {
+            is ReactorReport.TickCompleted -> {
+                val controllerPosition = runtime.structures.record(report.structureId)
+                    ?.definition
+                    ?.controllerPosition
+                    ?: return
+                reactorBlockEntity(level, controllerPosition)
+                    ?.applyNativeMetrics(report.metrics)
+            }
             is ReactorReport.PortInputAccepted -> {
                 reactorBlockEntity(level, report.portPosition)
                     ?.removeConfirmedPortInput(report.itemId, report.acceptedCount)

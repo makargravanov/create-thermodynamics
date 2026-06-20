@@ -231,6 +231,28 @@ class ReactorStructureStore(
         }
     }
 
+    fun readZoneMetrics(
+        structureId: ReactorStructureId,
+        zoneIndex: Int,
+        simulatedSeconds: Double,
+    ): ReactorOperationResult {
+        if (zoneIndex < 0) {
+            return ReactorOperationResult.Failed("zoneIndex must be non-negative")
+        }
+        if (!simulatedSeconds.isFinite() || simulatedSeconds < 0.0) {
+            return ReactorOperationResult.Failed("simulatedSeconds must be non-negative and finite")
+        }
+        val record = activeRecord(structureId) ?: return inactiveOrMissing(structureId)
+        val binding = record.activeBinding() ?: return inactiveOrMissing(structureId)
+        return try {
+            ReactorOperationResult.ReactorMetricsRead(
+                nativeBridge.readZoneMetrics(binding, zoneIndex, simulatedSeconds),
+            )
+        } catch (error: RuntimeException) {
+            ReactorOperationResult.Failed("failed to read native reactor metrics for structure ${structureId.value}: ${error.message}")
+        }
+    }
+
     fun tickAll(dtSeconds: Double): List<ReactorOperationResult> =
         activeRecords().map { tick(it.structureId, dtSeconds) }
 

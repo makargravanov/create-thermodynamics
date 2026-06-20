@@ -447,6 +447,18 @@ class ReactorStructureStoreTest {
             ticked += binding.structureId
         }
 
+        override fun readZoneMetrics(
+            binding: NativeReactorMultiblockBinding,
+            zoneIndex: Int,
+            simulatedSeconds: Double,
+        ): ReactorTickMetrics =
+            ReactorTickMetrics(
+                simulatedSeconds = simulatedSeconds,
+                temperatureKelvin = 298.0,
+                pressurePascal = 0.0,
+                substances = emptyList(),
+            )
+
         override fun exportReactorCheckpoint(
             binding: NativeReactorMultiblockBinding,
             contentVersion: Long,

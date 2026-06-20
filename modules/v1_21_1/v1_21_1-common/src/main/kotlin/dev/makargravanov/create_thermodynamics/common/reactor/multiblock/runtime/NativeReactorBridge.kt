@@ -15,6 +15,12 @@ interface NativeReactorBridge {
 
     fun tickNativeReactor(binding: NativeReactorMultiblockBinding, dtSeconds: Double)
 
+    fun readZoneMetrics(
+        binding: NativeReactorMultiblockBinding,
+        zoneIndex: Int,
+        simulatedSeconds: Double,
+    ): ReactorTickMetrics
+
     fun exportReactorCheckpoint(
         binding: NativeReactorMultiblockBinding,
         contentVersion: Long,

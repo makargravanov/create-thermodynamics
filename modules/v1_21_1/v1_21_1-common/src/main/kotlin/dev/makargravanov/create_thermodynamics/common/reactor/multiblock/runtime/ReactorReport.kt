@@ -151,6 +151,7 @@ data class ReactorTickMetrics(
     val simulatedSeconds: Double,
     val temperatureKelvin: Double?,
     val pressurePascal: Double?,
+    val substances: List<ReactorMixtureSubstanceMetric> = emptyList(),
 ) {
     init {
         require(simulatedSeconds.isFinite() && simulatedSeconds >= 0.0) {
@@ -161,6 +162,18 @@ data class ReactorTickMetrics(
         }
         require(pressurePascal == null || pressurePascal.isFinite()) {
             "pressurePascal must be finite when present"
+        }
+    }
+}
+
+data class ReactorMixtureSubstanceMetric(
+    val substanceId: String,
+    val concentrationMolPerBucket: Double,
+) {
+    init {
+        require(substanceId.isNotBlank()) { "substanceId must not be blank" }
+        require(concentrationMolPerBucket.isFinite() && concentrationMolPerBucket >= 0.0) {
+            "concentrationMolPerBucket must be non-negative and finite"
         }
     }
 }

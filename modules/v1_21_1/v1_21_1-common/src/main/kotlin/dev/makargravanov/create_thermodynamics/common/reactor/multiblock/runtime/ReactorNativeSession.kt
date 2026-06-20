@@ -111,17 +111,23 @@ class ReactorNativeSession(
         val next = current.next()
         return when (val result = structures.tick(command.structureId, command.dtSeconds)) {
             is ReactorOperationResult.Completed -> {
+                val metrics = when (val metricsResult = structures.readZoneMetrics(
+                    structureId = command.structureId,
+                    zoneIndex = 0,
+                    simulatedSeconds = command.dtSeconds,
+                )) {
+                    is ReactorOperationResult.ReactorMetricsRead -> metricsResult.metrics
+                    else -> {
+                        return rejected(command, current, metricsResult.message())
+                    }
+                }
                 batchVersions[command.structureId] = next
                 ReactorReport.TickCompleted(
                     reportId = nextReportId(),
                     commandId = command.commandId,
                     structureId = command.structureId,
                     snapshotVersion = next,
-                    metrics = ReactorTickMetrics(
-                        simulatedSeconds = command.dtSeconds,
-                        temperatureKelvin = null,
-                        pressurePascal = null,
-                    ),
+                    metrics = metrics,
                 )
             }
             else -> rejected(command, current, result.message())
@@ -258,6 +264,7 @@ class ReactorNativeSession(
             is ReactorOperationResult.ReactorSuspended -> message
             is ReactorOperationResult.ReactorResumed -> message
             is ReactorOperationResult.ReactorCheckpointExported -> "reactor checkpoint exported to ${checkpoint.storageKey}"
+            is ReactorOperationResult.ReactorMetricsRead -> "reactor metrics read"
             is ReactorOperationResult.Rejected -> message
             is ReactorOperationResult.Failed -> message
         }

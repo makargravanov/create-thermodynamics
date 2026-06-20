@@ -17,39 +17,49 @@ data class ReactorControllerUiState(
     val zoneCount: Int,
     val chamberBlocks: Int,
     val portCount: Int,
+    val nativeBinding: String,
+    val temperature: String,
+    val pressure: String,
+    val mixtureLines: List<String>,
 )
 
 object ReactorControllerUi {
-    const val Width: Int = 216
-    const val Height: Int = 142
+    const val Width: Int = 256
+    const val Height: Int = 190
 
     fun build(state: () -> ReactorControllerUiState): UiElement =
         ui(Modifier.size(Width, Height).background(Colors.Background)) {
-            box(Modifier.offset(0, 0).size(Width, 18).background(Colors.Header))
+            box(Modifier.offset(0, 0).size(Width, 20).background(Colors.Header))
             text(
                 text = value { state().title },
-                modifier = Modifier.offset(8, 5),
+                modifier = Modifier.offset(9, 6),
                 color = Colors.Title,
             )
 
             statusPanel(state)
             structurePanel(state)
-            portPanel(state)
+            metricsPanel(state)
+            mixturePanel(state)
         }
 
     private fun ru.lazyhat.kraftui.foundation.UiScope.statusPanel(state: () -> ReactorControllerUiState) {
-        box(Modifier.offset(8, 28).size(200, 28).background(Colors.Panel)) {
+        box(Modifier.offset(8, 30).size(240, 28).background(Colors.Panel)) {
             text("State", modifier = Modifier.offset(7, 5), color = Colors.Muted)
             text(
                 text = value { state().status },
                 modifier = Modifier.offset(56, 5),
                 color = value { if (state().active) Colors.Good else Colors.Warning },
             )
+            text(
+                text = value { state().nativeBinding },
+                modifier = Modifier.offset(152, 5),
+                color = Colors.Muted,
+            )
         }
     }
 
     private fun ru.lazyhat.kraftui.foundation.UiScope.structurePanel(state: () -> ReactorControllerUiState) {
-        box(Modifier.offset(8, 64).size(96, 66).background(Colors.Panel)) {
+        box(Modifier.offset(8, 66).size(112, 66).background(Colors.Panel)) {
             text("Structure", modifier = Modifier.offset(7, 5), color = Colors.Muted)
             text(
                 text = value { "Zones: ${state().zoneCount}" },
@@ -69,17 +79,55 @@ object ReactorControllerUi {
         }
     }
 
-    private fun ru.lazyhat.kraftui.foundation.UiScope.portPanel(state: () -> ReactorControllerUiState) {
-        box(Modifier.offset(112, 64).size(96, 66).background(Colors.Panel)) {
-            text("Binding", modifier = Modifier.offset(7, 5), color = Colors.Muted)
+    private fun ru.lazyhat.kraftui.foundation.UiScope.metricsPanel(state: () -> ReactorControllerUiState) {
+        box(Modifier.offset(128, 66).size(120, 66).background(Colors.Panel)) {
+            text("Zone 0", modifier = Modifier.offset(7, 5), color = Colors.Muted)
             text(
-                text = value { state().structureId?.take(8) ?: "not formed" },
+                text = value { state().temperature },
                 modifier = Modifier.offset(7, 22),
                 color = Colors.Text,
             )
-            text("Native: pending", modifier = Modifier.offset(7, 50), color = Colors.Muted)
+            text(
+                text = value { state().pressure },
+                modifier = Modifier.offset(7, 36),
+                color = Colors.Text,
+            )
+            text(
+                text = value { state().structureId?.take(8) ?: "no structure" },
+                modifier = Modifier.offset(7, 50),
+                color = Colors.Muted,
+            )
         }
     }
+
+    private fun ru.lazyhat.kraftui.foundation.UiScope.mixturePanel(state: () -> ReactorControllerUiState) {
+        box(Modifier.offset(8, 140).size(240, 42).background(Colors.Panel)) {
+            text("Mixture", modifier = Modifier.offset(7, 5), color = Colors.Muted)
+            text(
+                text = value { state().mixtureLine(0) },
+                modifier = Modifier.offset(7, 20),
+                color = Colors.Text,
+            )
+            text(
+                text = value { state().mixtureLine(1) },
+                modifier = Modifier.offset(126, 20),
+                color = Colors.Text,
+            )
+            text(
+                text = value { state().mixtureLine(2) },
+                modifier = Modifier.offset(7, 32),
+                color = Colors.Text,
+            )
+            text(
+                text = value { state().mixtureLine(3) },
+                modifier = Modifier.offset(126, 32),
+                color = Colors.Text,
+            )
+        }
+    }
+
+    private fun ReactorControllerUiState.mixtureLine(index: Int): String =
+        mixtureLines.getOrNull(index) ?: if (index == 0) "empty" else ""
 
     private object Colors {
         val Background = Color.rgb(17, 19, 23)

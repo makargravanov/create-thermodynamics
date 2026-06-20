@@ -85,11 +85,20 @@ data class ReactorControllerViewState(
     val portCount: Int,
     val diagnostic: String?,
     val nativeBinding: String = "pending",
+    val temperatureKelvin: Double? = null,
+    val pressurePascal: Double? = null,
+    val mixture: List<ReactorMixtureViewEntry> = emptyList(),
 ) {
     init {
         if (formationState == ReactorControllerFormationState.FORMED) {
             require(zoneCount > 0) { "formed reactor controller view state must contain a zone" }
             require(chamberBlockCount > 0) { "formed reactor controller view state must contain chamber volume" }
+        }
+        require(temperatureKelvin == null || temperatureKelvin.isFinite()) {
+            "temperatureKelvin must be finite when present"
+        }
+        require(pressurePascal == null || pressurePascal.isFinite()) {
+            "pressurePascal must be finite when present"
         }
     }
 
@@ -102,5 +111,17 @@ data class ReactorControllerViewState(
             portCount = 0,
             diagnostic = null,
         )
+    }
+}
+
+data class ReactorMixtureViewEntry(
+    val substanceId: String,
+    val concentrationMolPerBucket: Double,
+) {
+    init {
+        require(substanceId.isNotBlank()) { "substanceId must not be blank" }
+        require(concentrationMolPerBucket.isFinite() && concentrationMolPerBucket >= 0.0) {
+            "concentrationMolPerBucket must be non-negative and finite"
+        }
     }
 }

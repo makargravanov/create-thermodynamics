@@ -49,6 +49,10 @@ sealed interface ReactorOperationResult {
         val checkpoint: NativeBlobRef,
     ) : ReactorOperationResult
 
+    data class ReactorMetricsRead(
+        val metrics: dev.makargravanov.create_thermodynamics.common.reactor.multiblock.runtime.ReactorTickMetrics,
+    ) : ReactorOperationResult
+
     data class Rejected(
         val reason: ReactorOperationRejection,
         val message: String,
