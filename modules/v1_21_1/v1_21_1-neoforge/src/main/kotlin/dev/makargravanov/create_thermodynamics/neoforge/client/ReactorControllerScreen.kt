@@ -1,6 +1,5 @@
 package dev.makargravanov.create_thermodynamics.neoforge.client
 
-import com.simibubi.create.foundation.gui.AllGuiTextures
 import com.simibubi.create.foundation.gui.menu.AbstractSimiContainerScreen
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorControllerFormationState
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorControllerViewState
@@ -47,27 +46,18 @@ class ReactorControllerScreen(
     }
 
     private fun renderStatus(graphics: GuiGraphics, x: Int, y: Int, state: ReactorControllerViewState) {
-        val formed = state.formationState == ReactorControllerFormationState.FORMED
-        val unknown = state.formationState == ReactorControllerFormationState.UNKNOWN
-        val indicator = when {
-            formed -> AllGuiTextures.INDICATOR_GREEN
-            unknown -> AllGuiTextures.INDICATOR_YELLOW
-            else -> AllGuiTextures.INDICATOR_RED
-        }
-        indicator.render(graphics, x + 18, y + 47)
-
-        graphics.drawString(font, "State", x + 44, y + 32, CreateMutedColor, false)
+        graphics.drawString(font, "State", x + 18, y + 33, CreateMutedColor, false)
         graphics.drawString(
             font,
             state.formationState.label(),
-            x + 44,
+            x + 18,
             y + 43,
-            if (formed) CreateGoodColor else CreateTitleColor,
+            CreateTextColor,
             false,
         )
 
-        graphics.drawString(font, "Native", x + 126, y + 32, CreateMutedColor, false)
-        graphics.drawString(font, state.nativeBinding, x + 126, y + 43, CreateTitleColor, false)
+        graphics.drawString(font, "Native", x + 120, y + 33, CreateMutedColor, false)
+        graphics.drawString(font, state.nativeBinding, x + 120, y + 43, CreateTextColor, false)
     }
 
     private fun renderStructure(graphics: GuiGraphics, x: Int, y: Int, state: ReactorControllerViewState) {
@@ -141,7 +131,6 @@ class ReactorControllerScreen(
         private const val CreateTitleColor = 0x3D3C48
         private const val CreateTextColor = 0x3D3C48
         private const val CreateMutedColor = 0x6F6A75
-        private const val CreateGoodColor = 0x2D7D46
         private const val MaxVisibleMixtureRows = 4
         private const val MaxMixtureLineLength = 13
         private const val BackgroundWidth = 232

@@ -1,5 +1,7 @@
 use jni::objects::{JByteArray, JClass, JDoubleArray, JObject, JObjectArray, JString};
-use jni::sys::{jboolean, jbyteArray, jdouble, jdoubleArray, jint, jlong, jobjectArray, JNI_FALSE, JNI_TRUE};
+use jni::sys::{
+    jboolean, jbyteArray, jdouble, jdoubleArray, jint, jlong, jobjectArray, JNI_FALSE, JNI_TRUE,
+};
 use jni::JNIEnv;
 
 pub mod chemistry;

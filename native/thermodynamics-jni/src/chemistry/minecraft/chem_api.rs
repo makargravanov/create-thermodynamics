@@ -340,8 +340,20 @@ fn registration_error_to_chemistry_error(error: RegistrationError) -> ChemistryE
 mod tests {
     use super::*;
 
+    static CHEM_API_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+        std::sync::OnceLock::new();
+
+    fn lock_chem_api_test_state() -> std::sync::MutexGuard<'static, ()> {
+        CHEM_API_TEST_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn item_bindings_are_replaced_atomically() {
+        let _guard = lock_chem_api_test_state();
+
         replace_item_chemical_bindings(vec![ItemChemicalBinding::new(
             "minecraft:water_bucket",
             "destroy:water",
@@ -365,6 +377,8 @@ mod tests {
 
     #[test]
     fn clearing_item_bindings_removes_all_entries() {
+        let _guard = lock_chem_api_test_state();
+
         replace_item_chemical_bindings(vec![ItemChemicalBinding::new(
             "minecraft:water_bucket",
             "destroy:water",
@@ -388,6 +402,8 @@ mod tests {
 
     #[test]
     fn catalog_checkpoint_exports_and_imports_through_chem_api() {
+        let _guard = lock_chem_api_test_state();
+
         let encoded = export_catalog_checkpoint(42).unwrap();
 
         import_catalog_checkpoint(&encoded).unwrap();

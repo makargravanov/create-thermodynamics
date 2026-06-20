@@ -1786,22 +1786,15 @@ impl Mixture {
             {
                 continue;
             }
-            let Some(vapor_pressure) = substance.vapor_pressure_pascal(self.temperature_kelvin)?
-            else {
+            let Some(_) = substance.vapor_pressure_pascal(self.temperature_kelvin)? else {
                 continue;
             };
-            let target_gas = gas_moles_for_pressure(
-                vapor_pressure,
-                self.temperature_kelvin,
-                self.gas_volume_cubic_meters,
-            )?;
             let total = self.concentration_of_index(substance_index);
             let current_gas = self.concentration_of_index_in_phases(
                 substance_index,
                 &[MixturePhase::Gas, MixturePhase::SupercriticalFluid],
             );
             let current_liquid = self.liquid_concentration_of_index(substance_index);
-            let desired_gas = total.min(target_gas);
             let heat_capacity = self.volumetric_heat_capacity_j_per_bucket_kelvin(registry)?;
             if heat_capacity <= 0.0 {
                 continue;
@@ -1811,6 +1804,15 @@ impl Mixture {
             if latent_heat <= 0.0 {
                 continue;
             }
+            let desired_gas = equilibrium_gas_amount_for_vapor_liquid(
+                substance,
+                total,
+                current_gas,
+                self.temperature_kelvin,
+                self.gas_volume_cubic_meters,
+                latent_heat,
+                heat_capacity,
+            )?;
             if current_gas > desired_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET {
                 let condensed = (current_gas - desired_gas) * relaxation;
                 if condensed > TRACE_CONCENTRATION_MOL_PER_BUCKET {
@@ -1821,11 +1823,9 @@ impl Mixture {
             } else if current_gas + TRACE_CONCENTRATION_MOL_PER_BUCKET < desired_gas
                 && current_liquid > TRACE_CONCENTRATION_MOL_PER_BUCKET
             {
-                let max_evaporable =
-                    ((self.temperature_kelvin - 1.0).max(0.0)) * heat_capacity / latent_heat;
                 let evaporated = ((desired_gas - current_gas)
                     .min(current_liquid)
-                    .min(max_evaporable))
+                    .min(((self.temperature_kelvin - 1.0).max(0.0)) * heat_capacity / latent_heat))
                     * relaxation;
                 if evaporated > TRACE_CONCENTRATION_MOL_PER_BUCKET {
                     self.move_liquid_to_gas(substance_index, evaporated)?;
@@ -3035,6 +3035,74 @@ fn gas_moles_for_pressure(
     }
     Ok(pressure_pascal * gas_volume_cubic_meters
         / (GAS_CONSTANT_J_PER_MOL_KELVIN * temperature_kelvin))
+}
+
+fn equilibrium_gas_amount_for_vapor_liquid(
+    substance: &Substance,
+    total_mol_per_bucket: f64,
+    current_gas_mol_per_bucket: f64,
+    current_temperature_kelvin: f64,
+    gas_volume_cubic_meters: f64,
+    latent_heat_j_per_mol: f64,
+    heat_capacity_j_per_bucket_kelvin: f64,
+) -> ChemistryResult<f64> {
+    if total_mol_per_bucket <= TRACE_CONCENTRATION_MOL_PER_BUCKET {
+        return Ok(0.0);
+    }
+    if latent_heat_j_per_mol <= 0.0 || heat_capacity_j_per_bucket_kelvin <= 0.0 {
+        return Ok(current_gas_mol_per_bucket);
+    }
+
+    let max_evaporable_by_energy = ((current_temperature_kelvin - 1.0).max(0.0))
+        * heat_capacity_j_per_bucket_kelvin
+        / latent_heat_j_per_mol;
+    let lower = 0.0;
+    let upper = total_mol_per_bucket
+        .min(current_gas_mol_per_bucket + max_evaporable_by_energy)
+        .max(0.0);
+    if upper <= lower {
+        return Ok(lower);
+    }
+
+    let residual = |gas_mol_per_bucket: f64| -> ChemistryResult<f64> {
+        let temperature_kelvin = current_temperature_kelvin
+            + (current_gas_mol_per_bucket - gas_mol_per_bucket) * latent_heat_j_per_mol
+                / heat_capacity_j_per_bucket_kelvin;
+        if temperature_kelvin <= 0.0 {
+            return Ok(gas_mol_per_bucket);
+        }
+        let Some(vapor_pressure) = substance.vapor_pressure_pascal(temperature_kelvin)? else {
+            return Ok(gas_mol_per_bucket - current_gas_mol_per_bucket);
+        };
+        let desired = total_mol_per_bucket.min(gas_moles_for_pressure(
+            vapor_pressure,
+            temperature_kelvin,
+            gas_volume_cubic_meters,
+        )?);
+        Ok(gas_mol_per_bucket - desired)
+    };
+
+    let lower_residual = residual(lower)?;
+    if lower_residual >= 0.0 {
+        return Ok(lower);
+    }
+    let upper_residual = residual(upper)?;
+    if upper_residual <= 0.0 {
+        return Ok(upper);
+    }
+
+    let mut left = lower;
+    let mut right = upper;
+    let tolerance = (total_mol_per_bucket * 1.0e-10).max(1.0e-12);
+    while right - left > tolerance {
+        let midpoint = (left + right) * 0.5;
+        if residual(midpoint)? <= 0.0 {
+            left = midpoint;
+        } else {
+            right = midpoint;
+        }
+    }
+    Ok((left + right) * 0.5)
 }
 
 fn gas_transfer_coefficient_per_tick(model: &GasSolubilityModel) -> f64 {

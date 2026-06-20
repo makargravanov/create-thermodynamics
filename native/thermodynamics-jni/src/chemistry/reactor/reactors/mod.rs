@@ -194,6 +194,59 @@ mod tests {
     }
 
     #[test]
+    fn sealed_water_in_large_headspace_does_not_oscillate_between_phase_states() {
+        let registry = destroy_registry_builder().unwrap().build().unwrap();
+        let water_id = SubstanceId::from("destroy:water");
+        let mut reactor = Reactor::new();
+        let zone_id = reactor.add_zone(ReactorZone::new(27.0).unwrap());
+
+        reactor
+            .zone_mut(&zone_id)
+            .unwrap()
+            .add_substance_checked(&registry, water_id.clone(), 64.0)
+            .unwrap();
+
+        let mut previous_temperature = reactor.zone(&zone_id).unwrap().temperature_kelvin();
+        let mut previous_pressure = reactor.zone(&zone_id).unwrap().pressure_pascal();
+        let mut previous_gas = reactor
+            .zone(&zone_id)
+            .unwrap()
+            .mixture()
+            .concentration_in_phase(&water_id, MixturePhase::Gas);
+
+        for _ in 0..8 {
+            reactor.tick(&registry, 1.0).unwrap();
+            let zone = reactor.zone(&zone_id).unwrap();
+            let temperature = zone.temperature_kelvin();
+            let pressure = zone.pressure_pascal();
+            let gas = zone
+                .mixture()
+                .concentration_in_phase(&water_id, MixturePhase::Gas);
+
+            assert!(
+                (zone.concentration_of(&water_id) - 64.0).abs() < 1.0e-9,
+                "reactor must conserve water amount"
+            );
+            assert!(
+                (temperature - previous_temperature).abs() < 0.25,
+                "temperature jumped from {previous_temperature} K to {temperature} K"
+            );
+            assert!(
+                (pressure - previous_pressure).abs() < 100.0,
+                "pressure jumped from {previous_pressure} Pa to {pressure} Pa"
+            );
+            assert!(
+                (gas - previous_gas).abs() < 0.5,
+                "gas-phase water jumped from {previous_gas} mol/bucket to {gas} mol/bucket"
+            );
+
+            previous_temperature = temperature;
+            previous_pressure = pressure;
+            previous_gas = gas;
+        }
+    }
+
+    #[test]
     fn distillation_column_separates_ethanol_from_water() {
         let registry = destroy_registry_builder().unwrap().build().unwrap();
         let water_id = SubstanceId::from("destroy:water");
@@ -286,6 +339,19 @@ mod tests {
                 frac_bottom, frac_top
             );
 
+            let total_water: f64 = results.iter().map(|r| r.1).sum();
+            let total_ethanol: f64 = results.iter().map(|r| r.2).sum();
+            assert!(
+                (total_water - 3.0).abs() < 1.0e-6,
+                "At T={}: water amount should be conserved",
+                temp
+            );
+            assert!(
+                (total_ethanol - 2.0).abs() < 1.0e-6,
+                "At T={}: ethanol amount should be conserved",
+                temp
+            );
+
             if temp >= 353.0 {
                 // Ethanol should have moved upward: top zone either has
                 // more ethanol fraction, or ethanol left zone 0 entirely
@@ -302,13 +368,18 @@ mod tests {
                     "At T={}: ethanol should have moved to upper zones",
                     temp
                 );
+                assert!(
+                    frac_top > 0.4,
+                    "At T={}: top zone should be ethanol-enriched relative to the feed",
+                    temp
+                );
 
-                if temp < 400.0 {
+                if temp < 373.0 {
                     let water_in_top_zones: f64 = results[1..].iter().map(|r| r.1).sum();
                     let water_in_bottom = results[0].1;
                     assert!(
                         water_in_bottom > water_in_top_zones,
-                        "At T={}: water should stay mostly in bottom zone",
+                        "At T={}: water should stay mostly in bottom zone below its boiling point",
                         temp
                     );
                 }
