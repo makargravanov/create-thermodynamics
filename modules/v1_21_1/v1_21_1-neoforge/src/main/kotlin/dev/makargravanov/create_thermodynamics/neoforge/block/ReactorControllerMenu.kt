@@ -44,6 +44,8 @@ class ReactorControllerMenu(
                 chamberBlockCount = data.get(ChamberBlockCountSlot),
                 portCount = data.get(PortCountSlot),
                 diagnostic = localState?.diagnostic,
+                nativeBinding = localState?.nativeBinding ?: "pending",
+                zones = localState?.zones ?: emptyList(),
             )
         }
 

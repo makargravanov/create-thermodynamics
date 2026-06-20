@@ -85,20 +85,18 @@ data class ReactorControllerViewState(
     val portCount: Int,
     val diagnostic: String?,
     val nativeBinding: String = "pending",
-    val temperatureKelvin: Double? = null,
-    val pressurePascal: Double? = null,
-    val mixture: List<ReactorMixtureViewEntry> = emptyList(),
+    val zones: List<ReactorZoneViewState> = emptyList(),
 ) {
     init {
         if (formationState == ReactorControllerFormationState.FORMED) {
             require(zoneCount > 0) { "formed reactor controller view state must contain a zone" }
             require(chamberBlockCount > 0) { "formed reactor controller view state must contain chamber volume" }
         }
-        require(temperatureKelvin == null || temperatureKelvin.isFinite()) {
-            "temperatureKelvin must be finite when present"
+        require(zones.isEmpty() || zones.size == zoneCount) {
+            "reactor controller zone snapshot count ${zones.size} must match zoneCount $zoneCount"
         }
-        require(pressurePascal == null || pressurePascal.isFinite()) {
-            "pressurePascal must be finite when present"
+        require(zones.mapTo(linkedSetOf()) { it.index }.size == zones.size) {
+            "reactor controller zone snapshots must have unique indexes"
         }
     }
 
@@ -112,6 +110,26 @@ data class ReactorControllerViewState(
             diagnostic = null,
         )
     }
+}
+
+data class ReactorZoneViewState(
+    val index: Int,
+    val temperatureKelvin: Double?,
+    val pressurePascal: Double?,
+    val mixture: List<ReactorMixtureViewEntry>,
+) {
+    init {
+        require(index >= 0) { "reactor zone index must be non-negative" }
+        require(temperatureKelvin == null || temperatureKelvin.isFinite()) {
+            "temperatureKelvin must be finite when present"
+        }
+        require(pressurePascal == null || pressurePascal.isFinite()) {
+            "pressurePascal must be finite when present"
+        }
+    }
+
+    val totalConcentrationMolPerBucket: Double =
+        mixture.sumOf { it.concentrationMolPerBucket }
 }
 
 data class ReactorMixtureViewEntry(

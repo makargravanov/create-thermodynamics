@@ -10,6 +10,7 @@ import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.R
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorControllerFormationState
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorControllerViewState
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorMixtureViewEntry
+import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorZoneViewState
 import dev.makargravanov.create_thermodynamics.neoforge.registry.CreateThermodynamicsRegistries
 import net.minecraft.core.BlockPos
 import net.minecraft.core.HolderLookup
@@ -55,9 +56,7 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
     var diagnostic: String? = null
         private set
     private var nativeBinding: String = "pending"
-    private var temperatureKelvin: Double? = null
-    private var pressurePascal: Double? = null
-    private var mixtureEntries: List<ReactorMixtureViewEntry> = emptyList()
+    private var zones: List<ReactorZoneViewState> = emptyList()
 
     fun visualGroupKey(): UUID? =
         structureId?.takeIf { activeVolumeBlock }
@@ -74,6 +73,17 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         val normalizedFormationState = controllerViewState?.formationState
             ?: if (membership != null) ReactorControllerFormationState.FORMED else ReactorControllerFormationState.NOT_FORMED
         val normalizedDiagnostic = controllerViewState?.diagnostic
+        val resetNativeProjection = structureId != newStructureId || normalizedFormationState != ReactorControllerFormationState.FORMED
+        val normalizedNativeBinding = when {
+            resetNativeProjection -> "pending"
+            controllerViewState != null -> controllerViewState.nativeBinding
+            else -> nativeBinding
+        }
+        val normalizedZones = when {
+            resetNativeProjection -> emptyList()
+            controllerViewState != null -> controllerViewState.zones
+            else -> zones
+        }
         if (
             structureId == newStructureId &&
             activeVolumeBlock == normalizedActive &&
@@ -81,7 +91,9 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
             chamberBlockCount == normalizedChamberBlockCount &&
             portCount == normalizedPortCount &&
             formationState == normalizedFormationState &&
-            diagnostic == normalizedDiagnostic
+            diagnostic == normalizedDiagnostic &&
+            nativeBinding == normalizedNativeBinding &&
+            zones == normalizedZones
         ) {
             return false
         }
@@ -92,6 +104,8 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         portCount = normalizedPortCount
         formationState = normalizedFormationState
         diagnostic = normalizedDiagnostic
+        nativeBinding = normalizedNativeBinding
+        zones = normalizedZones
         setChanged()
         refreshVisualModel()
         return true
@@ -112,18 +126,27 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
             ?: if (structureId != null) ReactorControllerFormationState.FORMED else ReactorControllerFormationState.NOT_FORMED
         diagnostic = tag.getString(DIAGNOSTIC_TAG).takeIf { it.isNotBlank() }
         nativeBinding = tag.getString(NATIVE_BINDING_TAG).takeIf { it.isNotBlank() } ?: "pending"
-        temperatureKelvin = tag.getDoubleOrNull(TEMPERATURE_KELVIN_TAG)
-        pressurePascal = tag.getDoubleOrNull(PRESSURE_PASCAL_TAG)
-        mixtureEntries = tag.getList(MIXTURE_TAG, Tag.TAG_COMPOUND.toInt())
+        zones = tag.getList(ZONES_TAG, Tag.TAG_COMPOUND.toInt())
             .mapNotNull { entryTag ->
-                val entry = entryTag as? CompoundTag ?: return@mapNotNull null
-                val substanceId = entry.getString(MIXTURE_SUBSTANCE_ID_TAG)
-                if (substanceId.isBlank()) {
-                    return@mapNotNull null
-                }
-                ReactorMixtureViewEntry(
-                    substanceId = substanceId,
-                    concentrationMolPerBucket = entry.getDouble(MIXTURE_CONCENTRATION_TAG),
+                val zoneTag = entryTag as? CompoundTag ?: return@mapNotNull null
+                val zoneIndex = zoneTag.getInt(ZONE_INDEX_TAG)
+                val mixtureEntries = zoneTag.getList(ZONE_MIXTURE_TAG, Tag.TAG_COMPOUND.toInt())
+                    .mapNotNull { mixtureEntryTag ->
+                        val mixtureEntry = mixtureEntryTag as? CompoundTag ?: return@mapNotNull null
+                        val substanceId = mixtureEntry.getString(MIXTURE_SUBSTANCE_ID_TAG)
+                        if (substanceId.isBlank()) {
+                            return@mapNotNull null
+                        }
+                        ReactorMixtureViewEntry(
+                            substanceId = substanceId,
+                            concentrationMolPerBucket = mixtureEntry.getDouble(MIXTURE_CONCENTRATION_TAG),
+                        )
+                    }
+                ReactorZoneViewState(
+                    index = zoneIndex,
+                    temperatureKelvin = zoneTag.getDoubleOrNull(ZONE_TEMPERATURE_KELVIN_TAG),
+                    pressurePascal = zoneTag.getDoubleOrNull(ZONE_PRESSURE_PASCAL_TAG),
+                    mixture = mixtureEntries,
                 )
             }
         ContainerHelper.loadAllItems(tag, items, registries)
@@ -142,18 +165,27 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         tag.putString(FORMATION_STATE_TAG, formationState.name)
         diagnostic?.let { tag.putString(DIAGNOSTIC_TAG, it) }
         tag.putString(NATIVE_BINDING_TAG, nativeBinding)
-        temperatureKelvin?.let { tag.putDouble(TEMPERATURE_KELVIN_TAG, it) }
-        pressurePascal?.let { tag.putDouble(PRESSURE_PASCAL_TAG, it) }
-        val mixtureTag = ListTag()
-        for (entry in mixtureEntries) {
-            mixtureTag.add(
-                CompoundTag().also { entryTag ->
-                    entryTag.putString(MIXTURE_SUBSTANCE_ID_TAG, entry.substanceId)
-                    entryTag.putDouble(MIXTURE_CONCENTRATION_TAG, entry.concentrationMolPerBucket)
+        val zonesTag = ListTag()
+        for (zone in zones) {
+            val mixtureTag = ListTag()
+            for (entry in zone.mixture) {
+                mixtureTag.add(
+                    CompoundTag().also { entryTag ->
+                        entryTag.putString(MIXTURE_SUBSTANCE_ID_TAG, entry.substanceId)
+                        entryTag.putDouble(MIXTURE_CONCENTRATION_TAG, entry.concentrationMolPerBucket)
+                    },
+                )
+            }
+            zonesTag.add(
+                CompoundTag().also { zoneTag ->
+                    zoneTag.putInt(ZONE_INDEX_TAG, zone.index)
+                    zone.temperatureKelvin?.let { zoneTag.putDouble(ZONE_TEMPERATURE_KELVIN_TAG, it) }
+                    zone.pressurePascal?.let { zoneTag.putDouble(ZONE_PRESSURE_PASCAL_TAG, it) }
+                    zoneTag.put(ZONE_MIXTURE_TAG, mixtureTag)
                 },
             )
         }
-        tag.put(MIXTURE_TAG, mixtureTag)
+        tag.put(ZONES_TAG, zonesTag)
         ContainerHelper.saveAllItems(tag, items, registries)
     }
 
@@ -168,8 +200,34 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         level?.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_CLIENTS)
     }
 
-    fun applyNativeMetrics(metrics: ReactorTickMetrics): Boolean {
-        val nextMixture = metrics.substances
+    fun applyNativeMetrics(metrics: ReactorTickMetrics): Boolean =
+        applyNativeZoneMetrics(zoneIndex = 0, metrics = metrics)
+
+    fun applyNativeZoneMetrics(zoneIndex: Int, metrics: ReactorTickMetrics): Boolean {
+        require(zoneIndex >= 0) { "zoneIndex must be non-negative" }
+        val nextZone = ReactorZoneViewState(
+            index = zoneIndex,
+            temperatureKelvin = metrics.temperatureKelvin,
+            pressurePascal = metrics.pressurePascal,
+            mixture = metricsToMixtureEntries(metrics),
+        )
+        val nextZones = (zones.filterNot { it.index == zoneIndex } + nextZone).sortedBy { it.index }
+        if (
+            nativeBinding == "active" &&
+            zones == nextZones
+        ) {
+            return false
+        }
+        nativeBinding = "active"
+        zones = nextZones
+        setChanged()
+        level?.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_CLIENTS)
+        return true
+    }
+
+    private fun metricsToMixtureEntries(metrics: ReactorTickMetrics): List<ReactorMixtureViewEntry> =
+        metrics.substances
+            .sortedByDescending { it.concentrationMolPerBucket }
             .take(MAX_CONTROLLER_MIXTURE_ENTRIES)
             .map { substance ->
                 ReactorMixtureViewEntry(
@@ -177,22 +235,6 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
                     concentrationMolPerBucket = substance.concentrationMolPerBucket,
                 )
             }
-        if (
-            nativeBinding == "active" &&
-            temperatureKelvin == metrics.temperatureKelvin &&
-            pressurePascal == metrics.pressurePascal &&
-            mixtureEntries == nextMixture
-        ) {
-            return false
-        }
-        nativeBinding = "active"
-        temperatureKelvin = metrics.temperatureKelvin
-        pressurePascal = metrics.pressurePascal
-        mixtureEntries = nextMixture
-        setChanged()
-        level?.sendBlockUpdated(blockPos, blockState, blockState, Block.UPDATE_CLIENTS)
-        return true
-    }
 
     override fun getContainerSize(): Int =
         items.size
@@ -424,9 +466,7 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
             portCount = portCount,
             diagnostic = diagnostic,
             nativeBinding = nativeBinding,
-            temperatureKelvin = temperatureKelvin,
-            pressurePascal = pressurePascal,
-            mixture = mixtureEntries,
+            zones = zones,
         )
 
     fun controllerMenuData(): ContainerData =
@@ -471,9 +511,11 @@ class ReactorMultiblockBlockEntity(pos: BlockPos, state: BlockState) :
         private const val FORMATION_STATE_TAG = "formation_state"
         private const val DIAGNOSTIC_TAG = "diagnostic"
         private const val NATIVE_BINDING_TAG = "native_binding"
-        private const val TEMPERATURE_KELVIN_TAG = "temperature_kelvin"
-        private const val PRESSURE_PASCAL_TAG = "pressure_pascal"
-        private const val MIXTURE_TAG = "mixture"
+        private const val ZONES_TAG = "zones"
+        private const val ZONE_INDEX_TAG = "index"
+        private const val ZONE_TEMPERATURE_KELVIN_TAG = "temperature_kelvin"
+        private const val ZONE_PRESSURE_PASCAL_TAG = "pressure_pascal"
+        private const val ZONE_MIXTURE_TAG = "mixture"
         private const val MIXTURE_SUBSTANCE_ID_TAG = "substance_id"
         private const val MIXTURE_CONCENTRATION_TAG = "concentration_mol_per_bucket"
         private const val MAX_CONTROLLER_MIXTURE_ENTRIES = 6
