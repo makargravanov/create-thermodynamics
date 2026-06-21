@@ -2,8 +2,12 @@ plugins {
     id("mod.kotlin-convention")
 }
 
+val uiProject = project(":modules:ui")
+val uiSpec = uiProject.extensions.getByType<SourceSetContainer>().named("uiSpec")
+
 dependencies {
     implementation(project(":modules:ui"))
+    implementation(uiSpec.get().output)
     implementation("ru.lazyhat:kraft-ui-dsl")
 }
 
@@ -33,4 +37,12 @@ tasks.register<JavaExec>("renderUiPreviews") {
 tasks.withType<Test>().configureEach {
     systemProperty("kraftui.minecraftVersion", minecraftVersion.get())
     systemProperty("kraftui.minecraftClientJar", minecraftClientJar.get().absolutePath)
+}
+
+tasks.named("compileKotlin") {
+    dependsOn(":modules:ui:${uiSpec.get().classesTaskName}")
+}
+
+tasks.named("compileTestKotlin") {
+    dependsOn(":modules:ui:${uiSpec.get().classesTaskName}")
 }

@@ -2,6 +2,7 @@ package dev.makargravanov.create_thermodynamics.ui.preview
 
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUi
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerTab
+import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUiSize
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUiSnapshot
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorMixtureUiLine
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorZoneUiSnapshot
@@ -18,15 +19,16 @@ object ReactorPortPreviews {
         listOf(
             UiPreviewSpec(
                 id = "reactor_controller",
-                width = ReactorControllerUi.Width,
-                height = ReactorControllerUi.Height,
+                width = ReactorControllerUiSize.Width,
+                height = ReactorControllerUiSize.Height,
                 root =
                     ReactorControllerUi.build(
-                        state = { controllerState() },
-                        selectedTab = { ReactorControllerTab.Overview },
-                        selectedZoneIndex = { 0 },
-                        onSelectTab = {},
-                        onSelectZone = {},
+                        state = {
+                            controllerState().toGeneratedState(
+                                selectedTab = ReactorControllerTab.Overview,
+                                selectedZoneIndex = 0,
+                            )
+                        },
                     ),
             ),
             UiPreviewSpec(

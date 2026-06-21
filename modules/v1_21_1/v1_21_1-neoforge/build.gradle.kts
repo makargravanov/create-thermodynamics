@@ -24,6 +24,16 @@ dependencies {
 }
 
 val generatedResourcesRoot = layout.projectDirectory.dir("src/generated/resources")
+val generatedUiKotlinRoot = project(":modules:ui").layout.buildDirectory.dir("generated/kraftui/neoforge/kotlin")
+val generatedUiResourcesRoot = project(":modules:ui").layout.buildDirectory.dir("generated/kraftui/neoforge/resources")
+val generateReactorControllerMinecraftUi = ":modules:ui:generateReactorControllerMinecraftUi"
+
+sourceSets {
+    main {
+        kotlin.srcDir(generatedUiKotlinRoot)
+        resources.srcDir(generatedUiResourcesRoot)
+    }
+}
 
 val generateReactorChamberAssets by tasks.registering(GenerateReactorChamberAssetsTask::class) {
     group = LifecycleBasePlugin.BUILD_GROUP
@@ -39,6 +49,11 @@ val generateReactorChamberAssets by tasks.registering(GenerateReactorChamberAsse
 
 tasks.named("processResources") {
     dependsOn(generateReactorChamberAssets)
+    dependsOn(generateReactorControllerMinecraftUi)
+}
+
+tasks.named("compileKotlin") {
+    dependsOn(generateReactorControllerMinecraftUi)
 }
 
 tasks.register<CheckArchitectureBoundaryTask>("checkThinLoaderBoundary") {
@@ -48,7 +63,13 @@ tasks.register<CheckArchitectureBoundaryTask>("checkThinLoaderBoundary") {
     sourceRoot.set(layout.projectDirectory.dir("src/main/kotlin"))
     forbiddenImports.set(emptyList())
     forbiddenPathSegments.set(listOf("/content/", "\\content\\"))
-    forbiddenText.set(listOf("ScreenProgramCompiler"))
+    forbiddenText.set(
+        listOf(
+            "ScreenProgramCompiler",
+            "ScreenRuntimeExecutor",
+            "ru.lazyhat.kraftui",
+        ),
+    )
     failureMessage.set("NeoForge loader module must not contain content packages")
 }
 

@@ -6,20 +6,16 @@ import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.R
 import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.ReactorZoneViewState
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorControllerMenu
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockBlockEntity
-import dev.makargravanov.create_thermodynamics.neoforge.client.ui.MinecraftUiDslRenderBackend
+import dev.makargravanov.create_thermodynamics.neoforge.client.generated.GeneratedReactorControllerScreen
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerAction
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerTab
-import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUi
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUiSnapshot
+import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUiSize
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorMixtureUiLine
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorZoneUiSnapshot
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.network.chat.Component
 import net.minecraft.world.entity.player.Inventory
-import ru.lazyhat.kraftui.program.FontMetrics
-import ru.lazyhat.kraftui.program.ScreenProgramCompiler
-import ru.lazyhat.kraftui.program.ScreenRuntimeExecutor
-import ru.lazyhat.kraftui.program.UiInputResult
 import java.util.Locale
 
 class ReactorControllerScreen(
@@ -29,14 +25,13 @@ class ReactorControllerScreen(
 ) : AbstractSimiContainerScreen<ReactorControllerMenu>(menu, playerInventory, title) {
     private var selectedTab: ReactorControllerTab = ReactorControllerTab.Overview
     private var selectedZoneIndex: Int = 0
-    private lateinit var executor: ScreenRuntimeExecutor<ReactorControllerAction>
+    private val generatedScreen = GeneratedReactorControllerScreen()
 
     override fun init() {
-        setWindowSize(ReactorControllerUi.Width, ReactorControllerUi.Height)
+        setWindowSize(ReactorControllerUiSize.Width, ReactorControllerUiSize.Height)
         setWindowOffset(-16, 0)
         super.init()
         clearWidgets()
-        executor = buildExecutor()
     }
 
     override fun renderBg(
@@ -45,8 +40,7 @@ class ReactorControllerScreen(
         mouseX: Int,
         mouseY: Int,
     ) {
-        executor.updateMouse(mouseX - leftPos, mouseY - topPos)
-        executor.render(MinecraftUiDslRenderBackend(graphics, font, leftPos, topPos))
+        generatedScreen.render(graphics, generatedState(), leftPos, topPos)
     }
 
     override fun renderForeground(
@@ -56,9 +50,6 @@ class ReactorControllerScreen(
         partialTicks: Float,
     ) {
         super.renderForeground(graphics, mouseX, mouseY, partialTicks)
-        executor.activeTooltip?.let { tooltip ->
-            graphics.renderTooltip(font, Component.literal(tooltip), mouseX, mouseY)
-        }
     }
 
     override fun mouseClicked(
@@ -67,35 +58,19 @@ class ReactorControllerScreen(
         button: Int,
     ): Boolean {
         if (button == 0) {
-            val result = executor.mouseClicked(mouseX.toInt() - leftPos, mouseY.toInt() - topPos)
-            if (result.consumed) {
-                if (result is UiInputResult.Action) {
-                    applyAction(result.action)
-                    executor = buildExecutor()
-                }
+            val action =
+                generatedScreen.mouseClicked(
+                    state = generatedState(),
+                    x = mouseX.toInt() - leftPos,
+                    y = mouseY.toInt() - topPos,
+                )
+            if (action != null) {
+                applyAction(action)
+                generatedScreen.clearDynamicCaches()
                 return true
             }
         }
         return super.mouseClicked(mouseX, mouseY, button)
-    }
-
-    private fun buildExecutor(): ScreenRuntimeExecutor<ReactorControllerAction> {
-        val program =
-            ScreenProgramCompiler(fontMetrics = FontMetrics { text -> font.width(text) })
-                .compile(
-                    root =
-                        ReactorControllerUi.build(
-                            state = { controllerSnapshot() },
-                            selectedTab = { selectedTab },
-                            selectedZoneIndex = { selectedZoneIndex },
-                        ),
-                    rootWidth = ReactorControllerUi.Width,
-                    rootHeight = ReactorControllerUi.Height,
-                )
-        check(program.diagnostics.isEmpty()) {
-            "Reactor controller UI has layout diagnostics: ${program.diagnostics.joinToString()}"
-        }
-        return ScreenRuntimeExecutor(program)
     }
 
     private fun applyAction(action: ReactorControllerAction) {
@@ -104,6 +79,12 @@ class ReactorControllerScreen(
             is ReactorControllerAction.SelectZone -> selectedZoneIndex = action.zoneIndex
         }
     }
+
+    private fun generatedState() =
+        controllerSnapshot().toGeneratedState(
+            selectedTab = selectedTab,
+            selectedZoneIndex = selectedZoneIndex,
+        )
 
     private fun controllerSnapshot(): ReactorControllerUiSnapshot {
         val state = controllerState()
