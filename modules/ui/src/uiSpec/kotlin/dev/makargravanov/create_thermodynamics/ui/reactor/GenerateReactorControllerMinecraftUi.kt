@@ -1,5 +1,6 @@
 package dev.makargravanov.create_thermodynamics.ui.reactor
 
+import dev.makargravanov.create_thermodynamics.ui.style.ThermodynamicsUiTheme
 import ru.lazyhat.kraftui.program.FontMetrics
 import ru.lazyhat.kraftui.program.PrimitiveOptimizationOptions
 import ru.lazyhat.kraftui.program.PrimitiveOptimizationPass
@@ -9,6 +10,10 @@ import ru.lazyhat.kraftui.program.PrimitiveTargetSourceRequest
 import ru.lazyhat.kraftui.program.ScreenProgramCompiler
 import ru.lazyhat.kraftui.program.generateTargetSource
 import ru.lazyhat.kraftui.program.toPrimitiveScreenProgram
+import ru.lazyhat.kraftui.style.BakeHint
+import ru.lazyhat.kraftui.style.StyleOptimizationHint
+import ru.lazyhat.kraftui.style.StyleReport
+import ru.lazyhat.kraftui.style.StyleUsage
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
@@ -75,6 +80,7 @@ object GenerateReactorControllerMinecraftUi {
         reportDirectory.createDirectories()
         reportDirectory.resolve("reactor-controller-analysis.txt").writeText(result.analysisReport.asText())
         reportDirectory.resolve("reactor-controller-optimization.txt").writeText(result.optimizationReport.asText())
+        reportDirectory.resolve("reactor-controller-style-report.txt").writeText(styleReport().asText())
         reportDirectory.resolve("reactor-controller-generated-files.txt").writeText(
             buildString {
                 appendLine(sourcePath)
@@ -84,6 +90,25 @@ object GenerateReactorControllerMinecraftUi {
             },
         )
     }
+
+    private fun styleReport(): StyleReport =
+        StyleReport(
+            themeName = "ThermodynamicsUiTheme",
+            usages =
+                listOf(
+                    StyleUsage("window", 1),
+                    StyleUsage("tab", 3),
+                    StyleUsage("metricCard", 6),
+                    StyleUsage("panel", 2),
+                    StyleUsage("text", 22),
+                ),
+            diagnostics = emptyList(),
+            optimizationHints =
+                listOf(
+                    StyleOptimizationHint("/root/window", ThermodynamicsUiTheme.theme.styles.window.surface.bakeHint),
+                    StyleOptimizationHint("/root/cards", BakeHint.PreferBakedTexture),
+                ),
+        )
 
     private fun clearGeneratedDirectory(root: Path) {
         if (!Files.exists(root)) return

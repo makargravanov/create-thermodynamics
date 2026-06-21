@@ -1,26 +1,31 @@
 package dev.makargravanov.create_thermodynamics.ui.reactor
 
-import ru.lazyhat.kraftui.foundation.Color
+import dev.makargravanov.create_thermodynamics.ui.style.ThermodynamicsUiTheme
 import ru.lazyhat.kraftui.foundation.FixedGridTrack
 import ru.lazyhat.kraftui.foundation.UiScope
+import ru.lazyhat.kraftui.foundation.Value
 import ru.lazyhat.kraftui.foundation.WeightedGridTrack
 import ru.lazyhat.kraftui.foundation.modifier.Modifier
 import ru.lazyhat.kraftui.foundation.modifier.TextAlignment
-import ru.lazyhat.kraftui.foundation.modifier.TextOverflowPolicy
 import ru.lazyhat.kraftui.foundation.modifier.UiAlignment
 import ru.lazyhat.kraftui.foundation.modifier.align
 import ru.lazyhat.kraftui.foundation.modifier.background
-import ru.lazyhat.kraftui.foundation.modifier.fillMaxHeight
 import ru.lazyhat.kraftui.foundation.modifier.fillMaxSize
 import ru.lazyhat.kraftui.foundation.modifier.fillMaxWidth
 import ru.lazyhat.kraftui.foundation.modifier.height
 import ru.lazyhat.kraftui.foundation.modifier.padding
 import ru.lazyhat.kraftui.foundation.modifier.size
 import ru.lazyhat.kraftui.foundation.modifier.textAlign
-import ru.lazyhat.kraftui.foundation.modifier.textOverflow
 import ru.lazyhat.kraftui.foundation.stateValue
 import ru.lazyhat.kraftui.foundation.uiActions
 import ru.lazyhat.kraftui.foundation.value
+import ru.lazyhat.kraftui.style.StyleColor
+import ru.lazyhat.kraftui.style.TextStyle
+import ru.lazyhat.kraftui.style.asValue
+import ru.lazyhat.kraftui.style.metricCard
+import ru.lazyhat.kraftui.style.styledPanel
+import ru.lazyhat.kraftui.style.styledTab
+import ru.lazyhat.kraftui.style.styledText
 
 object ReactorControllerUi {
     const val Width: Int = ReactorControllerUiSize.Width
@@ -37,12 +42,13 @@ object ReactorControllerUi {
     private const val TextHeight = 9
 
     private val threeColumns = listOf(WeightedGridTrack(1f), WeightedGridTrack(1f), WeightedGridTrack(1f))
+    private val theme = ThermodynamicsUiTheme.theme
 
     fun build(state: () -> ReactorControllerGeneratedState) =
         uiActions(
             Modifier
                 .size(Width, Height)
-                .background(Colors.Background)
+                .background(theme.styles.window.surface.fill.asValue())
                 .padding(OuterPadding),
         ) {
             column(
@@ -71,7 +77,7 @@ object ReactorControllerUi {
                 Modifier
                     .fillMaxWidth()
                     .height(HeaderHeight)
-                    .background(Colors.Header),
+                    .background(StyleColor.Constant(theme.tokens.colors.panelAccent).asValue()),
         ) {
             label(
                 modifier =
@@ -80,7 +86,7 @@ object ReactorControllerUi {
                         .height(TextHeight)
                         .align(UiAlignment.Center),
                 text = stateValue(ReactorControllerGeneratedState::title, state),
-                color = Colors.Title,
+                style = theme.styles.window.title,
                 alignment = TextAlignment.Center,
             )
         }
@@ -119,35 +125,16 @@ object ReactorControllerUi {
 
     private fun UiScope<ReactorControllerAction>.tab(
         label: String,
-        selected: ru.lazyhat.kraftui.foundation.Value<Boolean>,
-        action: ru.lazyhat.kraftui.foundation.Value<ReactorControllerAction?>,
+        selected: Value<Boolean>,
+        action: Value<ReactorControllerAction?>,
     ) {
-        button(
-            modifier = Modifier.fillMaxSize(),
+        styledTab(
+            label = label,
+            selected = selected,
             action = action,
-        ) {
-            box(Modifier.fillMaxSize().background(Colors.Tab))
-            If(selected) {
-                box(Modifier.fillMaxSize().background(Colors.TabSelected))
-                box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(2)
-                        .align(UiAlignment.End)
-                        .background(Colors.TabAccent),
-                )
-            }
-            label(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .height(TextHeight)
-                        .align(UiAlignment.Center),
-                text = label,
-                color = Colors.Text,
-                alignment = TextAlignment.Center,
-            )
-        }
+            modifier = Modifier.fillMaxSize(),
+            style = theme.styles.tab,
+        )
     }
 
     private fun UiScope<ReactorControllerAction>.overviewPage(state: () -> ReactorControllerGeneratedState) {
@@ -238,7 +225,7 @@ object ReactorControllerUi {
 
     private fun UiScope<ReactorControllerAction>.zoneList(state: () -> ReactorControllerGeneratedState) {
         column(
-            modifier = Modifier.fillMaxSize().background(Colors.Panel).padding(3),
+            modifier = Modifier.fillMaxSize().background(theme.styles.panel.surface.fill.asValue()).padding(3),
             gap = 3,
             horizontalAlignment = UiAlignment.Stretch,
         ) {
@@ -251,34 +238,34 @@ object ReactorControllerUi {
     }
 
     private fun UiScope<ReactorControllerAction>.zoneRow(
-        text: ru.lazyhat.kraftui.foundation.Value<String>,
-        action: ru.lazyhat.kraftui.foundation.Value<ReactorControllerAction?>,
+        text: Value<String>,
+        action: Value<ReactorControllerAction?>,
     ) {
         button(
             modifier = Modifier.fillMaxWidth().height(TextHeight),
             action = action,
         ) {
-            label(Modifier.fillMaxSize(), text, Colors.Text)
+            label(Modifier.fillMaxSize(), text, theme.styles.panel.body)
         }
     }
 
     private fun UiScope<ReactorControllerAction>.mixturePage(state: () -> ReactorControllerGeneratedState) {
         column(
-            modifier = Modifier.fillMaxWidth().height(PageHeight).background(Colors.Panel).padding(4),
+            modifier = Modifier.fillMaxWidth().height(PageHeight).background(theme.styles.panel.surface.fill.asValue()).padding(4),
             gap = 2,
             horizontalAlignment = UiAlignment.Stretch,
         ) {
-            label(Modifier.fillMaxWidth().height(TextHeight), stateValue(ReactorControllerGeneratedState::mixtureTitle, state), Colors.Muted)
+            label(Modifier.fillMaxWidth().height(TextHeight), stateValue(ReactorControllerGeneratedState::mixtureTitle, state), theme.styles.panel.title)
             grid(
                 modifier = Modifier.fillMaxWidth().height(TextHeight),
                 columns = listOf(WeightedGridTrack(1f), FixedGridTrack(44)),
                 rows = listOf(FixedGridTrack(TextHeight)),
             ) {
                 cell(column = 0, row = 0) {
-                    label(Modifier.fillMaxSize(), "Substance", Colors.Muted)
+                    label(Modifier.fillMaxSize(), "Substance", theme.styles.panel.title)
                 }
                 cell(column = 1, row = 0) {
-                    label(Modifier.fillMaxSize(), "mol/b", Colors.Muted, TextAlignment.End)
+                    label(Modifier.fillMaxSize(), "mol/b", theme.styles.panel.title, TextAlignment.End)
                 }
             }
             mixtureRow(stateValue(ReactorControllerGeneratedState::mixtureRow0Name, state), stateValue(ReactorControllerGeneratedState::mixtureRow0Amount, state))
@@ -289,8 +276,8 @@ object ReactorControllerUi {
     }
 
     private fun UiScope<ReactorControllerAction>.mixtureRow(
-        name: ru.lazyhat.kraftui.foundation.Value<String>,
-        amount: ru.lazyhat.kraftui.foundation.Value<String>,
+        name: Value<String>,
+        amount: Value<String>,
     ) {
         grid(
             modifier = Modifier.fillMaxWidth().height(TextHeight),
@@ -298,79 +285,64 @@ object ReactorControllerUi {
             rows = listOf(FixedGridTrack(TextHeight)),
         ) {
             cell(column = 0, row = 0) {
-                label(Modifier.fillMaxSize(), name, Colors.Text)
+                label(Modifier.fillMaxSize(), name, theme.styles.panel.body)
             }
             cell(column = 1, row = 0) {
-                label(Modifier.fillMaxSize(), amount, Colors.Text, TextAlignment.End)
+                label(Modifier.fillMaxSize(), amount, theme.styles.panel.body, TextAlignment.End)
             }
         }
     }
 
     private fun UiScope<ReactorControllerAction>.metric(
         title: String,
-        valueText: ru.lazyhat.kraftui.foundation.Value<String>,
+        valueText: Value<String>,
     ) {
-        column(
-            modifier = Modifier.fillMaxSize().background(Colors.Panel).padding(4),
-            gap = 1,
-            horizontalAlignment = UiAlignment.Stretch,
+        styledPanel(
+            modifier = Modifier.fillMaxSize(),
+            style = theme.styles.panel,
         ) {
-            label(Modifier.fillMaxWidth().height(TextHeight), title, Colors.Muted)
-            label(Modifier.fillMaxWidth().height(TextHeight), valueText, Colors.Good)
+            column(
+                modifier = Modifier.fillMaxSize(),
+                gap = 1,
+                horizontalAlignment = UiAlignment.Stretch,
+            ) {
+                label(Modifier.fillMaxWidth().height(TextHeight), title, theme.styles.panel.title)
+                label(Modifier.fillMaxWidth().height(TextHeight), valueText, ThermodynamicsUiTheme.goodText)
+            }
         }
     }
 
     private fun UiScope<ReactorControllerAction>.card(
         title: String,
-        lines: List<ru.lazyhat.kraftui.foundation.Value<String>>,
+        lines: List<Value<String>>,
     ) {
-        column(
-            modifier = Modifier.fillMaxSize().background(Colors.Panel).padding(3),
-            gap = 0,
-            horizontalAlignment = UiAlignment.Stretch,
-        ) {
-            label(Modifier.fillMaxWidth().height(TextHeight), title, Colors.Muted)
-            lines.forEach { line ->
-                label(Modifier.fillMaxWidth().height(TextHeight), line, Colors.Text)
-            }
-        }
+        metricCard(
+            title = title,
+            lines = lines,
+            modifier = Modifier.fillMaxSize(),
+            style = theme.styles.metricCard,
+        )
     }
 
     private fun UiScope<ReactorControllerAction>.label(
         modifier: Modifier,
         text: String,
-        color: Color,
+        style: TextStyle,
         alignment: TextAlignment = TextAlignment.Start,
     ) {
-        label(modifier, value(text), color, alignment)
+        label(modifier, value(text), style, alignment)
     }
 
     private fun UiScope<ReactorControllerAction>.label(
         modifier: Modifier,
-        text: ru.lazyhat.kraftui.foundation.Value<String>,
-        color: Color,
+        text: Value<String>,
+        style: TextStyle,
         alignment: TextAlignment = TextAlignment.Start,
     ) {
-        text(
-            modifier =
-                modifier
-                    .textAlign(alignment)
-                    .textOverflow(TextOverflowPolicy.Ellipsize),
-            color = color,
+        styledText(
+            modifier = modifier.textAlign(alignment),
             text = text,
+            style = style,
         )
-    }
-
-    private object Colors {
-        val Background: Color = Color.rgb(182, 135, 103)
-        val Header: Color = Color.rgb(191, 209, 226)
-        val Panel: Color = Color.rgb(205, 185, 148)
-        val Tab: Color = Color.rgb(214, 195, 158)
-        val TabSelected: Color = Color.rgb(229, 211, 176)
-        val TabAccent: Color = Color.rgb(130, 91, 65)
-        val Title: Color = Color.rgb(61, 60, 72)
-        val Text: Color = Color.rgb(61, 60, 72)
-        val Muted: Color = Color.rgb(111, 106, 117)
-        val Good: Color = Color.rgb(35, 134, 78)
     }
 }
