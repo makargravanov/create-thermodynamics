@@ -136,16 +136,6 @@ object ReactorControllerUi {
                         .align(UiAlignment.End)
                         .background(Colors.TabAccent),
                 )
-                label(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .height(TextHeight)
-                            .align(UiAlignment.Center),
-                    text = label,
-                    color = Colors.Text,
-                    alignment = TextAlignment.Center,
-                )
             }
             label(
                 modifier =
