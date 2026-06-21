@@ -51,11 +51,12 @@ object ReactorControllerCommandUi {
     const val MaxVisibleZoneRows: Int = 5
 
     private val Bounds = UiRect(0, 0, Width, Height)
+    private val MainColumns = ColumnGrid(x = 16, width = 200, gap = 12, count = 3)
     private val TabRects =
         mapOf(
-            ReactorControllerTab.Overview to UiRect(16, 29, 58, 16),
-            ReactorControllerTab.Zones to UiRect(82, 29, 58, 16),
-            ReactorControllerTab.Mixture to UiRect(148, 29, 68, 16),
+            ReactorControllerTab.Overview to MainColumns.rect(column = 0, y = 29, height = 16),
+            ReactorControllerTab.Zones to MainColumns.rect(column = 1, y = 29, height = 16),
+            ReactorControllerTab.Mixture to MainColumns.rect(column = 2, y = 29, height = 16),
         )
 
     fun layout(
@@ -82,7 +83,7 @@ object ReactorControllerCommandUi {
     ): Int? {
         val zones = state.zones.sortedBy { it.index }.take(MaxVisibleZoneRows)
         for ((row, zone) in zones.withIndex()) {
-            val rect = UiRect(16, 56 + row * 12, 54, 10)
+            val rect = zoneRowRect(row)
             if (x >= rect.x && x < rect.right && y >= rect.y && y < rect.bottom) {
                 return zone.index
             }
@@ -157,24 +158,24 @@ object ReactorControllerCommandUi {
             id = "overview",
             children =
                 listOf(
-                    metric("overview.state", UiRect(16, 52, 58, 28), "State", state.status, state.active),
-                    metric("overview.native", UiRect(86, 52, 58, 28), "Native", state.nativeBinding, state.nativeBinding == "active"),
-                    metric("overview.zones", UiRect(156, 52, 60, 28), "Zones", "zones ${state.zoneCount}", true),
+                    metric("overview.state", MainColumns.rect(column = 0, y = 52, height = 28), "State", state.status, state.active),
+                    metric("overview.native", MainColumns.rect(column = 1, y = 52, height = 28), "Native", state.nativeBinding, state.nativeBinding == "active"),
+                    metric("overview.zones", MainColumns.rect(column = 2, y = 52, height = 28), "Zones", "zones ${state.zoneCount}", true),
                     card(
                         id = "overview.structure",
-                        rect = UiRect(16, 88, 58, 36),
+                        rect = MainColumns.rect(column = 0, y = 88, height = 36),
                         title = "Structure",
                         lines = listOf("blocks ${state.chamberBlocks}", "ports ${state.portCount}"),
                     ),
                     card(
                         id = "overview.zone",
-                        rect = UiRect(86, 88, 58, 36),
+                        rect = MainColumns.rect(column = 1, y = 88, height = 36),
                         title = "Zone",
                         lines = listOf(selectedZone?.temperature ?: "no data", selectedZone?.pressure ?: ""),
                     ),
                     card(
                         id = "overview.mixture",
-                        rect = UiRect(156, 88, 60, 36),
+                        rect = MainColumns.rect(column = 2, y = 88, height = 36),
                         title = "Mixture",
                         lines =
                             listOf(
@@ -193,11 +194,11 @@ object ReactorControllerCommandUi {
             id = "zones",
             children =
                 listOf(
-                    place("zones.list.panel", UiRect(16, 52, 58, 72), panel("zones.list.panel.inner", Colors.Panel)),
+                    place("zones.list.panel", MainColumns.rect(column = 0, y = 52, height = 72), panel("zones.list.panel.inner", Colors.Panel)),
                     *state.zones.sortedBy { it.index }.take(MaxVisibleZoneRows).mapIndexed { row, zone ->
                         place(
                             id = "zones.row.${zone.index}",
-                            rect = UiRect(18, 56 + row * 12, 54, 10),
+                            rect = zoneRowRect(row),
                             child =
                                 text(
                                     id = "zones.row.${zone.index}.text",
@@ -209,7 +210,7 @@ object ReactorControllerCommandUi {
                     }.toTypedArray(),
                     card(
                         id = "zones.detail",
-                        rect = UiRect(86, 52, 130, 72),
+                        rect = MainColumns.span(startColumn = 1, endColumnExclusive = 3, y = 52, height = 72),
                         title = selectedZone?.let { "Zone ${it.index}" } ?: "Zone",
                         lines =
                             selectedZone?.let {
@@ -226,7 +227,7 @@ object ReactorControllerCommandUi {
                 listOf(
                     place(
                         "mixture.title",
-                        UiRect(16, 52, 200, 10),
+                        MainColumns.span(startColumn = 0, endColumnExclusive = 3, y = 52, height = 10),
                         text(
                             id = "mixture.title.text",
                             value = selectedZone?.let { "Mixture: zone ${it.index}" } ?: "Mixture",
@@ -236,7 +237,7 @@ object ReactorControllerCommandUi {
                     ),
                     place(
                         "mixture.table.place",
-                        UiRect(16, 66, 200, 58),
+                        MainColumns.span(startColumn = 0, endColumnExclusive = 3, y = 66, height = 58),
                         UiNode.Table(
                             id = "mixture.table",
                             columns =
@@ -330,6 +331,57 @@ object ReactorControllerCommandUi {
         child: UiNode,
     ): UiNode.Place =
         UiNode.Place(id = id, rect = rect, child = child)
+
+    private fun zoneRowRect(row: Int): UiRect {
+        val listRect = MainColumns.rect(column = 0, y = 52, height = 72)
+        return UiRect(listRect.x + 2, 56 + row * 12, listRect.width - 4, 10)
+    }
+
+    private class ColumnGrid(
+        x: Int,
+        width: Int,
+        private val gap: Int,
+        count: Int,
+    ) {
+        private val columns: List<UiRect>
+
+        init {
+            require(count > 0) { "column grid must have at least one column" }
+            require(width >= gap * (count - 1)) { "column grid width is smaller than its gaps" }
+            val available = width - gap * (count - 1)
+            val baseWidth = available / count
+            var spare = available - baseWidth * count
+            var nextX = x
+            columns =
+                (0 until count).map { index ->
+                    val columnWidth = baseWidth + if (index >= count - spare) 1 else 0
+                    val rect = UiRect(nextX, 0, columnWidth, 0)
+                    nextX += columnWidth + gap
+                    rect
+                }
+        }
+
+        fun rect(
+            column: Int,
+            y: Int,
+            height: Int,
+        ): UiRect {
+            val source = columns[column]
+            return UiRect(source.x, y, source.width, height)
+        }
+
+        fun span(
+            startColumn: Int,
+            endColumnExclusive: Int,
+            y: Int,
+            height: Int,
+        ): UiRect {
+            require(startColumn < endColumnExclusive) { "column span must include at least one column" }
+            val start = columns[startColumn]
+            val end = columns[endColumnExclusive - 1]
+            return UiRect(start.x, y, end.right - start.x, height)
+        }
+    }
 
     private object Colors {
         const val Background: Int = 0xFFB68767.toInt()

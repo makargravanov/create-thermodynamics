@@ -5,11 +5,13 @@ import dev.makargravanov.create_thermodynamics.ui.layout.UiAlignment
 import dev.makargravanov.create_thermodynamics.ui.layout.UiDrawCommand
 import dev.makargravanov.create_thermodynamics.ui.layout.UiLayoutDiagnostic
 import dev.makargravanov.create_thermodynamics.ui.layout.UiRect
+import dev.makargravanov.create_thermodynamics.ui.layout.UiTextMeasurer
 import java.awt.Font
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import javax.imageio.ImageIO
 
 data class CommandPreviewSpec(
@@ -27,6 +29,12 @@ data class CommandPreviewReport(
 
 object CommandPreviewRenderer {
     private val previewFont = Font(Font.MONOSPACED, Font.PLAIN, 11)
+    private val widthCache = ConcurrentHashMap<String, Int>()
+    val textMeasurer: UiTextMeasurer =
+        object : UiTextMeasurer {
+            override fun width(text: String): Int =
+                measureText(text)
+        }
 
     fun render(
         width: Int,
@@ -49,7 +57,7 @@ object CommandPreviewRenderer {
                     }
                     is UiDrawCommand.DrawText -> {
                         graphics.color = command.color.toAwtColor()
-                        val x = command.alignedTextX(graphics.fontMetrics.stringWidth(command.text))
+                        val x = command.alignedTextX(measureText(command.text))
                         graphics.drawString(command.text, x, command.bounds.y + graphics.fontMetrics.ascent)
                     }
                 }
@@ -59,6 +67,20 @@ object CommandPreviewRenderer {
         }
         return image
     }
+
+    fun measureText(text: String): Int =
+        widthCache.computeIfAbsent(text) {
+            val image = BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB)
+            val graphics = image.createGraphics()
+            try {
+                graphics.font = previewFont
+                graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_OFF)
+                graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF)
+                graphics.fontMetrics.stringWidth(text)
+            } finally {
+                graphics.dispose()
+            }
+        }
 
     fun renderAll(
         previews: Iterable<CommandPreviewSpec>,

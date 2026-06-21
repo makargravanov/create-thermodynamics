@@ -1,6 +1,5 @@
 package dev.makargravanov.create_thermodynamics.ui.preview
 
-import dev.makargravanov.create_thermodynamics.ui.layout.UiTextMeasurer
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerCommandUi
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerTab
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUiSnapshot
@@ -8,8 +7,6 @@ import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorMixtureUiLine
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorZoneUiSnapshot
 
 object ReactorControllerCommandPreviews {
-    private val previewMeasurer = UiTextMeasurer { text -> text.length * 6 }
-
     fun all(): List<CommandPreviewSpec> =
         listOf(
             preview("reactor_controller_overview_active", activeState(), ReactorControllerTab.Overview),
@@ -27,7 +24,7 @@ object ReactorControllerCommandPreviews {
                 state = state,
                 selectedTab = tab,
                 selectedZoneIndex = 0,
-                textMeasurer = previewMeasurer,
+                textMeasurer = CommandPreviewRenderer.textMeasurer,
             )
         return CommandPreviewSpec(
             id = id,

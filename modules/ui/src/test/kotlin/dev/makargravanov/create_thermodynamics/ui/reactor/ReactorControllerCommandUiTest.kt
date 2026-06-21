@@ -1,6 +1,7 @@
 package dev.makargravanov.create_thermodynamics.ui.reactor
 
 import dev.makargravanov.create_thermodynamics.ui.layout.UiDrawCommand
+import dev.makargravanov.create_thermodynamics.ui.layout.UiLayoutResult
 import dev.makargravanov.create_thermodynamics.ui.layout.UiTextMeasurer
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -58,8 +59,42 @@ class ReactorControllerCommandUiTest {
     @Test
     fun `tab hit testing is derived from the shared controller layout`() {
         assertEquals(ReactorControllerTab.Overview, ReactorControllerCommandUi.tabAt(18, 34))
-        assertEquals(ReactorControllerTab.Zones, ReactorControllerCommandUi.tabAt(84, 34))
-        assertEquals(ReactorControllerTab.Mixture, ReactorControllerCommandUi.tabAt(150, 34))
+        assertEquals(ReactorControllerTab.Zones, ReactorControllerCommandUi.tabAt(88, 34))
+        assertEquals(ReactorControllerTab.Mixture, ReactorControllerCommandUi.tabAt(158, 34))
+    }
+
+    @Test
+    fun `overview tabs metrics and cards share the same column grid`() {
+        val result =
+            ReactorControllerCommandUi.layout(
+                state = sampleState(),
+                selectedTab = ReactorControllerTab.Overview,
+                selectedZoneIndex = 0,
+                textMeasurer = measurer,
+            )
+
+        assertEquals(emptyList(), result.diagnostics)
+        assertSameColumn(result, "tab.Overview.panel", "overview.state.panel", "overview.structure.panel")
+        assertSameColumn(result, "tab.Zones.panel", "overview.native.panel", "overview.zone.panel")
+        assertSameColumn(result, "tab.Mixture.panel", "overview.zones.panel", "overview.mixture.panel")
+    }
+
+    private fun assertSameColumn(
+        result: UiLayoutResult,
+        vararg panelIds: String,
+    ) {
+        val rects =
+            panelIds.map { id ->
+                result.commands
+                    .filterIsInstance<UiDrawCommand.DrawPanel>()
+                    .single { it.id == id }
+                    .bounds
+            }
+        val first = rects.first()
+        rects.drop(1).forEach { rect ->
+            assertEquals(first.x, rect.x, "column x mismatch for ${panelIds.joinToString()}")
+            assertEquals(first.right, rect.right, "column right edge mismatch for ${panelIds.joinToString()}")
+        }
     }
 
     private fun sampleState(
