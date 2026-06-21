@@ -74,15 +74,7 @@ object GenerateReactorControllerMinecraftUi {
 
         reportDirectory.createDirectories()
         reportDirectory.resolve("reactor-controller-analysis.txt").writeText(result.analysisReport.asText())
-        reportDirectory.resolve("reactor-controller-optimization.txt").writeText(
-            buildString {
-                appendLine("Applied optimizations:")
-                result.optimizationReport.applied.forEach { appendLine(it) }
-                appendLine()
-                appendLine("Skipped optimizations:")
-                result.optimizationReport.skipped.forEach { appendLine(it) }
-            },
-        )
+        reportDirectory.resolve("reactor-controller-optimization.txt").writeText(result.optimizationReport.asText())
         reportDirectory.resolve("reactor-controller-generated-files.txt").writeText(
             buildString {
                 appendLine(sourcePath)
