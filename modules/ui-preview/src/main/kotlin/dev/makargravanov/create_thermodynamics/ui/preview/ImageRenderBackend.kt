@@ -3,23 +3,21 @@ package dev.makargravanov.create_thermodynamics.ui.preview
 import ru.lazyhat.kraftui.editor.EditorViewModel
 import ru.lazyhat.kraftui.foundation.Color
 import ru.lazyhat.kraftui.program.RenderBackend
-import java.awt.Font
 import java.awt.Graphics2D
 import java.awt.Rectangle
 import java.awt.RenderingHints
 import java.awt.Shape
 import java.awt.image.BufferedImage
 
-class ImageRenderBackend(
-    image: BufferedImage,
-    font: Font = Font(Font.MONOSPACED, Font.PLAIN, 11),
+internal class ImageRenderBackend(
+    private val image: BufferedImage,
+    private val bitmapFont: MinecraftBitmapFont = MinecraftPreviewFont.font,
     private val textAntialiasing: Boolean = false,
 ) : RenderBackend {
     private val graphics: Graphics2D = image.createGraphics()
     private val clipStack = ArrayDeque<Shape?>()
 
     init {
-        graphics.font = font
         graphics.setRenderingHint(
             RenderingHints.KEY_TEXT_ANTIALIASING,
             if (textAntialiasing) {
@@ -37,8 +35,7 @@ class ImageRenderBackend(
     }
 
     override fun drawText(x: Int, y: Int, text: String, color: Color) {
-        graphics.color = color.toAwtColor()
-        graphics.drawString(text, x, y + graphics.fontMetrics.ascent)
+        bitmapFont.draw(image, x, y, text, color.value.toInt())
     }
 
     override fun drawTerminalSurface(x: Int, y: Int, snapshot: Any) {
@@ -77,7 +74,7 @@ class ImageRenderBackend(
     }
 
     override fun measureText(text: String): Int =
-        graphics.fontMetrics.stringWidth(text)
+        bitmapFont.width(text)
 
     fun close() {
         check(clipStack.isEmpty()) { "UI preview rendering finished with ${clipStack.size} unclosed clips" }

@@ -9,9 +9,8 @@ fun main(args: Array<String>) {
         } else {
             Path.of("build", "reports", "ui")
         }
-    val legacyOutputs = UiPreviewRenderer.renderAll(ReactorPortPreviews.all(), outputDirectory.resolve("legacy"))
-    val commandOutputs = CommandPreviewRenderer.renderAll(ReactorControllerCommandPreviews.all(), outputDirectory.resolve("commands"))
-    (legacyOutputs + commandOutputs).forEach { output ->
+    val outputs = UiPreviewRenderer.renderAll(ReactorPortPreviews.all(), outputDirectory.resolve("ui-dsl"))
+    outputs.forEach { output ->
         println("Rendered UI preview: $output")
     }
 }

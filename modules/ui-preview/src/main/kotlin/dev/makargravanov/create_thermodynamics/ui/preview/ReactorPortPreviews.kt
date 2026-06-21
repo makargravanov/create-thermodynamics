@@ -1,7 +1,10 @@
 package dev.makargravanov.create_thermodynamics.ui.preview
 
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUi
-import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUiState
+import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerTab
+import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUiSnapshot
+import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorMixtureUiLine
+import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorZoneUiSnapshot
 import ru.lazyhat.kraftui.foundation.Color
 import ru.lazyhat.kraftui.foundation.modifier.Modifier
 import ru.lazyhat.kraftui.foundation.modifier.background
@@ -17,25 +20,13 @@ object ReactorPortPreviews {
                 width = ReactorControllerUi.Width,
                 height = ReactorControllerUi.Height,
                 root =
-                    ReactorControllerUi.build {
-                        ReactorControllerUiState(
-                            title = "Reactor Controller",
-                            status = "formed",
-                            structureId = "9f1a4c71-8b55-48df-9fb5-5f8ad7e1a334",
-                            active = true,
-                            zoneCount = 1,
-                            chamberBlocks = 12,
-                            portCount = 4,
-                            nativeBinding = "native active",
-                            temperature = "298.0 K",
-                            pressure = "0.0 kPa",
-                            mixtureLines = listOf(
-                                "water 1.000",
-                                "ethanol 0.250",
-                                "oxygen 0.120",
-                            ),
-                        )
-                    },
+                    ReactorControllerUi.build(
+                        state = { controllerState() },
+                        selectedTab = { ReactorControllerTab.Overview },
+                        selectedZoneIndex = { 0 },
+                        onSelectTab = {},
+                        onSelectZone = {},
+                    ),
             ),
             UiPreviewSpec(
                 id = "reactor_port_inventory",
@@ -55,5 +46,30 @@ object ReactorPortPreviews {
                         text("Debug item buffer", modifier = Modifier.offset(8, 56), color = Color.rgb(148, 159, 170))
                     },
             ),
+        )
+
+    private fun controllerState(): ReactorControllerUiSnapshot =
+        ReactorControllerUiSnapshot(
+            title = "Reactor Controller",
+            status = "formed",
+            active = true,
+            nativeBinding = "active",
+            zoneCount = 1,
+            chamberBlocks = 12,
+            portCount = 4,
+            zones =
+                listOf(
+                    ReactorZoneUiSnapshot(
+                        index = 0,
+                        temperature = "298.0 K",
+                        pressure = "101.3 kPa",
+                        mixture =
+                            listOf(
+                                ReactorMixtureUiLine("destroy:water", "1.000"),
+                                ReactorMixtureUiLine("destroy:ethanol", "0.250"),
+                                ReactorMixtureUiLine("destroy:oxygen", "0.120"),
+                            ),
+                    ),
+                ),
         )
 }
