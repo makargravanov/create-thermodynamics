@@ -7,6 +7,7 @@ import dev.makargravanov.create_thermodynamics.common.reactor.multiblock.world.R
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorControllerMenu
 import dev.makargravanov.create_thermodynamics.neoforge.block.ReactorMultiblockBlockEntity
 import dev.makargravanov.create_thermodynamics.neoforge.client.ui.MinecraftUiDslRenderBackend
+import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerAction
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerTab
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUi
 import dev.makargravanov.create_thermodynamics.ui.reactor.ReactorControllerUiSnapshot
@@ -18,6 +19,7 @@ import net.minecraft.world.entity.player.Inventory
 import ru.lazyhat.kraftui.program.FontMetrics
 import ru.lazyhat.kraftui.program.ScreenProgramCompiler
 import ru.lazyhat.kraftui.program.ScreenRuntimeExecutor
+import ru.lazyhat.kraftui.program.UiInputResult
 import java.util.Locale
 
 class ReactorControllerScreen(
@@ -27,7 +29,7 @@ class ReactorControllerScreen(
 ) : AbstractSimiContainerScreen<ReactorControllerMenu>(menu, playerInventory, title) {
     private var selectedTab: ReactorControllerTab = ReactorControllerTab.Overview
     private var selectedZoneIndex: Int = 0
-    private lateinit var executor: ScreenRuntimeExecutor
+    private lateinit var executor: ScreenRuntimeExecutor<ReactorControllerAction>
 
     override fun init() {
         setWindowSize(ReactorControllerUi.Width, ReactorControllerUi.Height)
@@ -64,14 +66,20 @@ class ReactorControllerScreen(
         mouseY: Double,
         button: Int,
     ): Boolean {
-        if (button == 0 && executor.mouseClicked(mouseX.toInt() - leftPos, mouseY.toInt() - topPos)) {
-            executor = buildExecutor()
-            return true
+        if (button == 0) {
+            val result = executor.mouseClicked(mouseX.toInt() - leftPos, mouseY.toInt() - topPos)
+            if (result.consumed) {
+                if (result is UiInputResult.Action) {
+                    applyAction(result.action)
+                    executor = buildExecutor()
+                }
+                return true
+            }
         }
         return super.mouseClicked(mouseX, mouseY, button)
     }
 
-    private fun buildExecutor(): ScreenRuntimeExecutor {
+    private fun buildExecutor(): ScreenRuntimeExecutor<ReactorControllerAction> {
         val program =
             ScreenProgramCompiler(fontMetrics = FontMetrics { text -> font.width(text) })
                 .compile(
@@ -80,8 +88,6 @@ class ReactorControllerScreen(
                             state = { controllerSnapshot() },
                             selectedTab = { selectedTab },
                             selectedZoneIndex = { selectedZoneIndex },
-                            onSelectTab = { selectedTab = it },
-                            onSelectZone = { selectedZoneIndex = it },
                         ),
                     rootWidth = ReactorControllerUi.Width,
                     rootHeight = ReactorControllerUi.Height,
@@ -90,6 +96,13 @@ class ReactorControllerScreen(
             "Reactor controller UI has layout diagnostics: ${program.diagnostics.joinToString()}"
         }
         return ScreenRuntimeExecutor(program)
+    }
+
+    private fun applyAction(action: ReactorControllerAction) {
+        when (action) {
+            is ReactorControllerAction.SelectTab -> selectedTab = action.tab
+            is ReactorControllerAction.SelectZone -> selectedZoneIndex = action.zoneIndex
+        }
     }
 
     private fun controllerSnapshot(): ReactorControllerUiSnapshot {

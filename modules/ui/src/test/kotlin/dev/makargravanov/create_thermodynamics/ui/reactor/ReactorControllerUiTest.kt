@@ -3,6 +3,7 @@ package dev.makargravanov.create_thermodynamics.ui.reactor
 import ru.lazyhat.kraftui.program.FontMetrics
 import ru.lazyhat.kraftui.program.ScreenProgramCompiler
 import ru.lazyhat.kraftui.program.ScreenRuntimeExecutor
+import ru.lazyhat.kraftui.program.UiInputResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -18,8 +19,6 @@ class ReactorControllerUiTest {
                             state = { activeState() },
                             selectedTab = { ReactorControllerTab.Overview },
                             selectedZoneIndex = { 0 },
-                            onSelectTab = {},
-                            onSelectZone = {},
                         ),
                     rootWidth = ReactorControllerUi.Width,
                     rootHeight = ReactorControllerUi.Height,
@@ -39,14 +38,19 @@ class ReactorControllerUiTest {
                             state = { activeState() },
                             selectedTab = { selectedTab },
                             selectedZoneIndex = { 0 },
-                            onSelectTab = { selectedTab = it },
-                            onSelectZone = {},
                         ),
                     rootWidth = ReactorControllerUi.Width,
                     rootHeight = ReactorControllerUi.Height,
                 )
 
-        assertTrue(ScreenRuntimeExecutor(program).mouseClicked(104, 37))
+        val result = ScreenRuntimeExecutor(program).mouseClicked(104, 37)
+        assertEquals(UiInputResult.Action(ReactorControllerAction.SelectTab(ReactorControllerTab.Zones)), result)
+        if (result is UiInputResult.Action) {
+            when (val action = result.action) {
+                is ReactorControllerAction.SelectTab -> selectedTab = action.tab
+                is ReactorControllerAction.SelectZone -> error("unexpected zone action")
+            }
+        }
         assertEquals(ReactorControllerTab.Zones, selectedTab)
     }
 

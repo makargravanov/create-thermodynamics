@@ -11,7 +11,7 @@ import ru.lazyhat.kraftui.foundation.modifier.offset
 import ru.lazyhat.kraftui.foundation.modifier.size
 import ru.lazyhat.kraftui.foundation.modifier.textAlign
 import ru.lazyhat.kraftui.foundation.modifier.textOverflow
-import ru.lazyhat.kraftui.foundation.ui
+import ru.lazyhat.kraftui.foundation.uiActions
 import ru.lazyhat.kraftui.foundation.value
 
 data class ReactorControllerUiSnapshot(
@@ -48,6 +48,16 @@ enum class ReactorControllerTab(
     Mixture("Mixture"),
 }
 
+sealed interface ReactorControllerAction {
+    data class SelectTab(
+        val tab: ReactorControllerTab,
+    ) : ReactorControllerAction
+
+    data class SelectZone(
+        val zoneIndex: Int,
+    ) : ReactorControllerAction
+}
+
 object ReactorControllerUi {
     const val Width: Int = 232
     const val Height: Int = 140
@@ -65,10 +75,8 @@ object ReactorControllerUi {
         state: () -> ReactorControllerUiSnapshot,
         selectedTab: () -> ReactorControllerTab,
         selectedZoneIndex: () -> Int,
-        onSelectTab: (ReactorControllerTab) -> Unit,
-        onSelectZone: (Int) -> Unit,
-    ): UiElement =
-        ui(Modifier.size(Width, Height).background(Colors.Background)) {
+    ): UiElement<ReactorControllerAction> =
+        uiActions(Modifier.size(Width, Height).background(Colors.Background)) {
             panel(8, 6, 216, 18, Colors.Header)
             label(
                 x = 8,
@@ -78,28 +86,27 @@ object ReactorControllerUi {
                 color = Colors.Title,
                 alignment = TextAlignment.Center,
             )
-            tabs(selectedTab, onSelectTab)
+            tabs(selectedTab)
 
             If(value { selectedTab() == ReactorControllerTab.Overview }) {
                 overviewPage(state, selectedZoneIndex)
             }
             If(value { selectedTab() == ReactorControllerTab.Zones }) {
-                zonesPage(state, selectedZoneIndex, onSelectZone)
+                zonesPage(state, selectedZoneIndex)
             }
             If(value { selectedTab() == ReactorControllerTab.Mixture }) {
                 mixturePage(state, selectedZoneIndex)
             }
         }
 
-    private fun UiScope.tabs(
+    private fun UiScope<ReactorControllerAction>.tabs(
         selectedTab: () -> ReactorControllerTab,
-        onSelectTab: (ReactorControllerTab) -> Unit,
     ) {
         for (tab in ReactorControllerTab.entries) {
             val rect = tabRects.getValue(tab)
             button(
                 modifier = Modifier.offset(rect.x, rect.y).size(rect.width, rect.height),
-                onClick = { onSelectTab(tab) },
+                action = ReactorControllerAction.SelectTab(tab),
             ) {
                 panel(0, 0, rect.width, rect.height, if (selectedTab() == tab) Colors.TabSelected else Colors.Tab)
                 label(
@@ -114,7 +121,7 @@ object ReactorControllerUi {
         }
     }
 
-    private fun UiScope.overviewPage(
+    private fun UiScope<ReactorControllerAction>.overviewPage(
         state: () -> ReactorControllerUiSnapshot,
         selectedZoneIndex: () -> Int,
     ) {
@@ -144,19 +151,23 @@ object ReactorControllerUi {
         )
     }
 
-    private fun UiScope.zonesPage(
+    private fun UiScope<ReactorControllerAction>.zonesPage(
         state: () -> ReactorControllerUiSnapshot,
         selectedZoneIndex: () -> Int,
-        onSelectZone: (Int) -> Unit,
     ) {
         panel(mainColumns.rect(0, 52, 72), Colors.Panel)
         for (row in 0 until MaxVisibleZoneRows) {
             val rect = zoneRowRect(row)
             button(
                 modifier = Modifier.offset(rect.x, rect.y).size(rect.width, rect.height),
-                onClick = {
-                    state().zones.sortedBy { it.index }.getOrNull(row)?.let { onSelectZone(it.index) }
-                },
+                action =
+                    value {
+                        state()
+                            .zones
+                            .sortedBy { it.index }
+                            .getOrNull(row)
+                            ?.let { ReactorControllerAction.SelectZone(it.index) }
+                    },
             ) {
                 label(
                     x = 0,
@@ -181,7 +192,7 @@ object ReactorControllerUi {
         )
     }
 
-    private fun UiScope.mixturePage(
+    private fun UiScope<ReactorControllerAction>.mixturePage(
         state: () -> ReactorControllerUiSnapshot,
         selectedZoneIndex: () -> Int,
     ) {
@@ -215,7 +226,7 @@ object ReactorControllerUi {
         }
     }
 
-    private fun UiScope.metric(
+    private fun UiScope<ReactorControllerAction>.metric(
         rect: UiRect,
         title: String,
         valueText: () -> String,
@@ -232,7 +243,7 @@ object ReactorControllerUi {
         )
     }
 
-    private fun UiScope.card(
+    private fun UiScope<ReactorControllerAction>.card(
         rect: UiRect,
         title: String,
         lines: () -> List<String>,
@@ -250,14 +261,14 @@ object ReactorControllerUi {
         }
     }
 
-    private fun UiScope.panel(
+    private fun UiScope<ReactorControllerAction>.panel(
         rect: UiRect,
         color: Color,
     ) {
         panel(rect.x, rect.y, rect.width, rect.height, color)
     }
 
-    private fun UiScope.panel(
+    private fun UiScope<ReactorControllerAction>.panel(
         x: Int,
         y: Int,
         width: Int,
@@ -267,7 +278,7 @@ object ReactorControllerUi {
         box(Modifier.offset(x, y).size(width, height).background(color))
     }
 
-    private fun UiScope.label(
+    private fun UiScope<ReactorControllerAction>.label(
         x: Int,
         y: Int,
         width: Int,
@@ -278,7 +289,7 @@ object ReactorControllerUi {
         label(x, y, width, text, { color }, alignment)
     }
 
-    private fun UiScope.label(
+    private fun UiScope<ReactorControllerAction>.label(
         x: Int,
         y: Int,
         width: Int,
