@@ -10,6 +10,7 @@ import ru.lazyhat.kraftui.foundation.modifier.Modifier
 import ru.lazyhat.kraftui.foundation.modifier.background
 import ru.lazyhat.kraftui.foundation.modifier.offset
 import ru.lazyhat.kraftui.foundation.modifier.size
+import ru.lazyhat.kraftui.preview.UiPreviewSpec
 import ru.lazyhat.kraftui.foundation.ui
 
 object ReactorPortPreviews {

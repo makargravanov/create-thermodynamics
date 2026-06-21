@@ -26,11 +26,11 @@ tasks.register<JavaExec>("renderUiPreviews") {
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass.set("dev.makargravanov.create_thermodynamics.ui.preview.UiPreviewMainKt")
     args(layout.buildDirectory.dir("reports/ui").get().asFile.absolutePath)
-    systemProperty("createThermodynamics.minecraftVersion", minecraftVersion.get())
-    systemProperty("createThermodynamics.minecraftClientJar", minecraftClientJar.get().absolutePath)
+    systemProperty("kraftui.minecraftVersion", minecraftVersion.get())
+    systemProperty("kraftui.minecraftClientJar", minecraftClientJar.get().absolutePath)
 }
 
 tasks.withType<Test>().configureEach {
-    systemProperty("createThermodynamics.minecraftVersion", minecraftVersion.get())
-    systemProperty("createThermodynamics.minecraftClientJar", minecraftClientJar.get().absolutePath)
+    systemProperty("kraftui.minecraftVersion", minecraftVersion.get())
+    systemProperty("kraftui.minecraftClientJar", minecraftClientJar.get().absolutePath)
 }

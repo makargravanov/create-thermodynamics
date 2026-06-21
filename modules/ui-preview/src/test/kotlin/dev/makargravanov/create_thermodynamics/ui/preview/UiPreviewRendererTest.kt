@@ -5,16 +5,21 @@ import ru.lazyhat.kraftui.foundation.modifier.Modifier
 import ru.lazyhat.kraftui.foundation.modifier.background
 import ru.lazyhat.kraftui.foundation.modifier.offset
 import ru.lazyhat.kraftui.foundation.modifier.size
+import ru.lazyhat.kraftui.preview.MinecraftBitmapFont
+import ru.lazyhat.kraftui.preview.UiPreviewRenderer
+import ru.lazyhat.kraftui.preview.UiPreviewSpec
 import ru.lazyhat.kraftui.foundation.ui
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 
 class UiPreviewRendererTest {
+    private val renderer = UiPreviewRenderer(MinecraftBitmapFont.loadFromMinecraftClientJar())
+
     @Test
     fun rendersBackgroundIntoImage() {
         val image =
-            UiPreviewRenderer.render(
+            renderer.render(
                 UiPreviewSpec(
                     id = "background",
                     width = 8,
@@ -29,7 +34,7 @@ class UiPreviewRendererTest {
     @Test
     fun rendersChildOffsetInsideParent() {
         val image =
-            UiPreviewRenderer.render(
+            renderer.render(
                 UiPreviewSpec(
                     id = "offset",
                     width = 16,
@@ -54,7 +59,7 @@ class UiPreviewRendererTest {
     }
 
     private fun assertPreviewIsNotBlank(preview: UiPreviewSpec) {
-        val image = UiPreviewRenderer.render(preview)
+        val image = renderer.render(preview)
         val pixels =
             sequence {
                 for (y in 0 until image.height) {

@@ -1,5 +1,7 @@
 package dev.makargravanov.create_thermodynamics.ui.preview
 
+import ru.lazyhat.kraftui.preview.MinecraftBitmapFont
+import ru.lazyhat.kraftui.preview.UiPreviewRenderer
 import java.nio.file.Path
 
 fun main(args: Array<String>) {
@@ -9,7 +11,8 @@ fun main(args: Array<String>) {
         } else {
             Path.of("build", "reports", "ui")
         }
-    val outputs = UiPreviewRenderer.renderAll(ReactorPortPreviews.all(), outputDirectory.resolve("ui-dsl"))
+    val renderer = UiPreviewRenderer(MinecraftBitmapFont.loadFromMinecraftClientJar())
+    val outputs = renderer.renderAll(ReactorPortPreviews.all(), outputDirectory.resolve("ui-dsl"))
     outputs.forEach { output ->
         println("Rendered UI preview: $output")
     }
