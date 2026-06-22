@@ -14,7 +14,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 
 class UiPreviewRendererTest {
-    private val renderer = UiPreviewRenderer(MinecraftBitmapFont.loadFromMinecraftClientJar())
+    private val renderer =
+        UiPreviewRenderer(
+            font = MinecraftBitmapFont.loadFromMinecraftClientJar(),
+        )
 
     @Test
     fun rendersBackgroundIntoImage() {

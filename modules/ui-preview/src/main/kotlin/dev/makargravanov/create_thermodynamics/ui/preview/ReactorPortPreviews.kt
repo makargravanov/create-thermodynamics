@@ -46,7 +46,7 @@ object ReactorPortPreviews {
                                 }
                             }
                         }
-                        text("Debug item buffer", modifier = Modifier.offset(8, 56), color = Color.rgb(148, 159, 170))
+                        text("Item buffer", modifier = Modifier.offset(8, 56), color = Color.rgb(148, 159, 170))
                     },
             ),
         )
